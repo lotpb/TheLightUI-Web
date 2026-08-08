@@ -1,0 +1,13 @@
+rules_version = '2';
+
+// Any authenticated user can read/write any document.
+// Data isolation between companies is enforced client-side:
+// every service query includes where('companyId', '==', companyId).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

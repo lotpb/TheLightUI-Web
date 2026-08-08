@@ -1,0 +1,195 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+    overflow-x: hidden;
+  }
+  * {
+    box-sizing: border-box;
+    min-width: 0;
+  }
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Recharts SVG transparent background (iOS Safari fix) */
+.recharts-wrapper,
+.recharts-surface {
+  background: transparent !important;
+}
+
+@media print {
+  aside, nav, #chart-screen {
+    display: none !important;
+  }
+
+  #chart-print {
+    display: block !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only-title {
+    display: block !important;
+  }
+
+  body {
+    background: white !important;
+    color: #111 !important;
+  }
+
+  /* Todo print styles */
+  #todo-list .card {
+    background: white !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 8px !important;
+    margin-bottom: 6px !important;
+    break-inside: avoid;
+  }
+
+  #todo-list p {
+    color: #111 !important;
+  }
+
+  #todo-list .text-gray-500,
+  #todo-list .text-gray-400 {
+    color: #6b7280 !important;
+  }
+
+  #todo-list .text-indigo-400 {
+    color: #4338ca !important;
+  }
+
+  #todo-list span[role="checkbox"] {
+    border-color: #9ca3af !important;
+    background: white !important;
+  }
+}
+
+/* ── Light Mode ─────────────────────────────────────────────────────────── */
+html.light-mode,
+html.light-mode body {
+  background-color: #f1f5f9;
+  color: #1e293b;
+}
+
+/* Backgrounds */
+html.light-mode .bg-gray-950 { background-color: #f1f5f9 !important; }
+html.light-mode .bg-gray-900 { background-color: #e8eef5 !important; }
+html.light-mode .bg-gray-800 { background-color: #ffffff !important; }
+html.light-mode .bg-gray-800\/50 { background-color: rgba(241,245,249,0.85) !important; }
+html.light-mode .bg-gray-800\/30 { background-color: rgba(255,255,255,0.5) !important; }
+html.light-mode .bg-gray-700 { background-color: #f1f5f9 !important; }
+html.light-mode .bg-gray-700\/30 { background-color: rgba(203,213,225,0.3) !important; }
+html.light-mode .bg-gray-700\/20 { background-color: rgba(203,213,225,0.2) !important; }
+html.light-mode .bg-gray-600 { background-color: #cbd5e1 !important; }
+html.light-mode .bg-gray-500 { background-color: #94a3b8 !important; }
+html.light-mode .bg-indigo-950\/60 { background-color: rgba(238,242,255,0.9) !important; }
+
+/* Text */
+html.light-mode .text-white  { color: #0f172a !important; }
+html.light-mode .text-gray-100 { color: #1e293b !important; }
+html.light-mode .text-gray-200 { color: #334155 !important; }
+html.light-mode .text-gray-300 { color: #475569 !important; }
+html.light-mode .text-gray-400 { color: #64748b !important; }
+html.light-mode .text-gray-500 { color: #94a3b8 !important; }
+
+/* Borders */
+html.light-mode .border-gray-800  { border-color: #e2e8f0 !important; }
+html.light-mode .border-gray-700  { border-color: #e2e8f0 !important; }
+html.light-mode .border-gray-700\/50 { border-color: rgba(203,213,225,0.7) !important; }
+html.light-mode .border-gray-700\/40 { border-color: rgba(203,213,225,0.6) !important; }
+html.light-mode .border-gray-700\/60 { border-color: rgba(203,213,225,0.8) !important; }
+html.light-mode .border-gray-700\/30 { border-color: rgba(203,213,225,0.5) !important; }
+html.light-mode .border-gray-600  { border-color: #cbd5e1 !important; }
+
+/* Divide separators */
+html.light-mode .divide-gray-700\/50 > * + * { border-color: rgba(203,213,225,0.5) !important; }
+
+/* Hover states */
+html.light-mode .hover\:bg-gray-800:hover   { background-color: #f1f5f9 !important; }
+html.light-mode .hover\:bg-gray-700:hover   { background-color: #e2e8f0 !important; }
+html.light-mode .hover\:bg-gray-700\/30:hover { background-color: rgba(203,213,225,0.3) !important; }
+html.light-mode .hover\:bg-gray-600:hover   { background-color: #cbd5e1 !important; }
+html.light-mode .hover\:text-gray-100:hover  { color: #1e293b !important; }
+html.light-mode .hover\:text-white:hover    { color: #0f172a !important; }
+html.light-mode .hover\:text-gray-200:hover  { color: #334155 !important; }
+
+/* Skeleton / pulse */
+html.light-mode .animate-pulse .bg-gray-700    { background-color: #e2e8f0 !important; }
+html.light-mode .animate-pulse .bg-gray-700\/60 { background-color: rgba(203,213,225,0.6) !important; }
+
+/* Components */
+html.light-mode .card {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+html.light-mode .input-field {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #1e293b !important;
+}
+html.light-mode .input-field::placeholder { color: #94a3b8 !important; }
+html.light-mode .select-field {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #1e293b !important;
+}
+html.light-mode .btn-secondary {
+  background-color: #e2e8f0 !important;
+  color: #334155 !important;
+}
+html.light-mode .btn-secondary:hover { background-color: #cbd5e1 !important; }
+html.light-mode .section-header { color: #64748b !important; }
+html.light-mode .form-label { color: #64748b !important; }
+
+/* Sidebar & top bar */
+html.light-mode aside {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+
+@layer components {
+  .card {
+    @apply bg-gray-800 rounded-xl border border-gray-700/50;
+  }
+  .input-field {
+    @apply w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100
+           placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent;
+  }
+  .select-field {
+    @apply w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100
+           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent appearance-none;
+  }
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-lg
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-gray-700 hover:bg-gray-600 text-gray-100 font-medium px-4 py-2 rounded-lg
+           transition-colors;
+  }
+  .btn-danger {
+    @apply bg-red-600/20 hover:bg-red-600/30 text-red-400 font-medium px-4 py-2 rounded-lg
+           transition-colors border border-red-600/30;
+  }
+  .section-header {
+    @apply text-xs font-semibold uppercase tracking-wider text-gray-400 px-1 mb-2;
+  }
+  .form-label {
+    @apply block text-xs font-medium text-gray-400 mb-1.5;
+  }
+}
