@@ -1,7 +1,8 @@
 Features
 
 Core CRM
-• Customer & Lead Management — Full CRUD for customers, leads, vendors, and employees; search, filter by category, salesperson, and callback status; paginated list with inline contact actions
+• Customer & Lead Management 
+— Full CRUD for customers, leads, vendors, and employees; search, filter by category, salesperson, and callback status; paginated list with inline contact actions
 • Lead Detail View — Rich profile with contact info, job dates, sale amount, address, ad source, salesperson assignment, follow-up date, callback toggle, and a timestamped notes timeline
 • Customer Form — Comprehensive intake form with all CRM fields, category picker, and date selectors for start/completion dates
 • Duplicate Detection — Scans the database for records with matching phone numbers or names and surfaces them for review and merge
