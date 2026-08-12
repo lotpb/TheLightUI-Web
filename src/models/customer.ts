@@ -43,6 +43,8 @@ export interface CustomerItem {
   driverLicense: string
   profession: string
   manager: string
+  followUpDate: Date | null
+  tags: string[]
 }
 
 export const emptyCustomer = (): CustomerItem => ({
@@ -77,6 +79,8 @@ export const emptyCustomer = (): CustomerItem => ({
   driverLicense: '',
   profession: '',
   manager: '',
+  followUpDate: null,
+  tags: [],
 })
 
 // Mirrors the defensive parsing in CustomerFirestore.swift
@@ -153,6 +157,8 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     driverLicense: str(d, 'driverLicense'),
     profession: str(d, 'profession'),
     manager: str(d, 'manager'),
+    followUpDate: d['followUpDate'] ? parseDate(d['followUpDate']) : null,
+    tags: Array.isArray(d['tags']) ? (d['tags'] as unknown[]).filter((t): t is string => typeof t === 'string') : [],
   }
 }
 
@@ -187,6 +193,8 @@ export function customerToFirestore(c: CustomerItem, userId?: string): Record<st
     driverLicense: c.driverLicense,
     profession: c.profession,
     manager: c.manager,
+    followUpDate: c.followUpDate ? Timestamp.fromDate(c.followUpDate) : null,
+    tags: c.tags ?? [],
   }
   if (userId) data['uid'] = userId
   if (c.category) data['category'] = c.category

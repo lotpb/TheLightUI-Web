@@ -111,7 +111,7 @@ export async function sendTextMessage(
 export async function sendImageMessage(
   fromId: string,
   toUser: ChatUser,
-  file: File,
+  file: File | Blob,
   senderProfileUrl: string,
   senderEmail: string,
 ): Promise<void> {

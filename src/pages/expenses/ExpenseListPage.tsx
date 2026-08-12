@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts'
 import { subscribeToExpenses, deleteExpense } from '../../services/expenseService'
 import { formatCurrency, type Expense } from '../../models/expense'
 import { useAuthStore } from '../../stores/authStore'
+import { useDebounce } from '../../hooks/useDebounce'
+import ConfirmModal from '../../components/ConfirmModal'
+import { usePageTitle } from '../../hooks/usePageTitle'
+import { useSearchShortcut } from '../../hooks/useSearchShortcut'
 
 const MONTHS = [
   'January','February','March','April','May','June',
@@ -70,6 +74,7 @@ function groupLast7Days(expenses: Expense[]) {
 type Period = 'all' | 'month'
 
 export default function ExpenseListPage() {
+  usePageTitle('Expenses')
   const navigate  = useNavigate()
   const user      = useAuthStore(s => s.user)
   const companyId = useAuthStore(s => s.companyId)
@@ -77,6 +82,11 @@ export default function ExpenseListPage() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  useSearchShortcut(searchInputRef, () => setSearch(''))
+  const [pendingDelete, setPendingDelete] = useState<Expense | null>(null)
+  const debouncedSearch = useDebounce(search)
 
   const now = new Date()
   const [period, setPeriod] = useState<Period>('month')
@@ -94,14 +104,22 @@ export default function ExpenseListPage() {
   }, [user, companyId])
 
   const filtered = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase()
     return all.filter(e => {
       if (period === 'month') {
         const d = e.date
         if (d.getFullYear() !== year || d.getMonth() !== month) return false
       }
+      if (q) {
+        return (
+          e.title.toLowerCase().includes(q) ||
+          e.category.toLowerCase().includes(q) ||
+          (e.notes ?? '').toLowerCase().includes(q)
+        )
+      }
       return true
     })
-  }, [all, period, year, month])
+  }, [all, period, year, month, debouncedSearch])
 
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered])
 
@@ -124,10 +142,12 @@ export default function ExpenseListPage() {
     else setMonth(m => m + 1)
   }
 
-  async function handleDelete(e: Expense) {
-    if (!window.confirm(`Delete "${e.title}"?`)) return
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    const toDelete = pendingDelete
+    setPendingDelete(null)
     try {
-      await deleteExpense(e.id)
+      await deleteExpense(toDelete.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed.')
     }
@@ -254,6 +274,33 @@ export default function ExpenseListPage() {
           <button onClick={nextMonth} className="text-gray-400 hover:text-white text-lg px-2">›</button>
         </div>
       )}
+
+      {/* Search */}
+      <div className="relative mb-4">
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+        </svg>
+        <input
+          ref={searchInputRef}
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by title, category, or notes…"
+          className="input-field pl-9 py-2 text-sm"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            aria-label="Clear search"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
 
       {/* Total + breakdown */}
       {!loading && filtered.length > 0 && (
@@ -384,26 +431,65 @@ export default function ExpenseListPage() {
         {loading ? (
           Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
         ) : filtered.length === 0 ? (
-          <div className="px-4 py-10 text-center">
-            <p className="text-gray-400">
-              {period === 'month' ? `No expenses for ${MONTHS[month]} ${year}` : 'No expenses yet'}
-            </p>
-            <Link to="/expenses/new" className="inline-block mt-3 text-sm text-indigo-400 hover:text-indigo-300">
-              Add one →
-            </Link>
+          <div className="px-4 py-12 text-center">
+            <div className="w-12 h-12 rounded-full bg-gray-700/50 flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" />
+              </svg>
+            </div>
+            {search.trim() ? (
+              <>
+                <p className="text-gray-300 font-medium mb-1">No results for &ldquo;{search.trim()}&rdquo;</p>
+                <p className="text-sm text-gray-500 mb-4">Try a different title, category, or note.</p>
+                <button onClick={() => setSearch('')} className="btn-secondary text-sm px-5 py-2">
+                  Clear search
+                </button>
+              </>
+            ) : all.length === 0 ? (
+              <>
+                <p className="text-gray-300 font-medium mb-1">No expenses yet</p>
+                <p className="text-sm text-gray-500 mb-4">Start tracking your spending by adding your first expense.</p>
+                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-block">
+                  + Add Expense
+                </Link>
+              </>
+            ) : (
+              <>
+                <p className="text-gray-300 font-medium mb-1">Nothing for {MONTHS[month]} {year}</p>
+                <p className="text-sm text-gray-500 mb-4">No expenses recorded in this month.</p>
+                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-block">
+                  + Add Expense
+                </Link>
+                <div className="mt-3">
+                  <button
+                    onClick={() => setPeriod('all')}
+                    className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    View all time →
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           filtered.map(e => (
             <ExpenseRow
               key={e.id}
               expense={e}
-              onDelete={handleDelete}
+              onDelete={setPendingDelete}
               isSelected={e.id === selectedId}
               onSelect={() => setSelectedId(e.id === selectedId ? null : e.id)}
             />
           ))
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={!!pendingDelete}
+        message={pendingDelete ? `Delete "${pendingDelete.title}"? This cannot be undone.` : ''}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

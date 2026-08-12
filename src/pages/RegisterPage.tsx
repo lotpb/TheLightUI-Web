@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { usePageTitle } from '../hooks/usePageTitle'
 import { useNavigate, Link } from 'react-router-dom'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { doc, setDoc } from 'firebase/firestore'
@@ -8,6 +9,7 @@ import { useAuthStore } from '../stores/authStore'
 import { storage, db } from '../firebase/config'
 
 export default function RegisterPage() {
+  usePageTitle('Create Account')
   const [firstName, setFirstName]   = useState('')
   const [lastName, setLastName]     = useState('')
   const [phone, setPhone]           = useState('')
@@ -34,8 +36,12 @@ export default function RegisterPage() {
       setLocalError('Please select an image file.')
       return
     }
+    if (file.size > 10 * 1024 * 1024) {
+      setLocalError('Image must be smaller than 10 MB.')
+      return
+    }
     setPhoto(file)
-    setPhotoPreview(URL.createObjectURL(file))
+    setPhotoPreview(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file) })
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -62,8 +68,9 @@ export default function RegisterPage() {
       let photoURL = ''
 
       if (photo) {
-        const storageRef = ref(storage, `profilePhotos/${newUser.uid}`)
-        await uploadBytes(storageRef, photo)
+        const resized = await resizeImage(photo, 512)
+        const storageRef = ref(storage, `avatars/${newUser.uid}`)
+        await uploadBytes(storageRef, resized, { contentType: 'image/jpeg' })
         photoURL = await getDownloadURL(storageRef)
       }
 
@@ -236,4 +243,29 @@ export default function RegisterPage() {
       </div>
     </div>
   )
+}
+
+function resizeImage(file: File, maxPx: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const side = Math.min(img.width, img.height)
+      const sx   = (img.width  - side) / 2
+      const sy   = (img.height - side) / 2
+      const size = Math.min(side, maxPx)
+      const canvas = document.createElement('canvas')
+      canvas.width  = size
+      canvas.height = size
+      canvas.getContext('2d')!.drawImage(img, sx, sy, side, side, 0, 0, size, size)
+      canvas.toBlob(
+        blob => blob ? resolve(blob) : reject(new Error('Canvas export failed')),
+        'image/jpeg',
+        0.88,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image load failed')) }
+    img.src = url
+  })
 }

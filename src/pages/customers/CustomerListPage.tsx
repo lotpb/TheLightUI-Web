@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useLocation, Link } from 'react-router-dom'
-import { subscribeToCustomers, importCustomersFromJSON } from '../../services/customerService'
+import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman } from '../../services/customerService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
 import { useAuthStore } from '../../stores/authStore'
+import { useToast } from '../../components/Toast'
+import { useDebounce } from '../../hooks/useDebounce'
+import { usePageTitle } from '../../hooks/usePageTitle'
+import { useSearchShortcut } from '../../hooks/useSearchShortcut'
+import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { usePickerStore } from '../../stores/pickerStore'
+import { usePrefStore } from '../../stores/prefStore'
+import { tagColor } from '../../utils/tagColor'
+import { scoreLead } from '../../utils/leadScore'
+import CSVImportModal from '../../components/CSVImportModal'
 
-type SortField = 'name' | 'date' | 'location' | 'active'
+const PAGE_SIZE = 50
+
+type SortField = 'name' | 'date' | 'location' | 'active' | 'score'
 type SortDir   = 'asc' | 'desc'
 
 const SORT_LABELS: Record<SortField, string> = {
@@ -13,6 +25,7 @@ const SORT_LABELS: Record<SortField, string> = {
   date:     'Date',
   location: 'Location',
   active:   'Active',
+  score:    'Score',
 }
 
 const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Employee']
@@ -42,28 +55,141 @@ function useClickOutside(
 export default function CustomerListPage() {
   const { pathname } = useLocation()
   const cat: CustomerCategory = PATH_TO_CATEGORY[pathname] ?? 'Lead'
+  usePageTitle(CATEGORY_LABELS[cat])
   const companyId = useAuthStore(s => s.companyId)
+  const labels = usePickerStore(s => s.labels)
+  const toast = useToast()
 
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search)
   const [showInactive, setShowInactive] = useState(
     () => localStorage.getItem('thelight.showInactive') === 'true'
   )
   const [importing, setImporting] = useState(false)
+  const [csvImportOpen, setCsvImportOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [page, setPage] = useState(1)
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [tagOpen, setTagOpen]     = useState(false)
+  const tagRef = useRef<HTMLDivElement>(null)
+
+  // Advanced filters
+  const [filterOpen, setFilterOpen]         = useState(false)
+  const [filterSalesman, setFilterSalesman] = useState('')
+  const [filterState, setFilterState]       = useState('')
+  const [filterAdNo, setFilterAdNo]         = useState('')
+  const [filterProduct, setFilterProduct]   = useState('')
+  const [filterCallback, setFilterCallback] = useState('')
+  const [filterDateFrom, setFilterDateFrom] = useState('')
+  const [filterDateTo, setFilterDateTo]     = useState('')
+  const [filterAmtMin, setFilterAmtMin]     = useState('')
+  const [filterAmtMax, setFilterAmtMax]     = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  useSearchShortcut(searchInputRef, () => setSearch(''))
+  const listTopRef   = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const sortRef = useRef<HTMLDivElement>(null)
+  const assignRef = useRef<HTMLDivElement>(null)
 
-  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  // ── Bulk selection ────────────────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [assignOpen, setAssignOpen]   = useState(false)
+  const [bulkWorking, setBulkWorking] = useState(false)
+  const closeAssign = useCallback(() => setAssignOpen(false), [])
+  useClickOutside(assignRef, closeAssign, assignOpen)
+
+  function clearAdvancedFilters() {
+    setFilterSalesman('')
+    setFilterState('')
+    setFilterAdNo('')
+    setFilterProduct('')
+    setFilterCallback('')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setFilterAmtMin('')
+    setFilterAmtMax('')
+  }
+
+  // Clear selection when category or filter changes
+  useEffect(() => { setSelectedIds(new Set()) }, [cat, showInactive, debouncedSearch])
+
+  // Reset advanced filters when switching category
+  useEffect(() => { clearAdvancedFilters() }, [cat]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleOne(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function togglePage() {
+    if (allPageSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        paginated.forEach(c => next.delete(c.id))
+        return next
+      })
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        paginated.forEach(c => next.add(c.id))
+        return next
+      })
+    }
+  }
+
+  function selectAll()  { setSelectedIds(new Set(allFilteredIds)) }
+  function clearSelection() { setSelectedIds(new Set()) }
+
+  async function handleBulkDeactivate() {
+    const ids = [...selectedIds]
+    setBulkWorking(true)
+    try {
+      await bulkDeactivate(ids)
+      toast(`Deactivated ${ids.length} record${ids.length !== 1 ? 's' : ''}.`, 'success')
+      clearSelection()
+    } catch {
+      toast('Bulk deactivate failed.', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  async function handleBulkAssign(salesman: string) {
+    const ids = [...selectedIds]
+    setAssignOpen(false)
+    setBulkWorking(true)
+    try {
+      await bulkAssignSalesman(ids, salesman)
+      toast(`Assigned ${ids.length} record${ids.length !== 1 ? 's' : ''} to ${salesman}.`, 'success')
+      clearSelection()
+    } catch {
+      toast('Bulk assign failed.', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  function handleBulkExport() {
+    const toExport = filtered.filter(c => selectedIds.has(c.id))
+    exportCustomersJSON(toExport)
+  }
+
+  const closeMenu     = useCallback(() => setMenuOpen(false), [])
   const closeSortOpen = useCallback(() => setSortOpen(false), [])
+  const closeTag      = useCallback(() => setTagOpen(false), [])
   useClickOutside(menuRef, closeMenu, menuOpen)
   useClickOutside(sortRef, closeSortOpen, sortOpen)
+  useClickOutside(tagRef, closeTag, tagOpen)
 
   function handleSortSelect(field: SortField) {
     if (field === sortField) {
@@ -84,11 +210,56 @@ export default function CustomerListPage() {
     return unsub
   }, [companyId])
 
+  const categoryCounts = useMemo(() => {
+    const base = showInactive ? all : all.filter(c => c.isActive)
+    return Object.fromEntries(
+      CATEGORY_ORDER.map(c => [c, base.filter(item => categoryMatches(item.category, c)).length])
+    ) as Record<CustomerCategory, number>
+  }, [all, showInactive])
+
+  // All unique tags across the current category (for the filter dropdown)
+  const allCatTags = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat)).forEach(c => (c.tags ?? []).forEach(t => set.add(t)))
+    return [...set].sort()
+  }, [all, cat])
+
+  // Unique option lists for advanced filters
+  const uniqueSalesmen = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.salesman.trim()).forEach(c => set.add(c.salesman.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const uniqueStates = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.state.trim()).forEach(c => set.add(c.state.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const uniqueAdNos = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.adNo.trim()).forEach(c => set.add(c.adNo.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const uniqueProducts = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.product.trim()).forEach(c => set.add(c.product.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const activeFilterCount = [
+    filterSalesman, filterState, filterAdNo, filterProduct,
+    filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+  ].filter(Boolean).length
+
   const filtered = useMemo(() => {
     let items = all.filter(c => categoryMatches(c.category, cat))
     if (!showInactive) items = items.filter(c => c.isActive)
-    if (search.trim()) {
-      const q = search.toLowerCase()
+    if (tagFilter) items = items.filter(c => (c.tags ?? []).includes(tagFilter))
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase()
       items = items.filter(c =>
         fullName(c).toLowerCase().includes(q) ||
         c.phone.includes(q) ||
@@ -97,6 +268,25 @@ export default function CustomerListPage() {
         c.salesman.toLowerCase().includes(q),
       )
     }
+    // Advanced filters
+    if (filterSalesman) items = items.filter(c => c.salesman === filterSalesman)
+    if (filterState)    items = items.filter(c => c.state === filterState)
+    if (filterAdNo)     items = items.filter(c => c.adNo === filterAdNo)
+    if (filterProduct)  items = items.filter(c => c.product === filterProduct)
+    if (filterCallback === 'yes') items = items.filter(c => c.callback.toLowerCase() === 'yes')
+    else if (filterCallback === 'no') items = items.filter(c => c.callback.toLowerCase() !== 'yes')
+    if (filterDateFrom) {
+      const from = new Date(filterDateFrom)
+      items = items.filter(c => c.creationDate >= from)
+    }
+    if (filterDateTo) {
+      const to = new Date(filterDateTo)
+      to.setHours(23, 59, 59, 999)
+      items = items.filter(c => c.creationDate <= to)
+    }
+    if (filterAmtMin) items = items.filter(c => c.amount >= Number(filterAmtMin))
+    if (filterAmtMax) items = items.filter(c => c.amount <= Number(filterAmtMax))
+
     const dir = sortDir === 'asc' ? 1 : -1
     items = [...items].sort((a, b) => {
       switch (sortField) {
@@ -104,11 +294,29 @@ export default function CustomerListPage() {
         case 'date':     return dir * (a.creationDate.getTime() - b.creationDate.getTime())
         case 'location': return dir * (a.city || '').localeCompare(b.city || '')
         case 'active':   return dir * (Number(b.isActive) - Number(a.isActive))
+        case 'score':    return dir * (scoreLead(a).score - scoreLead(b).score)
         default:         return 0
       }
     })
     return items
-  }, [all, cat, search, showInactive, sortField, sortDir])
+  }, [all, cat, debouncedSearch, showInactive, tagFilter, sortField, sortDir,
+      filterSalesman, filterState, filterAdNo, filterProduct, filterCallback,
+      filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
+
+  // Reset to page 1 whenever anything changes the filtered set
+  useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
+    filterSalesman, filterState, filterAdNo, filterProduct, filterCallback,
+    filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
+
+  const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const rangeStart = filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const rangeEnd   = Math.min(page * PAGE_SIZE, filtered.length)
+
+  // Bulk selection derived values (must come after filtered/paginated)
+  const allFilteredIds  = useMemo(() => new Set(filtered.map(c => c.id)), [filtered])
+  const allPageSelected = paginated.length > 0 && paginated.every(c => selectedIds.has(c.id))
+  const someSelected    = selectedIds.size > 0
 
   function handlePrint() {
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -157,7 +365,7 @@ export default function CustomerListPage() {
         <th>Phone</th>
         <th>Location</th>
         <th>Email</th>
-        <th>Salesman</th>
+        <th>${labels.salesman}</th>
         <th style="text-align:right;">Amount</th>
       </tr>
     </thead>
@@ -186,9 +394,9 @@ export default function CustomerListPage() {
     try {
       const jsonText = await file.text()
       const { count } = await importCustomersFromJSON(jsonText, '', cat)
-      alert(`Imported ${count} record${count !== 1 ? 's' : ''}.`)
+      toast(`Imported ${count} record${count !== 1 ? 's' : ''}.`, 'success')
     } catch (err) {
-      alert(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      toast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
     } finally {
       setImporting(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -258,7 +466,14 @@ export default function CustomerListPage() {
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
                 >
                   <span className="text-base">↑</span>
-                  {importing ? 'Importing…' : 'Import'}
+                  {importing ? 'Importing…' : 'Import JSON'}
+                </button>
+                <button
+                  onClick={() => { closeMenu(); setCsvImportOpen(true) }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2.5"
+                >
+                  <span className="text-base">📥</span>
+                  Import CSV
                 </button>
                 <button
                   onClick={() => { closeMenu(); handleExport() }}
@@ -298,20 +513,47 @@ export default function CustomerListPage() {
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            {CATEGORY_LABELS[c]}
+            <span className="flex items-center justify-center gap-1.5">
+              {CATEGORY_LABELS[c]}
+              {!loading && categoryCounts[c] > 0 && (
+                <span className={`text-[10px] font-bold tabular-nums ${cat === c ? 'opacity-70' : 'opacity-50'}`}>
+                  {categoryCounts[c]}
+                </span>
+              )}
+            </span>
           </Link>
         ))}
       </div>
 
       {/* Search + filter */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-2">
         <input
+          ref={searchInputRef}
           type="search"
           className="input-field flex-1"
           placeholder={`Search ${CATEGORY_LABELS[cat].toLowerCase()}…`}
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
+        {/* Advanced filters toggle */}
+        <button
+          onClick={() => setFilterOpen(v => !v)}
+          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+            filterOpen || activeFilterCount > 0
+              ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+              : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v2a1 1 0 0 1-.293.707L13 13.414V19a1 1 0 0 1-.553.894l-4 2A1 1 0 0 1 7 21v-7.586L3.293 6.707A1 1 0 0 1 3 6V4Z" />
+          </svg>
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="bg-indigo-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
         <button
           onClick={() => {
             const next = !showInactive
@@ -319,14 +561,178 @@ export default function CustomerListPage() {
             localStorage.setItem('thelight.showInactive', String(next))
           }}
           className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-            showInactive
+            !showInactive
               ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
               : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
           }`}
         >
           {showInactive ? 'All' : 'Active'}
         </button>
+        {/* Tag filter */}
+        {allCatTags.length > 0 && (
+          <div ref={tagRef} className="relative">
+            <button
+              onClick={() => setTagOpen(v => !v)}
+              className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+                tagFilter
+                  ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              🏷 {tagFilter ?? 'Tag'}
+              {tagFilter && (
+                <span
+                  onClick={e => { e.stopPropagation(); setTagFilter(null) }}
+                  className="ml-0.5 opacity-70 hover:opacity-100"
+                >×</span>
+              )}
+            </button>
+            {tagOpen && (
+              <div className="absolute right-0 mt-1 w-44 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                {allCatTags.map(tag => (
+                  <button
+                    key={tag}
+                    onClick={() => { setTagFilter(tagFilter === tag ? null : tag); setTagOpen(false) }}
+                    className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors ${tagFilter === tag ? 'text-indigo-300' : 'text-gray-200'}`}
+                  >
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${tagColor(tag)}`}>{tag}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Advanced filter panel */}
+      {filterOpen && (
+        <div className="mb-4 p-4 bg-gray-800/70 rounded-xl border border-gray-700/50 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {uniqueSalesmen.length > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">{labels.salesman ?? 'Salesman'}</label>
+                <select
+                  value={filterSalesman}
+                  onChange={e => setFilterSalesman(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {uniqueSalesmen.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {uniqueStates.length > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">State</label>
+                <select
+                  value={filterState}
+                  onChange={e => setFilterState(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {uniqueStates.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {uniqueAdNos.length > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Ad Source</label>
+                <select
+                  value={filterAdNo}
+                  onChange={e => setFilterAdNo(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {uniqueAdNos.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {uniqueProducts.length > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Product</label>
+                <select
+                  value={filterProduct}
+                  onChange={e => setFilterProduct(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {uniqueProducts.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Callback</label>
+              <select
+                value={filterCallback}
+                onChange={e => setFilterCallback(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Date From</label>
+              <input
+                type="date"
+                value={filterDateFrom}
+                onChange={e => setFilterDateFrom(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Date To</label>
+              <input
+                type="date"
+                value={filterDateTo}
+                onChange={e => setFilterDateTo(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Min Amount ($)</label>
+              <input
+                type="number"
+                min={0}
+                value={filterAmtMin}
+                onChange={e => setFilterAmtMin(e.target.value)}
+                placeholder="0"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Max Amount ($)</label>
+              <input
+                type="number"
+                min={0}
+                value={filterAmtMax}
+                onChange={e => setFilterAmtMax(e.target.value)}
+                placeholder="No limit"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+              />
+            </div>
+          </div>
+
+          {activeFilterCount > 0 && (
+            <div className="flex items-center justify-between pt-1 border-t border-gray-700/50">
+              <span className="text-xs text-gray-500">{activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''} active</span>
+              <button
+                onClick={clearAdvancedFilters}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors font-medium"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm mb-4">
@@ -334,22 +740,100 @@ export default function CustomerListPage() {
         </div>
       )}
 
-      {!loading && (
-        <p className="text-xs text-gray-500 mb-3">
-          {filtered.length} {filtered.length === 1 ? 'record' : 'records'}
-          {!showInactive && ' · active only'}
-        </p>
+      {/* Bulk action bar — replaces record count when items are selected */}
+      {!loading && someSelected ? (
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <button onClick={clearSelection} className="text-gray-400 hover:text-gray-200 transition-colors" aria-label="Clear selection">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <span className="text-sm font-medium text-white">{selectedIds.size} selected</span>
+          {selectedIds.size < allFilteredIds.size && (
+            <button onClick={selectAll} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+              Select all {filtered.length}
+            </button>
+          )}
+          <div className="flex-1" />
+          <button
+            onClick={handleBulkDeactivate}
+            disabled={bulkWorking}
+            className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40"
+          >
+            Deactivate
+          </button>
+          {/* Assign dropdown */}
+          <div ref={assignRef} className="relative">
+            <button
+              onClick={() => setAssignOpen(v => !v)}
+              disabled={bulkWorking}
+              className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40 flex items-center gap-1"
+            >
+              Assign {labels.salesman}
+              <svg className={`w-3.5 h-3.5 transition-transform ${assignOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {assignOpen && (
+              <div className="absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                {labels && (
+                  <AssignInput onAssign={handleBulkAssign} salesmanList={usePickerStore.getState().lists.salesman} />
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleBulkExport}
+            disabled={bulkWorking}
+            className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40"
+          >
+            Export
+          </button>
+        </div>
+      ) : (
+        !loading && (
+          <p className="text-xs text-gray-500 mb-3">
+            {pageCount > 1
+              ? `${rangeStart}–${rangeEnd} of ${filtered.length} records`
+              : `${filtered.length} ${filtered.length === 1 ? 'record' : 'records'}`}
+            {!showInactive && ' · active only'}
+            {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
+          </p>
+        )
       )}
 
-      <div className="card divide-y divide-gray-700/50">
+      <div ref={listTopRef} className="card divide-y divide-gray-700/50">
+        {/* Select-all checkbox row */}
+        {!loading && filtered.length > 0 && (
+          <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
+            <input
+              type="checkbox"
+              checked={allPageSelected}
+              onChange={togglePage}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
+            />
+            <span className="text-xs text-gray-500">
+              {allPageSelected ? 'Deselect page' : 'Select page'}
+            </span>
+          </div>
+        )}
         {loading ? (
           Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
         ) : filtered.length === 0 ? (
           <div className="px-4 py-8 text-center">
             <p className="text-gray-400">
-              {search ? 'No results for that search' : `No ${CATEGORY_LABELS[cat].toLowerCase()} yet`}
+              {search || activeFilterCount > 0
+                ? 'No results match those filters'
+                : `No ${CATEGORY_LABELS[cat].toLowerCase()} yet`}
             </p>
-            {!search && (
+            {search || activeFilterCount > 0 ? (
+              <button
+                onClick={() => { setSearch(''); clearAdvancedFilters() }}
+                className="mt-3 text-sm text-indigo-400 hover:text-indigo-300"
+              >
+                Clear filters
+              </button>
+            ) : (
               <Link
                 to={`/records/new?category=${cat}`}
                 className="inline-block mt-3 text-sm text-indigo-400 hover:text-indigo-300"
@@ -359,44 +843,165 @@ export default function CustomerListPage() {
             )}
           </div>
         ) : (
-          filtered.map(c => <CustomerRow key={c.id} customer={c} />)
+          paginated.map(c => (
+            <CustomerRow
+              key={c.id}
+              customer={c}
+              selected={selectedIds.has(c.id)}
+              onToggle={() => toggleOne(c.id)}
+            />
+          ))
+        )}
+
+        {/* Pagination footer — only shown when there's more than one page */}
+        {!loading && pageCount > 1 && (
+          <div className="flex items-center justify-between px-4 py-3">
+            <button
+              onClick={() => { setPage(p => Math.max(1, p - 1)); listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
+              disabled={page === 1}
+              className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              Prev
+            </button>
+            <span className="text-xs text-gray-500 tabular-nums">
+              {page} / {pageCount}
+            </span>
+            <button
+              onClick={() => { setPage(p => Math.min(pageCount, p + 1)); listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
+              disabled={page === pageCount}
+              className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         )}
       </div>
+      {csvImportOpen && (
+        <CSVImportModal
+          defaultCategory={cat}
+          onClose={() => setCsvImportOpen(false)}
+          onImported={count => {
+            toast(`Imported ${count} record${count !== 1 ? 's' : ''}.`, 'success')
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function CustomerRow({ customer: c }: { customer: CustomerItem }) {
+function CustomerRow({
+  customer: c,
+  selected,
+  onToggle,
+}: {
+  customer: CustomerItem
+  selected: boolean
+  onToggle: () => void
+}) {
   const name = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
+  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
+  const color = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
 
   return (
-    <Link
-      to={`/records/${c.id}`}
-      className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-700/30 transition-colors"
-    >
-      <div className="w-10 h-10 rounded-full bg-indigo-700/30 flex items-center justify-center shrink-0 overflow-hidden">
-        {c.photo ? (
-          <img src={c.photo} alt={name} className="w-full h-full object-cover" />
-        ) : (
-          <span className="text-sm font-semibold text-indigo-300">{initials || '?'}</span>
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
-          {!c.isActive && <span className="text-xs text-gray-500 shrink-0">inactive</span>}
+    <div className={`flex items-center gap-3 px-4 py-3 transition-colors ${selected ? 'bg-indigo-600/10' : 'hover:bg-gray-700/30'}`}>
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
+        onClick={e => e.stopPropagation()}
+      />
+      <Link
+        to={`/records/${c.id}`}
+        className="flex items-center gap-3 flex-1 min-w-0"
+      >
+        <div
+          className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 overflow-hidden"
+          style={{ background: color.bg }}
+        >
+          {c.photo ? (
+            <img src={c.photo} alt={name} className="w-full h-full object-cover" />
+          ) : (
+            <span className="text-sm font-semibold" style={{ color: color.text }}>{initials || '?'}</span>
+          )}
         </div>
-        <p className="text-sm text-gray-400 truncate">
-          {[c.city, c.state].filter(Boolean).join(', ')}
-          {c.category.toLowerCase() !== 'vendor' && c.salesman ? ` · ${c.salesman}` : ''}
-        </p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
+            {!c.isActive && <span className="text-xs text-gray-500 shrink-0">inactive</span>}
+            {(c.tags ?? []).slice(0, 2).map(tag => (
+              <span key={tag} className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${tagColor(tag)}`}>{tag}</span>
+            ))}
+            {(c.tags ?? []).length > 2 && (
+              <span className="text-[10px] text-gray-600 shrink-0">+{c.tags.length - 2}</span>
+            )}
+          </div>
+          <p className="text-sm text-gray-400 truncate">
+            {[c.city, c.state].filter(Boolean).join(', ')}
+            {c.category.toLowerCase() !== 'vendor' && c.salesman ? ` · ${c.salesman}` : ''}
+          </p>
+        </div>
+        <div className="shrink-0 text-right flex flex-col items-end gap-1">
+          {c.amount > 0 && <p className="text-sm font-semibold text-green-400">{formatCurrency(c.amount)}</p>}
+          {c.category.toLowerCase() === 'lead' && (() => {
+            const ls = scoreLead(c)
+            return (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${ls.badgeClass}`}>
+                <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
+                {ls.label}
+              </span>
+            )
+          })()}
+          {c.phone && <p className="text-xs text-gray-500">{c.phone}</p>}
+        </div>
+      </Link>
+    </div>
+  )
+}
+
+function AssignInput({
+  onAssign,
+  salesmanList,
+}: {
+  onAssign: (name: string) => void
+  salesmanList: string[]
+}) {
+  const [custom, setCustom] = useState('')
+  return (
+    <div className="p-2 space-y-1">
+      {salesmanList.map(s => (
+        <button
+          key={s}
+          onClick={() => onAssign(s)}
+          className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 rounded-lg transition-colors"
+        >
+          {s}
+        </button>
+      ))}
+      <div className="flex gap-1 pt-1 border-t border-gray-700">
+        <input
+          type="text"
+          value={custom}
+          onChange={e => setCustom(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onAssign(custom.trim()) }}
+          placeholder="Type name…"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:border-indigo-500"
+        />
+        <button
+          onClick={() => { if (custom.trim()) onAssign(custom.trim()) }}
+          className="px-2 py-1.5 bg-indigo-600 rounded-lg text-xs text-white hover:bg-indigo-500"
+        >
+          Set
+        </button>
       </div>
-      <div className="shrink-0 text-right flex flex-col items-end gap-1">
-        {c.amount > 0 && <p className="text-sm font-semibold text-green-400">{formatCurrency(c.amount)}</p>}
-        {c.phone && <p className="text-xs text-gray-500">{c.phone}</p>}
-      </div>
-    </Link>
+    </div>
   )
 }
 

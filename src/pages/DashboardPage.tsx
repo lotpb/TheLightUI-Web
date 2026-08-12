@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { usePageTitle } from '../hooks/usePageTitle'
 import { fetchSnapshot, type SnapshotData } from '../services/snapshotService'
 import { formatCurrency, fullName } from '../models/customer'
+import { avatarColor, AVATAR_ORIGINAL } from '../utils/avatarColor'
+import { usePrefStore } from '../stores/prefStore'
 import StatCard from '../components/StatCard'
 import SnapshotChart from '../components/SnapshotChart'
 import { esc } from '../utils/exportUtils'
+import { subscribeToTodos } from '../services/todoService'
+import { subscribeToExpenses } from '../services/expenseService'
+import { subscribeToFollowUps } from '../services/customerService'
+import { useAuthStore } from '../stores/authStore'
+import type { Todo } from '../models/todo'
+import type { Expense } from '../models/expense'
+import type { CustomerItem } from '../models/customer'
 
 const CHART_ENTRIES = (data: SnapshotData) => [
   { label: 'Leads',    count: data.leadsToday.length,         color: '#6366f1' },
@@ -18,10 +28,18 @@ function todayLabel() {
 }
 
 export default function DashboardPage() {
+  usePageTitle('Dashboard')
   const [data, setData] = useState<SnapshotData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [today, setToday] = useState(todayLabel)
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [todosLoading, setTodosLoading] = useState(true)
+  const [expensesToday, setExpensesToday] = useState<Expense[]>([])
+  const [expensesLoading, setExpensesLoading] = useState(true)
+  const [followUps, setFollowUps] = useState<CustomerItem[]>([])
+  const user = useAuthStore(s => s.user)
+  const companyId = useAuthStore(s => s.companyId)
 
   async function load() {
     setLoading(true)
@@ -37,6 +55,35 @@ export default function DashboardPage() {
   }
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    if (!user) { setTodosLoading(false); return }
+    const unsub = subscribeToTodos(
+      items => { setTodos(items.filter(t => !t.isCompleted)); setTodosLoading(false) },
+      ()    => setTodosLoading(false),
+    )
+    return unsub
+  }, [user, companyId])
+
+  useEffect(() => {
+    if (!user) { setExpensesLoading(false); return }
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+    const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
+    const unsub = subscribeToExpenses(
+      items => {
+        setExpensesToday(items.filter(e => e.date >= todayStart && e.date <= todayEnd))
+        setExpensesLoading(false)
+      },
+      () => setExpensesLoading(false),
+    )
+    return unsub
+  }, [user, companyId])
+
+  useEffect(() => {
+    if (!user) return
+    const unsub = subscribeToFollowUps(setFollowUps, () => {})
+    return unsub
+  }, [user, companyId])
 
   const salesTotal = data?.salesToday.reduce((s, c) => s + c.amount, 0) ?? 0
   const chartEntries = data ? CHART_ENTRIES(data) : null
@@ -235,44 +282,56 @@ export default function DashboardPage() {
       {/* Today stat strip */}
       <section>
         <p className="section-header">Today</p>
-        {/* Mobile: 3 + 2; sm+: single row of 5 */}
+        {/* Mobile: two rows of 3; sm+: single row of 6 */}
         <div className="sm:hidden space-y-2">
           <div className="grid grid-cols-3 gap-2">
-            <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}        color="text-indigo-400" />
-            <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} color="text-orange-400" />
-            <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}    color="text-indigo-300" />
+            <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}        color="text-indigo-400" loading={loading} />
+            <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} color="text-orange-400" loading={loading} />
+            <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}    color="text-indigo-300" loading={loading} />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <StatCard title="Sales"    value={formatCurrency(salesTotal)}                  color="text-green-400" />
-            <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)} color="text-teal-400" />
+          <div className="grid grid-cols-3 gap-2">
+            <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)} color="text-teal-400"   loading={loading} />
+            <StatCard title="Expense"  value={formatCurrency(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
+            <StatCard title="Sales"    value={formatCurrency(salesTotal)}                  color="text-green-400"  loading={loading} />
           </div>
         </div>
-        <div className="hidden sm:grid grid-cols-5 gap-2">
-          <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}         color="text-indigo-400" />
-          <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)}  color="text-orange-400" />
-          <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}     color="text-indigo-300" />
-          <StatCard title="Sales"    value={formatCurrency(salesTotal)}                   color="text-green-400" />
-          <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}  color="text-teal-400" />
+        <div className="hidden sm:grid gap-2" style={{ gridTemplateColumns: 'repeat(5, 1fr) 1.4fr' }}>
+          <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}         color="text-indigo-400" loading={loading} />
+          <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)}  color="text-orange-400" loading={loading} />
+          <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}     color="text-indigo-300" loading={loading} />
+          <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}  color="text-teal-400"   loading={loading} />
+          <StatCard title="Expense"  value={formatCurrency(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
+          <StatCard title="Sales"    value={formatCurrency(salesTotal)}                   color="text-green-400"  loading={loading} />
         </div>
       </section>
 
       {/* All-time totals */}
       <section>
         <p className="section-header">Overall</p>
-        <div className="grid grid-cols-3 gap-2">
-          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)}     color="text-indigo-400" />
-          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)} color="text-indigo-300" />
-          <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)} color="text-green-400" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)}          color="text-indigo-400" loading={loading} />
+          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)}       color="text-indigo-300" loading={loading} />
+          <StatCard title="Active Tasks"     value={String(todos.length)}                         color="text-violet-400" loading={todosLoading} to="/todo" />
+          <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)} color="text-green-400"  loading={loading} />
         </div>
       </section>
 
-      {/* Bar chart — hidden when all values are zero */}
-      {chartEntries && chartEntries.some(e => e.count > 0) && (
+      {/* Bar chart — hidden when loading or all values are zero */}
+      {!loading && chartEntries && chartEntries.some(e => e.count > 0) && (
         <section className="card p-4">
           <p className="text-xs font-semibold text-gray-400 mb-3">Today at a Glance</p>
           <SnapshotChart entries={chartEntries} />
         </section>
       )}
+
+      {/* Tasks */}
+      <TasksCard todos={todos} loading={todosLoading} />
+
+      {/* Follow-ups */}
+      {followUps.length > 0 && <FollowUpsCard items={followUps} />}
+
+      {/* Expenses Today */}
+      <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} />
 
       {/* Leads today */}
       <ListSection
@@ -308,7 +367,207 @@ export default function DashboardPage() {
   )
 }
 
-import type { CustomerItem } from '../models/customer'
+const PRIORITY_DOT: Record<Todo['priority'], string> = {
+  low:    'bg-gray-400',
+  medium: 'bg-yellow-400',
+  high:   'bg-red-400',
+}
+
+const PRIORITY_TEXT: Record<Todo['priority'], string> = {
+  low:    'text-gray-400',
+  medium: 'text-yellow-400',
+  high:   'text-red-400',
+}
+
+const MAX_TASKS = 5
+
+function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
+  const preview = todos.slice(0, MAX_TASKS)
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <p className="section-header mb-0 text-violet-400">Tasks</p>
+          {todos.length > 0 && (
+            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-violet-600">
+              {todos.length}
+            </span>
+          )}
+        </div>
+        <Link to="/todo" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card divide-y divide-gray-700/50">
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : todos.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No active tasks</p>
+        ) : (
+          <>
+            {preview.map(todo => {
+              const initial = todo.title.trim()[0]?.toUpperCase() || '?'
+              const avatarBg = 'rgba(167,139,250,0.2)'
+              const avatarText = '#a78bfa'
+              return (
+                <Link
+                  key={todo.id}
+                  to={`/todo/${todo.id}/edit`}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: avatarBg }}>
+                    <span className="text-xs font-semibold" style={{ color: avatarText }}>{initial}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-100 truncate">{todo.title}</p>
+                    {todo.dueDate && (
+                      <p className="text-xs text-indigo-400 mt-0.5">
+                        Due {todo.dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[todo.priority]}`} />
+                    <span className={`text-xs capitalize ${PRIORITY_TEXT[todo.priority]}`}>{todo.priority}</span>
+                  </div>
+                </Link>
+              )
+            })}
+            {todos.length > MAX_TASKS && (
+              <Link to="/todo" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{todos.length - MAX_TASKS} more tasks
+              </Link>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ExpensesTodayCard({ expenses, loading }: { expenses: Expense[]; loading: boolean }) {
+  const preview = expenses.slice(0, MAX_TASKS)
+  const total   = expenses.reduce((s, e) => s + e.amount, 0)
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <p className="section-header mb-0 text-amber-400">Expenses Today</p>
+          {expenses.length > 0 && (
+            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-amber-600">
+              {formatCurrency(total)}
+            </span>
+          )}
+        </div>
+        <Link to="/expenses" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card divide-y divide-gray-700/50">
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : expenses.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No expenses today</p>
+        ) : (
+          <>
+            {preview.map(expense => {
+              const initial = expense.title.trim()[0]?.toUpperCase() || '?'
+              return (
+                <Link
+                  key={expense.id}
+                  to="/expenses"
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: 'rgba(251,191,36,0.2)' }}>
+                    <span className="text-xs font-semibold" style={{ color: '#fbbf24' }}>{initial}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-100 truncate">{expense.title}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{expense.category}</p>
+                  </div>
+                  <span className="text-sm font-semibold text-amber-400 shrink-0">{formatCurrency(expense.amount)}</span>
+                </Link>
+              )
+            })}
+            {expenses.length > MAX_TASKS && (
+              <Link to="/expenses" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{expenses.length - MAX_TASKS} more expenses
+              </Link>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function FollowUpsCard({ items }: { items: CustomerItem[] }) {
+  const now = new Date(); now.setHours(0, 0, 0, 0)
+  const overdueOrToday = items.filter(c => c.followUpDate && c.followUpDate <= new Date())
+  const upcoming       = items.filter(c => c.followUpDate && c.followUpDate > new Date())
+
+  function followUpLabel(d: Date): { text: string; color: string } {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const diff = Math.round((d.getTime() - today.getTime()) / 86400000)
+    if (diff < 0)  return { text: `${Math.abs(diff)}d overdue`, color: 'text-red-400' }
+    if (diff === 0) return { text: 'Today',                     color: 'text-yellow-400' }
+    if (diff === 1) return { text: 'Tomorrow',                  color: 'text-orange-400' }
+    return {
+      text: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      color: 'text-gray-400',
+    }
+  }
+
+  const preview = items.slice(0, 5)
+
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-2">
+        <p className="section-header mb-0 text-rose-400">Follow-ups</p>
+        {overdueOrToday.length > 0 && (
+          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-red-600">
+            {overdueOrToday.length} due
+          </span>
+        )}
+        {upcoming.length > 0 && (
+          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-gray-600">
+            +{upcoming.length} upcoming
+          </span>
+        )}
+      </div>
+      <div className="card divide-y divide-gray-700/50">
+        {preview.map(c => {
+          const label = followUpLabel(c.followUpDate!)
+          return (
+            <Link
+              key={c.id}
+              to={`/records/${c.id}`}
+              className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+            >
+              <span className="text-base shrink-0">🔔</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
+                {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+              </div>
+              <span className={`text-xs font-semibold shrink-0 ${label.color}`}>{label.text}</span>
+            </Link>
+          )
+        })}
+        {items.length > 5 && (
+          <Link to="/leads" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+            +{items.length - 5} more
+          </Link>
+        )}
+      </div>
+    </section>
+  )
+}
 
 function ListSection({
   title, color, badgeColor, items, loading, emptyMsg, valueKey,
@@ -321,6 +580,7 @@ function ListSection({
   emptyMsg: string
   valueKey?: 'amount'
 }) {
+  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
@@ -342,14 +602,16 @@ function ListSection({
         ) : !items || items.length === 0 ? (
           <p className="px-4 py-3 text-sm text-gray-500">{emptyMsg}</p>
         ) : (
-          items.map(c => (
+          items.map(c => {
+            const color = coloredAvatars ? avatarColor(fullName(c)) : AVATAR_ORIGINAL
+            return (
             <Link
               key={c.id}
               to={`/records/${c.id}`}
               className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-indigo-700/30 flex items-center justify-center shrink-0">
-                <span className="text-xs font-semibold text-indigo-300">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
+                <span className="text-xs font-semibold" style={{ color: color.text }}>
                   {[c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
                 </span>
               </div>
@@ -361,7 +623,8 @@ function ListSection({
                 <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(c.amount)}</span>
               )}
             </Link>
-          ))
+            )
+          })
         )}
       </div>
     </section>

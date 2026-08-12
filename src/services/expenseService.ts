@@ -1,6 +1,6 @@
 import {
   collection, doc, setDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, query, where,
+  onSnapshot, getDoc, getDocs, writeBatch, query, where,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -57,4 +57,58 @@ export async function updateExpense(
 
 export async function deleteExpense(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+export async function getAllExpensesOnce(): Promise<Expense[]> {
+  const companyId = getCompanyId()
+  if (!companyId) throw new Error('Not authenticated')
+  const snap = await getDocs(
+    query(collection(db, COL), where('companyId', '==', companyId))
+  )
+  const items: Expense[] = []
+  for (const d of snap.docs) {
+    try { items.push(expenseFromDoc(d)) } catch { /* skip malformed */ }
+  }
+  items.sort((a, b) => b.date.getTime() - a.date.getTime())
+  return items
+}
+
+export async function importExpensesFromJSON(jsonText: string): Promise<{ count: number }> {
+  const companyId = getCompanyId()
+  if (!companyId) throw new Error('Not authenticated')
+
+  const parsed: unknown = JSON.parse(jsonText)
+  const records: Record<string, unknown>[] = Array.isArray(parsed) ? parsed : []
+  if (records.length === 0) throw new Error('No expense records found in file.')
+
+  function safeDate(v: unknown): Date {
+    if (!v) return new Date()
+    const d = new Date(v as string)
+    return isNaN(d.getTime()) ? new Date() : d
+  }
+
+  const BATCH_SIZE = 500
+  let total = 0
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const chunk = records.slice(i, i + BATCH_SIZE)
+    const batch = writeBatch(db)
+    for (const r of chunk) {
+      const expense: Omit<Expense, 'id'> = {
+        title:          String(r['title']          ?? ''),
+        amount:         Number(r['amount'])         || 0,
+        category:       String(r['category']        ?? 'Other'),
+        date:           safeDate(r['date']),
+        notes:          String(r['notes']           ?? ''),
+        isReimbursable: Boolean(r['isReimbursable'] ?? false),
+        lastUpdate:     safeDate(r['lastUpdate']),
+      }
+      const ref = r['id']
+        ? doc(db, COL, String(r['id']))
+        : doc(collection(db, COL))
+      batch.set(ref, { ...expenseToFirestore(expense), companyId })
+      total++
+    }
+    await batch.commit()
+  }
+  return { count: total }
 }

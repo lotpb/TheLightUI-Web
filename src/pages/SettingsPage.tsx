@@ -1,29 +1,37 @@
 import { useState, useEffect, useRef } from 'react'
+import { usePageTitle } from '../hooks/usePageTitle'
+import { Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePickerStore } from '../stores/pickerStore'
 import { useAuthStore } from '../stores/authStore'
-import { savePickerLists, type PickerLists } from '../services/pickerService'
+import { usePrefStore } from '../stores/prefStore'
+import { savePickerLists, type PickerLists, type PickerLabels } from '../services/pickerService'
+import { useToast } from '../components/Toast'
 import {
   getAllCustomersOnce,
   exportCustomersToJSON,
   importCustomersFromJSON,
 } from '../services/customerService'
+import { getAllExpensesOnce, importExpensesFromJSON } from '../services/expenseService'
+import { getAllTodosOnce, importTodosFromJSON } from '../services/todoService'
 
-type ListKey = keyof PickerLists
+type ListKey = 'salesman' | 'job' | 'product' | 'advertiser' | 'contractor'
 
-const SECTIONS: { key: ListKey; label: string; placeholder: string }[] = [
-  { key: 'salesman',    label: 'Salesman',    placeholder: 'Add salesman name…'   },
-  { key: 'job',         label: 'Job Types',   placeholder: 'Add job type…'        },
-  { key: 'product',     label: 'Products',    placeholder: 'Add product…'         },
-  { key: 'advertiser',  label: 'Advertisers', placeholder: 'Add advertiser…'      },
-  { key: 'contractor',  label: 'Contractors', placeholder: 'Add contractor name…' },
+const SECTION_KEYS: { key: ListKey; placeholder: string }[] = [
+  { key: 'salesman',   placeholder: 'Add name…'       },
+  { key: 'job',        placeholder: 'Add job type…'   },
+  { key: 'product',    placeholder: 'Add product…'    },
+  { key: 'advertiser', placeholder: 'Add advertiser…' },
+  { key: 'contractor', placeholder: 'Add name…'       },
 ]
 
 const PREF_KEY = 'thelight.showInactive'
 
 export default function SettingsPage() {
-  const { lists, fetch } = usePickerStore()
+  const { lists, labels: storedLabels, fetch } = usePickerStore()
   const { companyId, role } = useAuthStore()
+  const { coloredAvatars, setColoredAvatars } = usePrefStore()
+  const toast = useToast()
 
   const [showInactivePref, setShowInactivePref] = useState(
     () => localStorage.getItem(PREF_KEY) === 'true'
@@ -48,8 +56,11 @@ export default function SettingsPage() {
   const [local, setLocal] = useState<PickerLists>({
     salesman: [], job: [], product: [], advertiser: [], contractor: []
   })
+  const [localLabels, setLocalLabels] = useState<PickerLabels>(() => storedLabels)
+  const [editingLabel, setEditingLabel] = useState<ListKey | null>(null)
+  const [labelDraft, setLabelDraft] = useState('')
+  usePageTitle('Settings')
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved]   = useState(false)
   const [inputs, setInputs] = useState<Record<ListKey, string>>({
     salesman: '', job: '', product: '', advertiser: '', contractor: ''
   })
@@ -57,29 +68,86 @@ export default function SettingsPage() {
   // Invite state
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviting, setInviting] = useState(false)
-  const [inviteMsg, setInviteMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [fixingRole, setFixingRole] = useState(false)
+
+  async function handleFixRole() {
+    setFixingRole(true)
+    try {
+      const fns = getFunctions()
+      const fixRole = httpsCallable<object, { role: string }>(fns, 'fixRole')
+      const result = await fixRole({})
+      // Force token refresh so the corrected role is picked up immediately
+      const { auth: fbAuth } = await import('../firebase/config')
+      await fbAuth.currentUser?.getIdToken(true)
+      const tokenResult = await fbAuth.currentUser?.getIdTokenResult()
+      const newRole = tokenResult?.claims['role'] as string | undefined
+      useAuthStore.setState({ role: newRole ?? result.data.role })
+      toast(`Role corrected to "${result.data.role}". Please refresh if needed.`, 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Fix failed', 'error')
+    } finally {
+      setFixingRole(false)
+    }
+  }
 
   // Data management state
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [transferring, setTransferring] = useState(false)
-  const [transferMsg, setTransferMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  function downloadJSON(filename: string, content: string) {
+    const blob = new Blob([content], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   async function handleExport() {
     setTransferring(true)
-    setTransferMsg(null)
     try {
-      const items = await getAllCustomersOnce()
-      const json = exportCustomersToJSON(items)
-      const blob = new Blob([json], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `CustomerBackup-${new Date().toISOString().slice(0, 10)}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-      setTransferMsg({ ok: true, text: `Exported ${items.length} record${items.length === 1 ? '' : 's'}.` })
+      const [customers, expenses, todos] = await Promise.all([
+        getAllCustomersOnce(),
+        getAllExpensesOnce(),
+        getAllTodosOnce(),
+      ])
+
+      // CustomerBackup.json — all records (leads, vendors, employees)
+      downloadJSON('CustomerBackup.json', exportCustomersToJSON(customers))
+
+      // ExpenseBackup.json
+      const expenseRecords = expenses.map(e => ({
+        id: e.id,
+        title: e.title,
+        amount: e.amount,
+        category: e.category,
+        date: e.date.toISOString(),
+        notes: e.notes,
+        isReimbursable: e.isReimbursable,
+        lastUpdate: e.lastUpdate.toISOString(),
+      }))
+      downloadJSON('ExpenseBackup.json', JSON.stringify(expenseRecords, null, 2))
+
+      // ToDoListBackup.json
+      const todoRecords = todos.map(t => ({
+        id: t.id,
+        title: t.title,
+        notes: t.notes,
+        isCompleted: t.isCompleted,
+        priority: t.priority,
+        dueDate: t.dueDate ? t.dueDate.toISOString() : null,
+        createdAt: t.createdAt.toISOString(),
+        position: t.position,
+      }))
+      downloadJSON('ToDoListBackup.json', JSON.stringify(todoRecords, null, 2))
+
+      toast(
+        `Exported ${customers.length} records, ${expenses.length} expenses, ${todos.length} todos.`,
+        'success',
+      )
     } catch (err) {
-      setTransferMsg({ ok: false, text: err instanceof Error ? err.message : 'Export failed.' })
+      toast(err instanceof Error ? err.message : 'Export failed.', 'error')
     } finally {
       setTransferring(false)
     }
@@ -88,23 +156,52 @@ export default function SettingsPage() {
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    e.target.value = ''   // reset so same file can be re-imported
+    e.target.value = ''
     const userId = useAuthStore.getState().user?.uid ?? ''
     setTransferring(true)
-    setTransferMsg(null)
     try {
       const text = await file.text()
-      const { count } = await importCustomersFromJSON(text, userId)
-      setTransferMsg({ ok: true, text: `Imported ${count} record${count === 1 ? '' : 's'} to Firebase.` })
+      const parsed: unknown = JSON.parse(text)
+      const records: Record<string, unknown>[] = Array.isArray(parsed)
+        ? parsed as Record<string, unknown>[]
+        : ((parsed as { records?: Record<string, unknown>[] }).records ?? [])
+
+      if (records.length === 0) {
+        toast('File is empty or has no records.', 'error')
+        return
+      }
+
+      const sample = records[0]
+      let result: { count: number }
+
+      if ('isCompleted' in sample) {
+        // ToDoListBackup.json
+        result = await importTodosFromJSON(text, userId)
+        toast(`Imported ${result.count} todo${result.count === 1 ? '' : 's'}.`, 'success')
+      } else if ('isReimbursable' in sample) {
+        // ExpenseBackup.json
+        result = await importExpensesFromJSON(text)
+        toast(`Imported ${result.count} expense${result.count === 1 ? '' : 's'}.`, 'success')
+      } else {
+        // CustomerBackup.json (leads, vendors, employees)
+        result = await importCustomersFromJSON(text, userId)
+        toast(`Imported ${result.count} record${result.count === 1 ? '' : 's'}.`, 'success')
+      }
     } catch (err) {
-      setTransferMsg({ ok: false, text: err instanceof Error ? err.message : 'Import failed.' })
+      toast(err instanceof Error ? err.message : 'Import failed.', 'error')
     } finally {
       setTransferring(false)
     }
   }
 
 useEffect(() => { fetch() }, [fetch])
-  useEffect(() => { if (lists) setLocal(lists) }, [lists])
+  useEffect(() => { if (lists) { setLocal(lists); setLocalLabels(l => ({ ...l, ...lists.labels })) } }, [lists])
+
+  function commitLabel(key: ListKey) {
+    const trimmed = labelDraft.trim()
+    if (trimmed) setLocalLabels(prev => ({ ...prev, [key]: trimmed }))
+    setEditingLabel(null)
+  }
 
   function addItem(key: ListKey) {
     const val = inputs[key].trim()
@@ -122,13 +219,14 @@ useEffect(() => { fetch() }, [fetch])
   }
 
   async function handleSave() {
+    if (editingLabel) commitLabel(editingLabel)
     setSaving(true)
-    setSaved(false)
     try {
-      await savePickerLists(local)
+      await savePickerLists({ ...local, labels: localLabels })
       await fetch()
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      toast('Settings saved.', 'success')
+    } catch {
+      toast('Save failed. Please try again.', 'error')
     } finally {
       setSaving(false)
     }
@@ -138,20 +236,18 @@ useEffect(() => { fetch() }, [fetch])
     const email = inviteEmail.trim()
     if (!email) return
     setInviting(true)
-    setInviteMsg(null)
     try {
       const fns = getFunctions()
       const inviteUser = httpsCallable<{ email: string }, { success: boolean; alreadyInvited: boolean }>(fns, 'inviteUser')
       const result = await inviteUser({ email })
       if (result.data.alreadyInvited) {
-        setInviteMsg({ ok: true, text: `${email} already has a pending invitation.` })
+        toast(`${email} already has a pending invitation.`, 'info')
       } else {
-        setInviteMsg({ ok: true, text: `Invitation sent to ${email}.` })
+        toast(`Invitation sent to ${email}.`, 'success')
         setInviteEmail('')
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Invite failed'
-      setInviteMsg({ ok: false, text: msg })
+      toast(err instanceof Error ? err.message : 'Invite failed', 'error')
     } finally {
       setInviting(false)
     }
@@ -162,7 +258,7 @@ return (
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-white">Settings</h1>
         <button onClick={handleSave} disabled={saving} className="btn-primary px-4 py-1.5 text-sm">
-          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save'}
+          {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
 
@@ -172,13 +268,29 @@ return (
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Company & Team</p>
         </div>
         <div className="p-4 space-y-4">
-          <div className="flex justify-between text-sm">
+          <div className="flex justify-between items-center text-sm">
+            <span className="text-gray-400">Your account</span>
+            <Link to="/profile" className="text-indigo-400 hover:text-indigo-300 text-sm">
+              Edit profile →
+            </Link>
+          </div>
+          <div className="border-t border-gray-700/40 pt-4 flex justify-between text-sm">
             <span className="text-gray-400">Company ID</span>
             <span className="text-gray-300 font-mono text-xs">{companyId ?? '—'}</span>
           </div>
-          <div className="flex justify-between text-sm">
+          <div className="flex justify-between items-center text-sm">
             <span className="text-gray-400">Your role</span>
-            <span className="text-gray-300 capitalize">{role ?? '—'}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-300 capitalize">{role ?? '—'}</span>
+              <button
+                onClick={handleFixRole}
+                disabled={fixingRole}
+                title="Fix incorrect role"
+                className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-40 transition-colors"
+              >
+                {fixingRole ? '…' : 'Fix'}
+              </button>
+            </div>
           </div>
 
           {/* Invite */}
@@ -198,9 +310,6 @@ return (
                   {inviting ? '…' : 'Invite'}
                 </button>
               </div>
-              {inviteMsg && (
-                <p className={`text-xs ${inviteMsg.ok ? 'text-green-400' : 'text-red-400'}`}>{inviteMsg.text}</p>
-              )}
             </div>
           )}
 
@@ -233,8 +342,8 @@ return (
           </div>
           <div className="border-t border-gray-700/40 pt-4 flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-200">Show inactive records by default</p>
-              <p className="text-xs text-gray-500 mt-0.5">Applies to Leads, Customers, Vendors & Employees lists</p>
+              <p className="text-sm text-gray-200">{showInactivePref ? 'Include all records' : 'Active records only'}</p>
+              <p className="text-xs text-gray-500 mt-0.5">Show inactive entries in Leads, Customers, Vendors & Employees lists</p>
             </div>
             <button
               type="button"
@@ -249,6 +358,24 @@ return (
               }`} />
             </button>
           </div>
+          <div className="border-t border-gray-700/40 pt-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-200">Color-coded avatars</p>
+              <p className="text-xs text-gray-500 mt-0.5">Each contact gets a unique color based on their name</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setColoredAvatars(!coloredAvatars)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                coloredAvatars ? 'bg-indigo-600' : 'bg-gray-600'
+              }`}
+              aria-label="Toggle colored avatars"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                coloredAvatars ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -258,21 +385,21 @@ return (
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Data Management</p>
         </div>
         <div className="p-4 space-y-3">
-          <p className="text-xs text-gray-500">Export all records as a JSON backup, or import a JSON file from iOS or a previous export.</p>
+          <p className="text-xs text-gray-500">Export all data as JSON backups (CustomerBackup.json, ExpenseBackup.json, ToDoListBackup.json). Import auto-detects the file type — customers, expenses, or todos.</p>
           <div className="flex gap-2 flex-wrap">
             <button
               onClick={handleExport}
               disabled={transferring}
               className="btn-secondary text-sm px-4 py-1.5"
             >
-              {transferring ? 'Working…' : 'Export JSON'}
+              {transferring ? 'Working…' : 'Export All Data'}
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={transferring}
               className="btn-secondary text-sm px-4 py-1.5"
             >
-              Import JSON
+              Import Data
             </button>
             <input
               ref={fileInputRef}
@@ -282,11 +409,6 @@ return (
               onChange={handleImportFile}
             />
           </div>
-          {transferMsg && (
-            <p className={`text-xs ${transferMsg.ok ? 'text-green-400' : 'text-red-400'}`}>
-              {transferMsg.text}
-            </p>
-          )}
         </div>
       </div>
 
@@ -295,10 +417,34 @@ return (
       </p>
 
       <div className="space-y-5">
-        {SECTIONS.map(({ key, label, placeholder }) => (
+        {SECTION_KEYS.map(({ key, placeholder }) => (
           <div key={key} className="card overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{label}</p>
+            <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between gap-2">
+              {editingLabel === key ? (
+                <input
+                  autoFocus
+                  type="text"
+                  value={labelDraft}
+                  onChange={e => setLabelDraft(e.target.value)}
+                  onBlur={() => commitLabel(key)}
+                  onKeyDown={e => { if (e.key === 'Enter') commitLabel(key); if (e.key === 'Escape') setEditingLabel(null) }}
+                  className="text-xs font-semibold uppercase tracking-wider bg-transparent border-b border-indigo-500 outline-none text-gray-200 w-40"
+                />
+              ) : (
+                <>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{localLabels[key as keyof PickerLabels]}</p>
+                  <button
+                    type="button"
+                    onClick={() => { setEditingLabel(key); setLabelDraft(localLabels[key as keyof PickerLabels]) }}
+                    className="text-gray-600 hover:text-gray-300 transition-colors shrink-0"
+                    title="Rename"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                    </svg>
+                  </button>
+                </>
+              )}
             </div>
             <div className="flex gap-2 p-3 border-b border-gray-700/30">
               <input

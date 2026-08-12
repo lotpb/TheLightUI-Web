@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useNavBack } from '../../hooks/useNavBack'
+import { usePageTitle } from '../../hooks/usePageTitle'
 import { fetchAllUsers } from '../../services/chatService'
 import { initials, displayName, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
+import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { usePrefStore } from '../../stores/prefStore'
 
 export default function NewChatPage() {
   const navigate = useNavigate()
+  usePageTitle('New Message')
+  const navBack  = useNavBack('/chat')
   const authUser = useAuthStore(s => s.user)
   const [users, setUsers] = useState<ChatUser[]>([])
   const [search, setSearch] = useState('')
@@ -30,6 +36,8 @@ export default function NewChatPage() {
       })
     : users
 
+  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
+
   function openChat(u: ChatUser) {
     navigate(`/chat/${u.uid}`, {
       state: { contactEmail: u.email, contactProfileUrl: u.profileImageUrl },
@@ -39,7 +47,7 @@ export default function NewChatPage() {
   return (
     <div className="w-full px-8 py-6">
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate(-1)} className="text-indigo-400 hover:text-indigo-300">←</button>
+        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300">←</button>
         <h1 className="text-2xl font-bold text-white">New Message</h1>
       </div>
 
@@ -74,21 +82,28 @@ export default function NewChatPage() {
             {search ? 'No users match that search' : 'No other users found'}
           </p>
         ) : (
-          filtered.map(u => (
+          filtered.map(u => {
+            const name = displayName(u)
+            const color = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+            return (
             <button
               key={u.uid}
               onClick={() => openChat(u)}
               className="w-full flex items-center gap-4 px-4 py-3.5 hover:bg-gray-700/30 transition-colors text-left"
             >
-              <div className="w-10 h-10 rounded-full bg-indigo-700/30 flex items-center justify-center overflow-hidden shrink-0">
-                {u.profileImageUrl ? (
-                  <img src={u.profileImageUrl} alt={displayName(u)} className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-sm font-bold text-indigo-300">
-                    {u.firstName && u.lastName
-                      ? `${u.firstName[0]}${u.lastName[0]}`.toUpperCase()
-                      : initials(u.email) || '?'}
-                  </span>
+              <div className="relative w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shrink-0" style={{ background: color.bg }}>
+                <span className="text-sm font-bold" style={{ color: color.text }}>
+                  {u.firstName && u.lastName
+                    ? `${u.firstName[0]}${u.lastName[0]}`.toUpperCase()
+                    : initials(u.email) || '?'}
+                </span>
+                {u.profileImageUrl && (
+                  <img
+                    src={u.profileImageUrl}
+                    alt={name}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
                 )}
               </div>
               <div className="min-w-0">
@@ -96,7 +111,8 @@ export default function NewChatPage() {
                 <p className="text-sm text-gray-400 truncate">{u.email}</p>
               </div>
             </button>
-          ))
+            )
+          })
         )}
       </div>
     </div>

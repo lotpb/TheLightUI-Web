@@ -6,6 +6,8 @@ import { useSearchParams } from 'react-router-dom'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import { useGeofenceMonitor } from '../../hooks/useGeofenceMonitor'
 import { useMapStore, type MapFavorite, type MapGeofence } from '../../stores/mapStore'
+import ConfirmModal from '../../components/ConfirmModal'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 const LIBRARIES: ('places' | 'geometry')[] = ['places', 'geometry']
 const MAP_ID = 'thelight-map'
@@ -29,6 +31,7 @@ export default function MapsPage() {
   const [searchParams] = useSearchParams()
   const initialAddress = searchParams.get('address') ?? ''
 
+  usePageTitle('Maps')
   const [mapRef, setMapRef] = useState<google.maps.Map | null>(null)
   const [activeTab, setActiveTab] = useState<PanelTab>('directions')
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null)
@@ -37,6 +40,7 @@ export default function MapsPage() {
   const [routeLoading, setRouteLoading] = useState(false)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [routeSummary, setRouteSummary] = useState<{ distance: string; duration: string } | null>(null)
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
 
   const { favorites, geofences, geofenceAlerts, geofenceStates,
     setBuiltInAddress, addCustomFavorite, removeCustomFavorite,
@@ -214,7 +218,7 @@ export default function MapsPage() {
               alertsEnabled={geofenceAlerts}
               onToggleAlerts={setGeofenceAlerts}
               onRemove={removeGeofence}
-              onClear={clearGeofences}
+              onClear={() => setConfirmClearOpen(true)}
               onFocusFence={fence => mapRef?.panTo({ lat: fence.lat, lng: fence.lng })}
             />
           )}
@@ -297,6 +301,14 @@ export default function MapsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={confirmClearOpen}
+        message="Clear all geofences? This cannot be undone."
+        confirmLabel="Clear All"
+        onConfirm={() => { setConfirmClearOpen(false); clearGeofences() }}
+        onCancel={() => setConfirmClearOpen(false)}
+      />
     </div>
   )
 }
@@ -548,7 +560,7 @@ function GeofencesTab({
 
       {geofences.length > 0 && (
         <button
-          onClick={() => { if (confirm('Clear all geofences?')) onClear() }}
+          onClick={onClear}
           className="w-full px-4 py-3 text-sm text-red-500 hover:bg-red-900/20 transition-colors"
         >
           Clear All Geofences

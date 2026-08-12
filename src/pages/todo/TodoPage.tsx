@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToTodos, addTodo, toggleTodo } from '../../services/todoService'
 import { useAuthStore } from '../../stores/authStore'
 import type { Todo } from '../../models/todo'
@@ -19,6 +20,7 @@ const PRIORITY_DOT: Record<Todo['priority'], string> = {
 type Filter = 'all' | 'active' | 'completed'
 
 export default function TodoPage() {
+  usePageTitle('To-Do')
   const navigate   = useNavigate()
   const user       = useAuthStore(s => s.user)
   const companyId  = useAuthStore(s => s.companyId)
@@ -168,7 +170,7 @@ export default function TodoPage() {
           </div>
           <div>
             <label className="form-label">Notes</label>
-            <input type="text" className="input-field" style={{fontSize: '20px'}} placeholder="Add a note… (optional)"
+            <input type="text" className="input-field" placeholder="Add a note… (optional)"
               value={addNotes} onChange={e => setAddNotes(e.target.value)} autoComplete="off" />
           </div>
           <div>
@@ -186,10 +188,10 @@ export default function TodoPage() {
       )}
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4 no-print">
+      <div className="flex flex-nowrap gap-2 mb-4 no-print overflow-x-auto scrollbar-none">
         {(['active', 'all', 'completed'] as Filter[]).map(f => (
           <button key={f} onClick={() => setFilter(f)}
-            className={`px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
+            className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
               filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
             }`}>
             {f}
@@ -235,12 +237,12 @@ export default function TodoPage() {
 
 function PriorityPicker({ value, onChange }: { value: Todo['priority'], onChange: (p: Todo['priority']) => void }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-400">Priority</span>
-      <div className="flex gap-2">
+    <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
+      <span className="text-xs text-gray-400 shrink-0">Priority</span>
+      <div className="flex flex-nowrap gap-2">
         {(['low', 'medium', 'high'] as Todo['priority'][]).map(p => (
           <button key={p} type="button" onClick={() => onChange(p)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+            className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
               value === p ? PRIORITY_STYLES[p] : 'border-gray-700 text-gray-500 opacity-60'
             }`}>
             <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[p]}`} />

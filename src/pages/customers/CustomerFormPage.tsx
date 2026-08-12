@@ -1,16 +1,24 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { getCustomer, createCustomer, updateCustomer } from '../../services/customerService'
-import { emptyCustomer, type CustomerItem } from '../../models/customer'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { getCustomer, createCustomer, updateCustomer, getAllCustomersOnce } from '../../services/customerService'
+import { emptyCustomer, fullName, type CustomerItem } from '../../models/customer'
+import { useDebounce } from '../../hooks/useDebounce'
 import { usePickerStore, RATE_OPTIONS, CALLBACK_OPTIONS, CATEGORY_OPTIONS } from '../../stores/pickerStore'
 import { useAuthStore } from '../../stores/authStore'
+import { useNavBack } from '../../hooks/useNavBack'
+import { usePageTitle } from '../../hooks/usePageTitle'
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
+import ConfirmModal from '../../components/ConfirmModal'
 
 export default function CustomerFormPage() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const navBack  = useNavBack('/records')
   const isNew = !id || id === 'new'
+  usePageTitle(isNew ? 'New Record' : 'Edit Record')
 
+  const labels = usePickerStore(s => s.labels)
   const [form, setForm] = useState<CustomerItem>(() => {
     const base = emptyCustomer()
     const cat = searchParams.get('category')
@@ -19,7 +27,10 @@ export default function CustomerFormPage() {
   })
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
+  const [touched, setTouched] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<{ first?: string; lastname?: string }>({})
+  const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
 
   const { lists, fetch: fetchPickers, loaded } = usePickerStore()
   const user = useAuthStore(s => s.user)
@@ -39,18 +50,61 @@ export default function CustomerFormPage() {
       })
   }, [id, isNew])
 
+  // Load all records once (new records only) for client-side duplicate check
+  useEffect(() => {
+    if (!isNew) return
+    getAllCustomersOnce().then(setAllCustomers).catch(() => {})
+  }, [isNew])
+
+  const dFirst = useDebounce(form.first, 600)
+  const dLast  = useDebounce(form.lastname, 600)
+  const dPhone = useDebounce(form.phone, 600)
+  const dEmail = useDebounce(form.email, 600)
+
+  const duplicates = useMemo<CustomerItem[]>(() => {
+    if (!isNew || allCustomers.length === 0) return []
+    const phone = dPhone.replace(/\D/g, '')
+    const email = dEmail.trim().toLowerCase()
+    const first = dFirst.trim().toLowerCase()
+    const last  = dLast.trim().toLowerCase()
+    if (!first && !phone && !email) return []
+
+    return allCustomers.filter(c => {
+      const cPhone = c.phone.replace(/\D/g, '')
+      if (phone.length >= 7 && cPhone.length >= 7 && cPhone === phone) return true
+      if (email.includes('@') && c.email.trim().toLowerCase() === email) return true
+      if (first && last) {
+        const cf = c.first.trim().toLowerCase()
+        const cl = c.lastname.trim().toLowerCase()
+        if (cf === first && cl === last) return true
+        if ((cf.includes(first) || first.includes(cf)) &&
+            (cl.includes(last) || last.includes(cl)) &&
+            cf.length > 1 && cl.length > 1) return true
+      }
+      return false
+    })
+  }, [isNew, allCustomers, dFirst, dLast, dPhone, dEmail])
+
   const isVendor   = form.category.toLowerCase() === 'vendor'
   const isEmployee = form.category.toLowerCase() === 'employee'
   const isLead     = form.category.toLowerCase() === 'lead'
   const isCustomer = form.category.toLowerCase() === 'customer'
   const isLeadOrCustomer = isLead || isCustomer
 
+  const blocker = useUnsavedChanges(touched && !saving)
+
   function set<K extends keyof CustomerItem>(field: K, value: CustomerItem[K]) {
+    setTouched(true)
     setForm(prev => ({ ...prev, [field]: value }))
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    const errs: { first?: string; lastname?: string } = {}
+    if (!form.first.trim()) errs.first = isVendor ? 'Vendor name is required.' : 'First name is required.'
+    if (!isVendor && !form.lastname.trim()) errs.lastname = 'Last name is required.'
+    if (Object.keys(errs).length > 0) { setFieldErrors(errs); return }
+    setFieldErrors({})
     setSaving(true)
     setError(null)
     try {
@@ -79,7 +133,7 @@ export default function CustomerFormPage() {
     <div className="max-w-2xl mx-auto px-4 py-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <button onClick={() => navigate(-1)} className="text-indigo-400 hover:text-indigo-300 text-sm">
+        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm">
           ← Cancel
         </button>
         <h1 className="text-xl font-bold text-white">{isNew ? 'New Record' : 'Edit Record'}</h1>
@@ -96,6 +150,32 @@ export default function CustomerFormPage() {
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm mb-4">
           {error}
+        </div>
+      )}
+
+      {duplicates.length > 0 && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 mb-4">
+          <p className="text-yellow-400 text-xs font-semibold uppercase tracking-wider mb-2">
+            ⚠ Possible duplicate{duplicates.length > 1 ? 's' : ''} found
+          </p>
+          <div className="space-y-1.5">
+            {duplicates.slice(0, 5).map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-3">
+                <span className="text-sm text-yellow-200 truncate">
+                  {fullName(c)}
+                  {c.phone ? <span className="text-yellow-400/70 ml-2 text-xs">{c.phone}</span> : null}
+                  {c.city ? <span className="text-yellow-400/50 ml-1 text-xs">· {c.city}</span> : null}
+                </span>
+                <Link
+                  to={`/records/${c.id}`}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 shrink-0 transition-colors"
+                >
+                  View →
+                </Link>
+              </div>
+            ))}
+          </div>
+          <p className="text-yellow-500/60 text-xs mt-2">You can still save this record if it's not a duplicate.</p>
         </div>
       )}
 
@@ -124,13 +204,42 @@ export default function CustomerFormPage() {
         <FormSection title="Name">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="form-label">{isVendor ? 'Vendor Name' : 'First Name'}</label>
-              <input className="input-field" value={form.first} onChange={e => set('first', e.target.value)} placeholder={isVendor ? 'Company' : 'First'} />
+              <label className="form-label">
+                {isVendor ? 'Vendor Name' : 'First Name'}
+                <span className="text-red-400 ml-0.5">*</span>
+              </label>
+              <input
+                className={`input-field ${fieldErrors.first ? 'border-red-500 focus:ring-red-500/50' : ''}`}
+                value={form.first}
+                onChange={e => { set('first', e.target.value); if (fieldErrors.first) setFieldErrors(p => ({ ...p, first: undefined })) }}
+                placeholder={isVendor ? 'Company' : 'First'}
+              />
+              {fieldErrors.first && <p className="text-red-400 text-xs mt-1">{fieldErrors.first}</p>}
             </div>
+            {isVendor && (
+              <div>
+                <label className="form-label">Profession</label>
+                <input
+                  className="input-field"
+                  value={form.lastname}
+                  onChange={e => set('lastname', e.target.value)}
+                  placeholder="Trade / profession"
+                />
+              </div>
+            )}
             {!isVendor && (
               <div>
-                <label className="form-label">Last Name</label>
-                <input className="input-field" value={form.lastname} onChange={e => set('lastname', e.target.value)} placeholder="Last" />
+                <label className="form-label">
+                  Last Name
+                  <span className="text-red-400 ml-0.5">*</span>
+                </label>
+                <input
+                  className={`input-field ${fieldErrors.lastname ? 'border-red-500 focus:ring-red-500/50' : ''}`}
+                  value={form.lastname}
+                  onChange={e => { set('lastname', e.target.value); if (fieldErrors.lastname) setFieldErrors(p => ({ ...p, lastname: undefined })) }}
+                  placeholder="Last"
+                />
+                {fieldErrors.lastname && <p className="text-red-400 text-xs mt-1">{fieldErrors.lastname}</p>}
               </div>
             )}
             {isEmployee && (
@@ -240,12 +349,12 @@ export default function CustomerFormPage() {
           <FormSection title="Job">
             <div className="grid grid-cols-2 gap-3">
               {isLeadOrCustomer && (
-                <PickerInput label="Salesman" value={form.salesman} options={lists.salesman} onChange={v => set('salesman', v)} />
+                <PickerInput label={labels.salesman} value={form.salesman} options={lists.salesman} onChange={v => set('salesman', v)} />
               )}
-              <PickerInput label="Job Type" value={form.job} options={lists.job} onChange={v => set('job', v)} />
-              <PickerInput label="Product" value={form.product} options={lists.product} onChange={v => set('product', v)} />
+              <PickerInput label={labels.job} value={form.job} options={lists.job} onChange={v => set('job', v)} />
+              <PickerInput label={labels.product} value={form.product} options={lists.product} onChange={v => set('product', v)} />
               {!isLead && (
-                <PickerInput label="Contractor" value={form.contractor} options={lists.contractor} onChange={v => set('contractor', v)} />
+                <PickerInput label={labels.contractor} value={form.contractor} options={lists.contractor} onChange={v => set('contractor', v)} />
               )}
               <div>
                 <label className="form-label">Amount ($)</label>
@@ -287,7 +396,7 @@ export default function CustomerFormPage() {
                   </select>
                 </div>
               </div>
-              <PickerInput label="Advertiser" value={form.adNo} options={lists.advertiser} onChange={v => set('adNo', v)} />
+              <PickerInput label={labels.advertiser} value={form.adNo} options={lists.advertiser} onChange={v => set('adNo', v)} />
             </div>
           </FormSection>
         )}
@@ -381,6 +490,14 @@ export default function CustomerFormPage() {
 
         <div className="pb-8" />
       </form>
+
+      <ConfirmModal
+        isOpen={blocker.state === 'blocked'}
+        message="You have unsaved changes. Leave anyway?"
+        confirmLabel="Leave"
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
     </div>
   )
 }
@@ -424,10 +541,11 @@ function PickerInput({
   onChange: (v: string) => void
   placeholder?: string
 }) {
-  const listId = `dl-${label.toLowerCase().replace(/\s+/g, '-')}`
+  const safeLabel = label ?? ''
+  const listId = `dl-${safeLabel.toLowerCase().replace(/\s+/g, '-')}`
   return (
     <div>
-      <label className="form-label">{label}</label>
+      <label className="form-label">{safeLabel}</label>
       <input
         className="input-field"
         list={listId}
@@ -437,7 +555,7 @@ function PickerInput({
         autoComplete="off"
       />
       <datalist id={listId}>
-        {options.filter(Boolean).map(o => <option key={o} value={o} />)}
+        {(options ?? []).filter(Boolean).map(o => <option key={o} value={o} />)}
       </datalist>
     </div>
   )

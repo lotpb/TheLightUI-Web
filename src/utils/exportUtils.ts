@@ -148,6 +148,8 @@ export async function importCustomersJSON(
     startDate:      parseISO(r.startDate),
     completionDate: parseISO(r.completionDate),
     lastUpdateDate: parseISO(r.lastUpdateDate),
+    followUpDate:   null,
+    tags:           [],
   }))
 }
 
@@ -251,7 +253,7 @@ function row(label: string, value: string): string {
   return `<tr><td class="label">${label}</td><td class="value">${esc(value)}</td></tr>`
 }
 
-export function printCustomer(customer: CustomerItem) {
+export function printCustomer(customer: CustomerItem, onError?: (msg: string) => void) {
   const name  = fullName(customer)
   const addr  = [customer.street, customer.city, customer.state, customer.zip].filter(Boolean).join(', ')
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -328,7 +330,7 @@ ${customer.comments ? `
 </html>`
 
   const win = window.open('', '_blank', 'width=800,height=900')
-  if (!win) { alert('Please allow popups to print.'); return }
+  if (!win) { onError?.('Please allow popups to print.'); return }
   win.document.write(html)
   win.document.close()
   win.focus()

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useParams, useLocation, useNavigate } from 'react-router-dom'
+import { useParams, useLocation } from 'react-router-dom'
+import { useNavBack } from '../../hooks/useNavBack'
+import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   fetchChatUser, subscribeToConversation, sendTextMessage, sendImageMessage,
 } from '../../services/chatService'
 import { initials, displayName, type ChatMessage, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
+import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { usePrefStore } from '../../stores/prefStore'
 
 interface LocationState {
   contactEmail?: string
@@ -14,7 +18,7 @@ interface LocationState {
 export default function ChatLogPage() {
   const { userId: contactId } = useParams<{ userId: string }>()
   const location = useLocation()
-  const navigate = useNavigate()
+  const navBack  = useNavBack('/chat')
   const state = (location.state ?? {}) as LocationState
   const authUser = useAuthStore(s => s.user)
 
@@ -99,11 +103,14 @@ export default function ChatLogPage() {
     const file = e.target.files?.[0]
     if (!file || !authUser || !contact || !currentUser) return
     e.target.value = ''
+    if (!file.type.startsWith('image/')) { setError('Please select an image file.'); return }
+    if (file.size > 10 * 1024 * 1024) { setError('Image must be smaller than 10 MB.'); return }
     setUploading(true)
     setError(null)
     try {
+      const resized = await resizeChatImage(file, 1024)
       await sendImageMessage(
-        authUser.uid, contact, file,
+        authUser.uid, contact, resized,
         currentUser.profileImageUrl, currentUser.email,
       )
     } catch (err) {
@@ -113,7 +120,9 @@ export default function ChatLogPage() {
     }
   }
 
+  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const contactName = contact ? displayName(contact) : '…'
+  usePageTitle(contact ? contactName : 'Messages')
   const contactIni = contact
     ? (contact.firstName && contact.lastName
         ? `${contact.firstName[0]}${contact.lastName[0]}`.toUpperCase()
@@ -124,12 +133,16 @@ export default function ChatLogPage() {
     <div className="flex flex-col h-full w-full">
       {/* Header */}
       <div className="flex items-center gap-3 px-8 py-3 border-b border-gray-800 bg-gray-900 shrink-0">
-        <button onClick={() => navigate(-1)} className="text-indigo-400 hover:text-indigo-300 mr-1">←</button>
-        <div className="w-9 h-9 rounded-full bg-indigo-700/30 flex items-center justify-center overflow-hidden shrink-0">
-          {contact?.profileImageUrl ? (
-            <img src={contact.profileImageUrl} alt={contactName} className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-xs font-bold text-indigo-300">{contactIni || '?'}</span>
+        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 mr-1">←</button>
+        <div className="relative w-9 h-9 rounded-full flex items-center justify-center overflow-hidden shrink-0" style={{ background: (coloredAvatars ? avatarColor(contactName) : AVATAR_ORIGINAL).bg }}>
+          <span className="text-xs font-bold" style={{ color: (coloredAvatars ? avatarColor(contactName) : AVATAR_ORIGINAL).text }}>{contactIni || '?'}</span>
+          {contact?.profileImageUrl && (
+            <img
+              src={contact.profileImageUrl}
+              alt={contactName}
+              className="absolute inset-0 w-full h-full object-cover"
+              onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
           )}
         </div>
         <div>
@@ -146,13 +159,16 @@ export default function ChatLogPage() {
           </div>
         )}
 
-        {messages.map(msg => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isFromMe={msg.fromId === authUser?.uid}
-          />
-        ))}
+        {messages.map((msg, i) => {
+          const prev = messages[i - 1]
+          const showSep = !prev || !sameDay(prev.timestamp, msg.timestamp)
+          return (
+            <div key={msg.id}>
+              {showSep && <DateSeparator date={msg.timestamp} />}
+              <MessageBubble message={msg} isFromMe={msg.fromId === authUser?.uid} />
+            </div>
+          )
+        })}
 
         {(uploading) && (
           <div className="flex justify-end">
@@ -210,6 +226,59 @@ export default function ChatLogPage() {
           {sending ? '…' : 'Send'}
         </button>
       </div>
+    </div>
+  )
+}
+
+// Resize preserving aspect ratio — no crop, max longest side = maxPx
+function resizeChatImage(file: File, maxPx: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const scale  = Math.min(1, maxPx / Math.max(img.width, img.height))
+      const w      = Math.round(img.width  * scale)
+      const h      = Math.round(img.height * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width  = w
+      canvas.height = h
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+      canvas.toBlob(
+        blob => blob ? resolve(blob) : reject(new Error('Canvas export failed')),
+        'image/jpeg',
+        0.85,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image load failed')) }
+    img.src = url
+  })
+}
+
+function sameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() &&
+         a.getMonth()    === b.getMonth()    &&
+         a.getDate()     === b.getDate()
+}
+
+function dateSepLabel(d: Date): string {
+  const now   = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diff  = Math.round((today.getTime() - target.getTime()) / 86400000)
+  if (diff === 0) return 'Today'
+  if (diff === 1) return 'Yesterday'
+  if (d.getFullYear() === now.getFullYear())
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function DateSeparator({ date }: { date: Date }) {
+  return (
+    <div className="flex items-center gap-3 my-3">
+      <div className="flex-1 h-px bg-gray-700/50" />
+      <span className="text-xs text-gray-500 font-medium shrink-0">{dateSepLabel(date)}</span>
+      <div className="flex-1 h-px bg-gray-700/50" />
     </div>
   )
 }

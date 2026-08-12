@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { usePageTitle } from '../hooks/usePageTitle'
 
 const PRESETS = [
   { label: '15%', value: 15 },
@@ -8,6 +9,7 @@ const PRESETS = [
 ]
 
 export default function TipPage() {
+  usePageTitle('Tip Calculator')
   const [bill,    setBill]    = useState('')
   const [tipPct,  setTipPct]  = useState(20)
   const [custom,  setCustom]  = useState('')

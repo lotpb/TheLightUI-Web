@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid,
 } from 'recharts'
@@ -158,6 +159,7 @@ function PrintTable({ title, rows, colLabel }: {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ChartPage() {
+  usePageTitle('Chart')
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [category, setCategory] = useState<Category>('Customer')
@@ -232,7 +234,7 @@ export default function ChartPage() {
           </button>
         </div>
 
-        <div className="flex gap-2 flex-wrap pt-2">
+        <div className="flex gap-2 flex-nowrap overflow-x-auto pb-1 pt-2 scrollbar-none">
           {CATEGORIES.map(cat => (
             <button
               key={cat}

@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getTodo, updateTodo, deleteTodo } from '../../services/todoService'
 import type { Todo } from '../../models/todo'
+import ConfirmModal from '../../components/ConfirmModal'
+import { usePageTitle } from '../../hooks/usePageTitle'
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 
 const PRIORITY_STYLES: Record<Todo['priority'], string> = {
   low:    'bg-gray-500/20 text-gray-400 border-gray-600/40',
@@ -23,9 +26,13 @@ export default function TodoEditPage() {
   const [notes,    setNotes]    = useState('')
   const [priority, setPriority] = useState<Todo['priority']>('medium')
   const [dueDate,  setDueDate]  = useState('')
-  const [loading,  setLoading]  = useState(true)
-  const [saving,   setSaving]   = useState(false)
-  const [error,    setError]    = useState<string | null>(null)
+  usePageTitle('Edit Task')
+  const [loading,      setLoading]      = useState(true)
+  const [saving,       setSaving]       = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+  const [touched,      setTouched]      = useState(false)
+  const [confirmOpen,  setConfirmOpen]  = useState(false)
+  const blocker = useUnsavedChanges(touched && !saving)
 
   useEffect(() => {
     if (!id) return
@@ -56,7 +63,7 @@ export default function TodoEditPage() {
 
   async function handleDelete() {
     if (!id) return
-    if (!window.confirm('Delete this task?')) return
+    setConfirmOpen(false)
     try {
       await deleteTodo(id)
       navigate('/todo')
@@ -99,7 +106,7 @@ export default function TodoEditPage() {
           <input
             type="text"
             value={title}
-            onChange={e => setTitle(e.target.value)}
+            onChange={e => { setTouched(true); setTitle(e.target.value) }}
             className="input-field"
             autoFocus
             required
@@ -111,9 +118,9 @@ export default function TodoEditPage() {
           <input
             type="text"
             value={notes}
-            onChange={e => setNotes(e.target.value)}
+            onChange={e => { setTouched(true); setNotes(e.target.value) }}
             placeholder="Optional notes…"
-            className="input-field" style={{fontSize: '20px'}}
+            className="input-field"
           />
         </div>
 
@@ -122,16 +129,16 @@ export default function TodoEditPage() {
           <input
             type="date"
             value={dueDate}
-            onChange={e => setDueDate(e.target.value)}
+            onChange={e => { setTouched(true); setDueDate(e.target.value) }}
             className="input-field"
           />
         </div>
 
         <div>
           <label className="form-label">Priority</label>
-          <div className="flex gap-2 mt-1">
+          <div className="flex gap-2 mt-1 flex-nowrap overflow-x-auto scrollbar-none">
             {(['low', 'medium', 'high'] as Todo['priority'][]).map(p => (
-              <button key={p} type="button" onClick={() => setPriority(p)}
+              <button key={p} type="button" onClick={() => { setTouched(true); setPriority(p) }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
                   priority === p ? PRIORITY_STYLES[p] : 'border-gray-700 text-gray-500 opacity-60'
                 }`}>
@@ -154,11 +161,25 @@ export default function TodoEditPage() {
 
       <button
         type="button"
-        onClick={handleDelete}
+        onClick={() => setConfirmOpen(true)}
         className="mt-4 w-full btn-danger py-2.5 text-sm font-medium"
       >
         Delete Task
       </button>
+
+      <ConfirmModal
+        isOpen={confirmOpen}
+        message="Delete this task? This cannot be undone."
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmOpen(false)}
+      />
+      <ConfirmModal
+        isOpen={blocker.state === 'blocked'}
+        message="You have unsaved changes. Leave anyway?"
+        confirmLabel="Leave"
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
     </div>
   )
 }

@@ -130,19 +130,49 @@ export const inviteUser = functions.https.onCall(async (data, context) => {
     createdAt: FieldValue.serverTimestamp(),
   })
 
-  // If user already exists in Auth, assign claims immediately
+  // If user already exists in Auth, assign claims immediately.
+  // Never downgrade an existing owner of this same company.
   try {
     const existingUser = await admin.auth().getUserByEmail(email)
-    await admin.auth().setCustomUserClaims(existingUser.uid, { companyId, role: 'member' })
-    await db.collection('users').doc(existingUser.uid).set(
-      { companyId, role: 'member' },
-      { merge: true }
-    )
+    const existingClaims = (await admin.auth().getUser(existingUser.uid)).customClaims ?? {}
+    const alreadyOwner = existingClaims['companyId'] === companyId && existingClaims['role'] === 'owner'
+    if (!alreadyOwner) {
+      await admin.auth().setCustomUserClaims(existingUser.uid, { companyId, role: 'member' })
+      await db.collection('users').doc(existingUser.uid).set(
+        { companyId, role: 'member' },
+        { merge: true }
+      )
+    }
   } catch {
     // User doesn't exist yet — handled on first sign-in via onUserCreated
   }
 
   return { success: true, alreadyInvited: false }
+})
+
+// ── Fix role ────────────────────────────────────────────────────────────────────
+// Callable: corrects a user's role claim by checking the companies document.
+// If the caller is the ownerUid of their company → 'owner', else → 'member'.
+export const fixRole = functions.https.onCall(async (_data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+  }
+  const { uid, token } = context.auth
+  const companyId = token.companyId as string | undefined
+  if (!companyId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Run setupAccount first')
+  }
+
+  const companySnap = await db.collection('companies').doc(companyId).get()
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Company not found')
+  }
+
+  const correctRole: 'owner' | 'member' = companySnap.data()?.ownerUid === uid ? 'owner' : 'member'
+  await admin.auth().setCustomUserClaims(uid, { companyId, role: correctRole })
+  await db.collection('users').doc(uid).set({ role: correctRole }, { merge: true })
+
+  return { role: correctRole }
 })
 
 // ── Data migration ──────────────────────────────────────────────────────────────

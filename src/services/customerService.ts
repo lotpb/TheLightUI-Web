@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, getDocs, writeBatch, query, where,
+  onSnapshot, getDoc, getDocs, writeBatch, query, where, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -70,6 +70,120 @@ export async function deleteCustomer(id: string): Promise<void> {
 
 export async function deactivateCustomer(id: string): Promise<void> {
   await updateDoc(doc(db, COLLECTION, id), { active: '0' })
+}
+
+export async function bulkDeactivate(ids: string[]): Promise<void> {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { active: '0' })
+    }
+    await batch.commit()
+  }
+}
+
+export async function bulkAssignSalesman(ids: string[], salesman: string): Promise<void> {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { salesman })
+    }
+    await batch.commit()
+  }
+}
+
+export async function updateTags(id: string, tags: string[]): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { tags })
+}
+
+export async function bulkSetCategory(ids: string[], category: string): Promise<void> {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { category })
+    }
+    await batch.commit()
+  }
+}
+
+export async function bulkSetFollowUpDate(ids: string[], date: Date | null): Promise<void> {
+  const BATCH_SIZE = 500
+  const value = date ? Timestamp.fromDate(date) : null
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { followUpDate: value })
+    }
+    await batch.commit()
+  }
+}
+
+export async function bulkSetCallback(ids: string[], callback: string): Promise<void> {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { callback })
+    }
+    await batch.commit()
+  }
+}
+
+export async function bulkDelete(ids: string[]): Promise<void> {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.delete(doc(db, COLLECTION, id))
+    }
+    await batch.commit()
+  }
+}
+
+export async function setFollowUpDate(id: string, date: Date | null): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), {
+    followUpDate: date ? Timestamp.fromDate(date) : null,
+  })
+}
+
+// Requires a Firestore composite index: companyId ASC + followUpDate ASC.
+// If missing, Firestore will log a link to create it in the browser console.
+export function subscribeToFollowUps(
+  onData: (items: CustomerItem[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) {
+    onError(new Error('Not authenticated'))
+    return () => {}
+  }
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  yesterday.setHours(0, 0, 0, 0)
+
+  const twoWeeks = new Date()
+  twoWeeks.setDate(twoWeeks.getDate() + 14)
+
+  return onSnapshot(
+    query(
+      collection(db, COLLECTION),
+      where('companyId', '==', companyId),
+      where('followUpDate', '>=', Timestamp.fromDate(yesterday)),
+      where('followUpDate', '<=', Timestamp.fromDate(twoWeeks)),
+    ),
+    snap => {
+      const items: CustomerItem[] = []
+      for (const d of snap.docs) {
+        try { items.push(customerFromDoc(d)) } catch { /* skip malformed */ }
+      }
+      items.sort((a, b) => (a.followUpDate?.getTime() ?? 0) - (b.followUpDate?.getTime() ?? 0))
+      onData(items)
+    },
+    onError,
+  )
 }
 
 // ─── JSON Import / Export ────────────────────────────────────────────────────
@@ -220,11 +334,37 @@ export async function importCustomersFromJSON(
         driverLicense: r.driverLicense ?? '',
         profession: r.profession ?? '',
         manager: r.manager ?? '',
+        followUpDate: null,
+        tags: [],
       }
       const data = { ...customerToFirestore(item, userId), companyId }
       const ref = r.id
         ? doc(db, COLLECTION, r.id)
         : doc(collection(db, COLLECTION))
+      batch.set(ref, data)
+      total++
+    }
+    await batch.commit()
+  }
+
+  return { count: total }
+}
+
+export async function importCustomersFromCSVRows(
+  rows: Omit<CustomerItem, 'id'>[],
+): Promise<{ count: number }> {
+  const companyId = getCompanyId()
+  if (!companyId) throw new Error('Not authenticated')
+
+  const BATCH_SIZE = 500
+  let total = 0
+
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const chunk = rows.slice(i, i + BATCH_SIZE)
+    const batch = writeBatch(db)
+    for (const item of chunk) {
+      const data = { ...customerToFirestore(item as CustomerItem, ''), companyId }
+      const ref = doc(collection(db, COLLECTION))
       batch.set(ref, data)
       total++
     }

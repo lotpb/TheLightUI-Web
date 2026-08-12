@@ -1,6 +1,6 @@
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, serverTimestamp, Timestamp, query, where,
+  doc, getDocs, writeBatch, serverTimestamp, Timestamp, query, where,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -45,7 +45,9 @@ export function subscribeToTodos(
     return () => {}
   }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    // 'in' catches both tagged docs and legacy ones with no companyId field
+    // (Firestore treats a missing field as null for 'in' queries).
+    query(collection(db, COL), where('companyId', 'in', [companyId, null])),
     snap => {
       const todos: Todo[] = []
       for (const d of snap.docs) {
@@ -108,4 +110,66 @@ export async function updateTodo(
 
 export async function deleteTodo(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+export async function getAllTodosOnce(): Promise<Todo[]> {
+  const companyId = getCompanyId()
+  if (!companyId) throw new Error('Not authenticated')
+  const snap = await getDocs(
+    query(collection(db, COL), where('companyId', 'in', [companyId, null]))
+  )
+  const todos: Todo[] = []
+  for (const d of snap.docs) {
+    try { todos.push(docToTodo(d.id, d.data() as Record<string, unknown>)) } catch { /* skip malformed */ }
+  }
+  todos.sort((a, b) => a.position - b.position)
+  return todos
+}
+
+export async function importTodosFromJSON(
+  jsonText: string,
+  userId: string,
+): Promise<{ count: number }> {
+  const companyId = getCompanyId()
+  if (!companyId) throw new Error('Not authenticated')
+
+  const parsed: unknown = JSON.parse(jsonText)
+  const records: Record<string, unknown>[] = Array.isArray(parsed) ? parsed : []
+  if (records.length === 0) throw new Error('No todo records found in file.')
+
+  function safeDate(v: unknown): Date {
+    if (!v) return new Date()
+    const d = new Date(v as string)
+    return isNaN(d.getTime()) ? new Date() : d
+  }
+
+  const BATCH_SIZE = 500
+  let total = 0
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const chunk = records.slice(i, i + BATCH_SIZE)
+    const batch = writeBatch(db)
+    for (const r of chunk) {
+      const ref = r['id']
+        ? doc(db, COL, String(r['id']))
+        : doc(collection(db, COL))
+      const priority = ['low', 'medium', 'high'].includes(r['priority'] as string)
+        ? r['priority'] as string
+        : 'medium'
+      batch.set(ref, {
+        userId,
+        companyId,
+        title:       String(r['title']    ?? ''),
+        notes:       String(r['notes']    ?? ''),
+        isCompleted: Boolean(r['isCompleted'] ?? false),
+        priority,
+        dueDate:     r['dueDate'] ? safeDate(r['dueDate']) : null,
+        createdAt:   r['createdAt'] ? safeDate(r['createdAt']) : serverTimestamp(),
+        position:    typeof r['position'] === 'number' ? r['position'] : Date.now(),
+        lastUpdate:  serverTimestamp(),
+      })
+      total++
+    }
+    await batch.commit()
+  }
+  return { count: total }
 }

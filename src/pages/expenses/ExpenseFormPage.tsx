@@ -3,6 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { createExpense, updateExpense, getExpense, deleteExpense } from '../../services/expenseService'
 import { EXPENSE_CATEGORIES, type Expense } from '../../models/expense'
 import { useAuthStore } from '../../stores/authStore'
+import ConfirmModal from '../../components/ConfirmModal'
+import { useNavBack } from '../../hooks/useNavBack'
+import { usePageTitle } from '../../hooks/usePageTitle'
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 
 function toInputDate(d: Date): string {
   if (!d || isNaN(d.getTime())) return ''
@@ -18,7 +22,9 @@ function fromInputDate(s: string): Date {
 export default function ExpenseFormPage() {
   const { id } = useParams<{ id: string }>()
   const isNew  = !id || id === 'new'
+  usePageTitle(isNew ? 'New Expense' : 'Edit Expense')
   const navigate = useNavigate()
+  const navBack  = useNavBack('/expenses')
   const user    = useAuthStore(s => s.user)
   const isReady = useAuthStore(s => s.isReady)
 
@@ -31,6 +37,10 @@ export default function ExpenseFormPage() {
   const [loading,       setLoading]       = useState(!isNew)
   const [saving,        setSaving]        = useState(false)
   const [error,         setError]         = useState<string | null>(null)
+  const [fieldErrors,   setFieldErrors]   = useState<{ title?: string; amount?: string }>({})
+  const [touched,       setTouched]       = useState(false)
+  const [confirmOpen,   setConfirmOpen]   = useState(false)
+  const blocker = useUnsavedChanges(touched && !saving)
 
   useEffect(() => {
     if (isNew || !id) return
@@ -53,7 +63,7 @@ export default function ExpenseFormPage() {
 
   async function handleDelete() {
     if (!id || isNew) return
-    if (!window.confirm('Delete this expense?')) return
+    setConfirmOpen(false)
     try {
       await deleteExpense(id)
       navigate('/expenses')
@@ -66,11 +76,14 @@ export default function ExpenseFormPage() {
     ev.preventDefault()
     if (!user || !isReady) return
     const amtNum = parseFloat(amount)
-    if (!title.trim())    { setError('Title is required.');        return }
-    if (isNaN(amtNum) || amtNum <= 0) { setError('Enter a valid amount.'); return }
+    const fe: { title?: string; amount?: string } = {}
+    if (!title.trim()) fe.title = 'Title is required.'
+    if (isNaN(amtNum) || amtNum <= 0) fe.amount = 'Enter a valid amount.'
+    if (fe.title || fe.amount) { setFieldErrors(fe); return }
 
     setSaving(true)
     setError(null)
+    setFieldErrors({})
     try {
       const payload: Omit<Expense, 'id'> = {
         title:          title.trim(),
@@ -109,7 +122,7 @@ export default function ExpenseFormPage() {
   return (
     <div className="max-w-lg mx-auto px-4 py-6">
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate(-1)} className="text-indigo-400 hover:text-indigo-300 text-sm">
+        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm">
           ← Back
         </button>
         <h1 className="text-xl font-bold text-white">
@@ -129,11 +142,12 @@ export default function ExpenseFormPage() {
           <input
             type="text"
             value={title}
-            onChange={e => setTitle(e.target.value)}
+            onChange={e => { setTouched(true); setTitle(e.target.value); if (fieldErrors.title) setFieldErrors(p => ({ ...p, title: undefined })) }}
             placeholder="What was this expense for?"
-            className="input-field w-full"
+            className={`input-field w-full ${fieldErrors.title ? 'border-red-500 focus:ring-red-500/50' : ''}`}
             autoFocus
           />
+          {fieldErrors.title && <p className="text-red-400 text-xs mt-1">{fieldErrors.title}</p>}
         </div>
 
         <div>
@@ -146,18 +160,19 @@ export default function ExpenseFormPage() {
               min="0"
               step="0.01"
               value={amount}
-              onChange={e => setAmount(e.target.value)}
+              onChange={e => { setTouched(true); setAmount(e.target.value); if (fieldErrors.amount) setFieldErrors(p => ({ ...p, amount: undefined })) }}
               placeholder="0.00"
-              className="input-field w-full pl-7"
+              className={`input-field w-full pl-7 ${fieldErrors.amount ? 'border-red-500 focus:ring-red-500/50' : ''}`}
             />
           </div>
+          {fieldErrors.amount && <p className="text-red-400 text-xs mt-1">{fieldErrors.amount}</p>}
         </div>
 
         <div>
           <label className="form-label">Category</label>
           <select
             value={category}
-            onChange={e => setCategory(e.target.value)}
+            onChange={e => { setTouched(true); setCategory(e.target.value) }}
             className="select-field w-full"
           >
             {EXPENSE_CATEGORIES.map(c => (
@@ -171,7 +186,7 @@ export default function ExpenseFormPage() {
           <input
             type="date"
             value={date}
-            onChange={e => setDate(e.target.value)}
+            onChange={e => { setTouched(true); setDate(e.target.value) }}
             className="input-field w-full"
           />
         </div>
@@ -180,7 +195,7 @@ export default function ExpenseFormPage() {
           <label className="form-label">Notes</label>
           <textarea
             value={notes}
-            onChange={e => setNotes(e.target.value)}
+            onChange={e => { setTouched(true); setNotes(e.target.value) }}
             placeholder="Optional notes…"
             rows={3}
             className="input-field w-full resize-none"
@@ -194,7 +209,7 @@ export default function ExpenseFormPage() {
           </div>
           <button
             type="button"
-            onClick={() => setIsReimbursable(v => !v)}
+            onClick={() => { setTouched(true); setIsReimbursable(v => !v) }}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
               isReimbursable ? 'bg-indigo-600' : 'bg-gray-600'
             }`}
@@ -208,7 +223,7 @@ export default function ExpenseFormPage() {
         <div className="flex gap-3 pt-2">
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={navBack}
             className="btn-secondary flex-1"
           >
             Cancel
@@ -226,12 +241,26 @@ export default function ExpenseFormPage() {
       {!isNew && (
         <button
           type="button"
-          onClick={handleDelete}
+          onClick={() => setConfirmOpen(true)}
           className="mt-4 w-full py-2.5 text-sm font-medium rounded-xl bg-red-900/30 border border-red-700/40 text-red-400 hover:bg-red-900/50 hover:text-red-300 transition-colors"
         >
           Delete Expense
         </button>
       )}
+
+      <ConfirmModal
+        isOpen={confirmOpen}
+        message="Delete this expense? This cannot be undone."
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmOpen(false)}
+      />
+      <ConfirmModal
+        isOpen={blocker.state === 'blocked'}
+        message="You have unsaved changes. Leave anyway?"
+        confirmLabel="Leave"
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
     </div>
   )
 }
