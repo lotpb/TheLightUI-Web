@@ -356,7 +356,7 @@ export default function TargetsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-semibold text-gray-100">{r.name}</p>
                       {conv !== null && (
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${
                           conv >= 50 ? 'bg-green-900/30 text-green-400' :
                           conv >= 25 ? 'bg-yellow-900/30 text-yellow-400' :
                           'bg-gray-700/60 text-gray-500'
@@ -365,7 +365,7 @@ export default function TargetsPage() {
                         </span>
                       )}
                       {hasGoal && r.goals.revenue > 0 && (
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${labelColor(r.revPct)} bg-gray-700/40`}>
+                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${labelColor(r.revPct)} bg-gray-700/40`}>
                           {r.revPct}% to goal
                         </span>
                       )}

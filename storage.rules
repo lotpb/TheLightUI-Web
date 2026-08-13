@@ -1,0 +1,41 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function authed() {
+      return request.auth != null;
+    }
+
+    // Requires a companyId custom claim (set by setupAccount/inviteUser functions).
+    function inCompany(companyId) {
+      return authed() && request.auth.token.companyId == companyId;
+    }
+
+    // User profile photos.
+    // Read: any authenticated user (avatars appear in chat/team views).
+    // Write: only the owning user.
+    match /avatars/{uid} {
+      allow read:  if authed();
+      allow write: if authed() && request.auth.uid == uid;
+    }
+
+    // Chat image attachments.
+    // fromId in the path is the sender's UID — only they may upload.
+    // Read: any authenticated user (recipients need to load the image).
+    match /chat_images/{fromId}/{toId}/{fileName} {
+      allow write: if authed() && request.auth.uid == fromId;
+      allow read:  if authed();
+    }
+
+    // Customer documents scoped to a company.
+    // Only authenticated users whose companyId claim matches may read or write.
+    match /documents/{companyId}/{customerId}/{fileName} {
+      allow read, write: if inCompany(companyId);
+    }
+
+    // Deny everything else.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

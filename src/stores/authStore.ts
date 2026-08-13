@@ -8,7 +8,9 @@ import {
   type User,
 } from 'firebase/auth'
 import { getFunctions, httpsCallable } from 'firebase/functions'
+import { doc, setDoc, onSnapshot } from 'firebase/firestore'
 import { auth } from '../firebase/config'
+import { db } from '../firebase/config'
 
 interface AuthState {
   user: User | null
@@ -59,6 +61,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   signOut: async () => {
+    claimSignalUnsub?.()
+    claimSignalUnsub = null
     await fbSignOut(auth)
     set({ companyId: null, role: null, isReady: false })
   },
@@ -83,10 +87,39 @@ export function getCompanyId(): string {
   return useAuthStore.getState().companyId ?? ''
 }
 
+// Cleanup handle for the per-user Firestore claim-refresh signal watcher.
+let claimSignalUnsub: (() => void) | null = null
+
+// Force-refresh the ID token and apply updated claims to the store.
+// Triggered by the Firestore claimRefreshSignals/{uid} document changing,
+// which the server writes after updating the user's custom claims.
+async function refreshClaims(user: User): Promise<void> {
+  try {
+    await user.getIdToken(/* forceRefresh */ true)
+    const fresh = await user.getIdTokenResult()
+    const companyId = fresh.claims['companyId'] as string | undefined
+    const role     = fresh.claims['role']      as string | undefined
+    if (companyId) {
+      useAuthStore.setState({ companyId, role: role ?? null, isReady: true })
+    }
+  } catch {
+    // Network error — stale claims remain; user can refresh the page to retry
+  }
+}
+
+// Generation counter: each new auth-state callback captures the current value
+// and bails out if a newer callback has already superseded it.
+let authGeneration = 0
+
 // Listen to auth state changes, resolve companyId via custom claims or setupAccount
 onAuthStateChanged(auth, async (user) => {
+  authGeneration++
+  const generation = authGeneration
+
   if (!user) {
-    useAuthStore.setState({ user: null, companyId: null, role: null, initialized: true, isReady: false })
+    if (generation === authGeneration) {
+      useAuthStore.setState({ user: null, companyId: null, role: null, initialized: true, isReady: false })
+    }
     return
   }
 
@@ -94,6 +127,8 @@ onAuthStateChanged(auth, async (user) => {
 
   try {
     const tokenResult = await user.getIdTokenResult()
+    if (generation !== authGeneration) return
+
     let companyId = tokenResult.claims['companyId'] as string | undefined
     let role = tokenResult.claims['role'] as string | undefined
 
@@ -102,23 +137,61 @@ onAuthStateChanged(auth, async (user) => {
       const fns = getFunctions()
       const setupAccount = httpsCallable<object, { companyId: string; role: string }>(fns, 'setupAccount')
       const result = await setupAccount({})
+      if (generation !== authGeneration) return
+
       companyId = result.data.companyId
       role = result.data.role
       // Force a token refresh so the new claims are embedded in the JWT.
       // Then re-read to confirm — custom claims can take a moment to propagate.
       await user.getIdToken(true)
       const refreshed = await user.getIdTokenResult()
+      if (generation !== authGeneration) return
+
       if (refreshed.claims['companyId']) {
         companyId = refreshed.claims['companyId'] as string
         role = refreshed.claims['role'] as string
       }
     }
 
+    if (generation !== authGeneration) return
     useAuthStore.setState({ companyId: companyId ?? null, role: role ?? null, isReady: true })
+
+    // Watch claimRefreshSignals/{uid} so that any server-side claims update
+    // (e.g., team invite while the user is already logged in) is picked up
+    // immediately without requiring a manual re-login.
+    claimSignalUnsub?.()
+    claimSignalUnsub = onSnapshot(
+      doc(db, 'claimRefreshSignals', user.uid),
+      () => { refreshClaims(user) },
+      () => {}  // ignore errors (doc may not exist until first invite)
+    )
+
+    // Sync companyId to the Firestore user document. Old iOS clients wrote the
+    // user doc without merge, erasing the companyId set by onUserCreated.
+    // This ensures every web login repairs the document.
+    if (companyId) {
+      setDoc(doc(db, 'users', user.uid), { companyId }, { merge: true }).catch(() => {})
+    }
   } catch (err) {
+    if (generation !== authGeneration) return
     console.error('[Auth] companyId setup failed:', err)
     useAuthStore.setState({ isReady: false })
   }
+})
+
+// On tab focus: re-read the cached token to apply claims that refreshed
+// naturally while the tab was in the background (no forced network call).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return
+  const { user } = useAuthStore.getState()
+  if (!user) return
+  user.getIdTokenResult().then(result => {
+    const companyId = result.claims['companyId'] as string | undefined
+    const role      = result.claims['role']      as string | undefined
+    if (companyId && companyId !== useAuthStore.getState().companyId) {
+      useAuthStore.setState({ companyId, role: role ?? null })
+    }
+  }).catch(() => {})
 })
 
 function friendlyAuthError(msg: string): string {

@@ -13,16 +13,21 @@ export default function NewChatPage() {
   usePageTitle('New Message')
   const navBack  = useNavBack('/chat')
   const authUser = useAuthStore(s => s.user)
+  const isReady  = useAuthStore(s => s.isReady)
   const [users, setUsers] = useState<ChatUser[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchAllUsers(authUser?.uid)
+    // Wait until companyId is resolved in the auth store before querying;
+    // calling fetchAllUsers before isReady means getCompanyId() returns null
+    // and the Firestore query returns no results.
+    if (!authUser?.uid || !isReady) return
+    fetchAllUsers(authUser.uid)
       .then(all => { setUsers(all); setLoading(false) })
       .catch(e => { setError(e.message); setLoading(false) })
-  }, [authUser?.uid])
+  }, [authUser?.uid, isReady])
 
   const filtered = search.trim()
     ? users.filter(u => {

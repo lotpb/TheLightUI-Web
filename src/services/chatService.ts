@@ -1,6 +1,6 @@
 import {
   collection, doc, getDoc, getDocs, writeBatch,
-  query, orderBy, where, onSnapshot, Timestamp,
+  query, orderBy, onSnapshot, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import {
@@ -11,7 +11,6 @@ import {
   chatUserFromDoc, chatMessageFromDoc, recentMessageFromDoc,
   type ChatUser, type ChatMessage, type RecentMessage, type ChatMessageType,
 } from '../models/chat'
-import { getCompanyId } from '../stores/authStore'
 
 // -- Users --
 
@@ -30,11 +29,7 @@ export async function fetchChatUser(uid: string): Promise<ChatUser | null> {
 }
 
 export async function fetchAllUsers(excludeUid?: string): Promise<ChatUser[]> {
-  const companyId = getCompanyId()
-  const q = companyId
-    ? query(collection(db, 'users'), where('companyId', '==', companyId))
-    : collection(db, 'users')
-  const snap = await getDocs(q)
+  const snap = await getDocs(collection(db, 'users'))
   return snap.docs
     .map(chatUserFromDoc)
     .filter(u => u.uid !== excludeUid)

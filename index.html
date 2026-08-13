@@ -7,14 +7,82 @@
     <link rel="manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#4f46e5" />
+    <meta name="color-scheme" content="dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="TheLight" />
-    <meta name="description" content="CRM and field service management" />
+    <meta name="description" content="TheLight CRM — field service and customer management for sales teams." />
     <title>TheLight</title>
+
+    <!-- QF-10: Canonical URL -->
+    <link rel="canonical" href="https://thelightui.web.app/" />
+
+    <!-- QF-4: Open Graph -->
+    <meta property="og:type"        content="website" />
+    <meta property="og:url"         content="https://thelightui.web.app/" />
+    <meta property="og:title"       content="TheLight CRM" />
+    <meta property="og:description" content="Field service and customer management for sales teams." />
+    <meta property="og:image"       content="https://thelightui.web.app/icon-512.png" />
+
+    <!-- QF-4: Twitter / X card -->
+    <meta name="twitter:card"        content="summary" />
+    <meta name="twitter:title"       content="TheLight CRM" />
+    <meta name="twitter:description" content="Field service and customer management for sales teams." />
+    <meta name="twitter:image"       content="https://thelightui.web.app/icon-512.png" />
+
+    <!-- QF-6: Preconnect to Firebase/Google endpoints hit on every load -->
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
+    <link rel="preconnect" href="https://securetoken.googleapis.com" />
+    <link rel="preconnect" href="https://firestore.googleapis.com" />
+
+    <!-- PERF-2: DNS prefetch for secondary domains (Storage, Functions, FCM) -->
+    <link rel="dns-prefetch" href="https://firebasestorage.googleapis.com" />
+    <link rel="dns-prefetch" href="https://us-central1-thelightui.cloudfunctions.net" />
+    <link rel="dns-prefetch" href="https://fcmregistrations.googleapis.com" />
+
+    <!-- LT-7: Kill white flash before JS parses — matches app bg-gray-950 -->
+    <style>html,body{margin:0;background:#030712;color-scheme:dark}</style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Loading skeleton — React replaces this entire div on mount -->
+      <style>
+        #sk{display:flex;height:100dvh;background:#030712;overflow:hidden}
+        #sk .sk-side{width:224px;background:#111827;border-right:1px solid #1f2937;padding:12px 8px;gap:6px;flex-direction:column;flex-shrink:0;display:none}
+        @media(min-width:768px){#sk .sk-side{display:flex}#sk .sk-topbar,#sk .sk-tabs{display:none!important}}
+        #sk .sk-body{flex:1;display:flex;flex-direction:column;min-width:0}
+        #sk .sk-topbar{height:52px;background:#111827;border-bottom:1px solid #1f2937;flex-shrink:0}
+        #sk .sk-content{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+        #sk .sk-tabs{height:60px;background:#111827;border-top:1px solid #1f2937;flex-shrink:0}
+        #sk .b{border-radius:6px;background:linear-gradient(90deg,#1f2937 0%,#374151 50%,#1f2937 100%);background-size:200% 100%;animation:sk 1.4s ease-in-out infinite}
+        @keyframes sk{0%{background-position:100% 50%}100%{background-position:-100% 50%}}
+      </style>
+      <div id="sk">
+        <div class="sk-side">
+          <div class="b" style="height:28px;margin-bottom:6px"></div>
+          <div class="b" style="height:16px;width:75%"></div>
+          <div class="b" style="height:16px;width:85%"></div>
+          <div class="b" style="height:16px;width:60%"></div>
+          <div class="b" style="height:16px;width:80%"></div>
+          <div class="b" style="height:16px;width:55%"></div>
+          <div class="b" style="height:16px;width:70%"></div>
+        </div>
+        <div class="sk-body">
+          <div class="sk-topbar"></div>
+          <div class="sk-content">
+            <div class="b" style="height:36px;width:45%"></div>
+            <div class="b" style="height:20px"></div>
+            <div class="b" style="height:20px;width:90%"></div>
+            <div class="b" style="height:20px;width:80%"></div>
+            <div class="b" style="height:20px;width:95%"></div>
+            <div class="b" style="height:20px;width:70%"></div>
+            <div class="b" style="height:20px;width:85%"></div>
+            <div class="b" style="height:20px;width:60%"></div>
+          </div>
+          <div class="sk-tabs"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -388,7 +388,10 @@ export default function ExpenseListPage() {
       {/* Last 7 days chart */}
       {!loading && (
         <div className="card p-4 mb-4">
-          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Last 7 Days</h2>
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">This Week</h2>
+            <span className="text-sm font-semibold text-white">{formatCurrency(last7Days.reduce((s, d) => s + d.total, 0))}</span>
+          </div>
           <ResponsiveContainer width="100%" height={140}>
             <BarChart data={last7Days} margin={{ left: 0, right: 4, top: 4, bottom: 0 }}>
               <defs>

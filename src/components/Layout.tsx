@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useChatStore } from '../stores/chatStore'
 import { useReminders } from '../hooks/useReminders'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useInstallPrompt } from '../hooks/useInstallPrompt'
 import GlobalSearch from './GlobalSearch'
 import RemindersPanel from './RemindersPanel'
 
@@ -89,8 +91,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/batch',    label: 'Batch',    icon: ico('M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z') },
       { to: '/maps',     label: 'Maps',     icon: ico('M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z') },
       { to: '/calendar', label: 'Calendar', icon: ico('M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5') },
-      { to: '/todo',     label: 'To-Do',    icon: ico('M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z') },
-      { to: '/activity', label: 'Activity', icon: ico('M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z') },
+      { to: '/todo',          label: 'To-Do',        icon: ico('M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z') },
+      { to: '/service-plans', label: 'Service Plans', icon: ico('M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99') },
+      { to: '/activity',      label: 'Activity',     icon: ico('M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z') },
     ],
   },
   {
@@ -104,10 +107,8 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ]
 
-// Flat list for mobile sheet
+// Flat list used for tab bar + sidebar map
 const ALL_ITEMS: NavItem[] = NAV_GROUPS.flatMap(g => g.items)
-const MOBILE_TABS = ALL_ITEMS.slice(0, 4)
-const MOBILE_MORE = ALL_ITEMS.slice(4)
 
 // ─── Main layout ──────────────────────────────────────────────────────────────
 
@@ -122,6 +123,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [showReminders, setShowReminders] = useState(false)
   const closeSearch = useCallback(() => setShowSearch(false), [])
 
+  const moreSheetRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(moreSheetRef, showMore)
+
   const { items: reminderItems, urgentCount, permission, requestPermission } = useReminders()
   const { unreadCount, startWatch, stopWatch } = useChatStore()
 
@@ -129,6 +133,41 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(() =>
     localStorage.getItem('thelight.nav.collapsed') === '1'
   )
+
+  // Favorites
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('thelight.nav.favorites')
+      if (raw) return JSON.parse(raw)
+    } catch { /* ignore */ }
+    return []
+  })
+
+  useEffect(() => {
+    localStorage.setItem('thelight.nav.favorites', JSON.stringify(favorites))
+  }, [favorites])
+
+  function toggleFavorite(to: string) {
+    setFavorites(prev => prev.includes(to) ? prev.filter(t => t !== to) : [...prev, to])
+  }
+
+  const allItemsMap = useMemo(
+    () => Object.fromEntries(ALL_ITEMS.map(item => [item.to, item])),
+    []
+  )
+
+  // Mobile tab bar: first 4 favorites, padded with non-favorite items if needed
+  const mobileTabs = useMemo(() => {
+    if (favorites.length === 0) return ALL_ITEMS.slice(0, 4)
+    const favItems = favorites
+      .map(to => allItemsMap[to])
+      .filter((item): item is NavItem => Boolean(item))
+      .slice(0, 4)
+    if (favItems.length >= 4) return favItems
+    const favSet = new Set(favorites)
+    const rest = ALL_ITEMS.filter(item => !favSet.has(item.to))
+    return [...favItems, ...rest].slice(0, 4)
+  }, [favorites, allItemsMap])
 
   // Which groups are open (expanded)
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -177,12 +216,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return (
       <div className="relative shrink-0">
         {item.icon(cls)}
-        <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-[9px] font-bold text-white leading-none">
+        <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-xs font-bold text-white leading-none">
           {unreadCount > 9 ? '9+' : unreadCount}
         </span>
       </div>
     )
   }
+
+  const { canInstall, install, dismiss: dismissInstall } = useInstallPrompt()
 
   const isChatLog    = /^\/chat\/.+/.test(pathname)
   const isFullHeight = isChatLog || pathname === '/maps'
@@ -192,15 +233,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     navigate('/login', { replace: true })
   }
 
-  const moreIsActive = MOBILE_MORE.some(item => pathname.startsWith(item.to))
-
-  // Is any item in a group active?
-  function groupHasActive(group: NavGroup) {
-    return group.items.some(item => pathname.startsWith(item.to))
-  }
+  const moreIsActive = !mobileTabs.some(item => pathname.startsWith(item.to))
 
   return (
     <div className="flex w-full overflow-hidden bg-gray-950" style={{ height: '100dvh' }}>
+
+      {/* Skip to main content — visible only on keyboard focus */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:bg-indigo-600 focus:text-white focus:px-3 focus:py-1.5 focus:rounded-lg focus:text-sm focus:font-medium"
+      >
+        Skip to main content
+      </a>
 
       {/* ── Sidebar — desktop ── */}
       <aside
@@ -209,57 +253,146 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         }`}
       >
         {/* Header */}
-        <div className={`border-b border-gray-800 flex items-center ${collapsed ? 'justify-center px-0 py-3' : 'px-4 py-3 justify-between'}`}>
-          {!collapsed && (
-            <span className="text-base font-bold text-white tracking-tight truncate">TheLight</span>
-          )}
-          <div className={`flex items-center ${collapsed ? 'flex-col gap-2' : 'gap-0.5'}`}>
-            {/* Collapse toggle */}
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                {collapsed
-                  ? <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
-                  : <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
-                }
-              </svg>
-            </button>
-            {/* Search */}
-            <button
-              onClick={() => setShowSearch(true)}
-              title="Search (⌘K)"
-              className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-              </svg>
-            </button>
-            {/* Reminders */}
-            <button
-              onClick={() => setShowReminders(v => !v)}
-              title="Reminders"
-              className="relative text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
-              </svg>
-              {urgentCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-[9px] font-bold text-white leading-none">
-                  {urgentCount > 9 ? '9+' : urgentCount}
-                </span>
+        <div className={`border-b border-gray-800 ${collapsed ? 'flex flex-col items-center justify-center px-0 py-3 gap-2' : 'px-4 pt-3 pb-2'}`}>
+          {/* Top row: title + icon buttons */}
+          <div className={`flex items-center ${collapsed ? 'flex-col gap-2' : 'justify-between'}`}>
+            {!collapsed && (
+              <span className="text-base font-bold text-white tracking-tight truncate">TheLight</span>
+            )}
+            <div className={`flex items-center ${collapsed ? 'flex-col gap-2' : 'gap-0.5'}`}>
+              {/* Collapse toggle */}
+              <button
+                onClick={() => setCollapsed(v => !v)}
+                title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  {collapsed
+                    ? <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
+                    : <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+                  }
+                </svg>
+              </button>
+              {/* Search */}
+              <button
+                onClick={() => setShowSearch(true)}
+                title="Search (⌘K)"
+                className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
+              </button>
+              {/* Reminders */}
+              <button
+                onClick={() => setShowReminders(v => !v)}
+                title="Reminders"
+                className="relative text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+                </svg>
+                {urgentCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-xs font-bold text-white leading-none">
+                    {urgentCount > 9 ? '9+' : urgentCount}
+                  </span>
+                )}
+              </button>
+              {/* Sign out — collapsed icon */}
+              {collapsed && (
+                <button
+                  onClick={handleSignOut}
+                  title="Sign Out"
+                  className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
+                >
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9V5.25A2.25 2.25 0 0 1 10.5 3h6a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 16.5 21h-6a2.25 2.25 0 0 1-2.25-2.25V15m-3 0-3-3m0 0 3-3m-3 3H15" />
+                  </svg>
+                </button>
               )}
-            </button>
+            </div>
           </div>
+          {/* Sign out + collapse-all — expanded, below title */}
+          {!collapsed && (
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-1.5 text-xs text-white hover:text-gray-300 px-0.5 py-1 rounded transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9V5.25A2.25 2.25 0 0 1 10.5 3h6a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 16.5 21h-6a2.25 2.25 0 0 1-2.25-2.25V15m-3 0-3-3m0 0 3-3m-3 3H15" />
+                </svg>
+                Sign Out
+              </button>
+              <button
+                onClick={() => setOpenGroups(new Set())}
+                title="Collapse all sections"
+                className="flex items-center gap-1.5 text-xs text-white hover:text-gray-300 px-0.5 py-1 rounded transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+                </svg>
+                Collapse All
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Nav */}
         <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden">
+
+          {/* ── Favorites group ── */}
+          {!collapsed && (
+            <div className="mb-1">
+              <div className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg mx-1 text-yellow-400">
+                <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+                </svg>
+                <span className="text-xs font-semibold uppercase tracking-wider flex-1">Favorites</span>
+              </div>
+
+              <div className="mt-0.5 space-y-0.5 px-2">
+                {favorites.length === 0 && (
+                  <p className="px-3 py-1.5 text-xs text-gray-600 italic">
+                    Hover any menu item and click ★ to pin it here
+                  </p>
+                )}
+                {favorites.map(to => {
+                  const item = allItemsMap[to]
+                  if (!item) return null
+                  return (
+                    <div key={to} className="relative group/fav">
+                      <NavLink
+                        to={item.to}
+                        className={({ isActive }) =>
+                          `flex items-center gap-2.5 px-3 py-2 pr-8 rounded-lg text-sm font-medium transition-colors ${
+                            isActive ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
+                          }`
+                        }
+                      >
+                        {navIcon(item, 'w-4 h-4 shrink-0')}
+                        <span className="truncate">{item.label}</span>
+                      </NavLink>
+                      <button
+                        onClick={() => toggleFavorite(to)}
+                        title="Remove from favorites"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-yellow-400 opacity-0 group-hover/fav:opacity-100 hover:text-yellow-300 transition-opacity"
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+                        </svg>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="mx-3 my-1 border-t border-yellow-900/40" />
+            </div>
+          )}
+
           {NAV_GROUPS.map(group => {
-            const isOpen    = openGroups.has(group.id)
-            const hasActive = groupHasActive(group)
+            const isOpen = openGroups.has(group.id)
 
             return (
               <div key={group.id} className="mb-1">
@@ -268,15 +401,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   onClick={() => collapsed ? setCollapsed(false) : toggleGroup(group.id)}
                   title={collapsed ? group.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors rounded-lg mx-1 ${
-                    hasActive
-                      ? 'text-indigo-400'
-                      : 'text-gray-500 hover:text-gray-300'
+                    isOpen ? 'text-indigo-400' : 'text-white hover:text-gray-200'
                   } ${collapsed ? 'justify-center' : ''}`}
                 >
                   {group.groupIcon(collapsed ? 'w-5 h-5 shrink-0' : 'w-4 h-4 shrink-0')}
                   {!collapsed && (
                     <>
-                      <span className="text-[11px] font-semibold uppercase tracking-wider flex-1">
+                      <span className="text-xs font-semibold uppercase tracking-wider flex-1">
                         {group.label}
                       </span>
                       <svg
@@ -292,22 +423,39 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 {/* Group items */}
                 {!collapsed && isOpen && (
                   <div className="mt-0.5 space-y-0.5 px-2">
-                    {group.items.map(item => (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        className={({ isActive }) =>
-                          `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                            isActive
-                              ? 'bg-indigo-600 text-white'
-                              : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
-                          }`
-                        }
-                      >
-                        {navIcon(item, 'w-4 h-4 shrink-0')}
-                        <span className="truncate">{item.label}</span>
-                      </NavLink>
-                    ))}
+                    {group.items.map(item => {
+                      const isFav = favorites.includes(item.to)
+                      return (
+                        <div key={item.to} className="relative group/nav">
+                          <NavLink
+                            to={item.to}
+                            className={({ isActive }) =>
+                              `flex items-center gap-2.5 px-3 py-2 pr-8 rounded-lg text-sm font-medium transition-colors ${
+                                isActive
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
+                              }`
+                            }
+                          >
+                            {navIcon(item, 'w-4 h-4 shrink-0')}
+                            <span className="truncate">{item.label}</span>
+                          </NavLink>
+                          <button
+                            onClick={() => toggleFavorite(item.to)}
+                            title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                            className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded transition-all hover:text-yellow-300 ${
+                              isFav
+                                ? 'text-yellow-400 opacity-100'
+                                : 'text-gray-600 opacity-0 group-hover/nav:opacity-100 group-hover/nav:text-gray-400'
+                            }`}
+                          >
+                            <svg className="w-3 h-3" fill={isFav ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+                            </svg>
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 
@@ -341,21 +489,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             )
           })}
 
-          {/* Sign out at bottom */}
-          <div className={`mt-2 px-2 ${collapsed ? 'flex justify-center' : ''}`}>
-            <button
-              onClick={handleSignOut}
-              title="Sign Out"
-              className={`flex items-center gap-2.5 text-xs text-gray-500 hover:text-gray-200 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors w-full ${
-                collapsed ? 'justify-center' : ''
-              }`}
-            >
-              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9V5.25A2.25 2.25 0 0 1 10.5 3h6a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 16.5 21h-6a2.25 2.25 0 0 1-2.25-2.25V15m-3 0-3-3m0 0 3-3m-3 3H15" />
-              </svg>
-              {!collapsed && 'Sign Out'}
-            </button>
-          </div>
         </nav>
       </aside>
 
@@ -379,7 +512,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
               </svg>
               {urgentCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-[9px] font-bold text-white leading-none">
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-xs font-bold text-white leading-none">
                   {urgentCount > 9 ? '9+' : urgentCount}
                 </span>
               )}
@@ -388,19 +521,43 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <main className={`flex-1 ${isFullHeight ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
+        <main id="main-content" className={`flex-1 ${isFullHeight ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
           {children}
         </main>
 
+        {/* PWA install banner — Android Chrome only, dismissed via localStorage */}
+        {canInstall && (
+          <div className="md:hidden flex items-center gap-3 px-4 py-2.5 bg-indigo-950 border-t border-indigo-800/60">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-indigo-100 truncate">Add TheLight to your home screen</p>
+            </div>
+            <button
+              onClick={install}
+              className="shrink-0 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Install
+            </button>
+            <button
+              onClick={dismissInstall}
+              aria-label="Dismiss install banner"
+              className="shrink-0 text-indigo-400 hover:text-indigo-200 p-1 -mr-1 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* Mobile bottom tab bar */}
         <nav className="md:hidden flex border-t border-gray-800 bg-gray-900" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
-          {MOBILE_TABS.map(item => (
+          {mobileTabs.map(item => (
             <NavLink
               key={item.to}
               to={item.to}
               end
               className={({ isActive }) =>
-                `flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 text-[10px] font-medium transition-colors ${
+                `flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 text-xs font-medium transition-colors ${
                   isActive ? 'text-indigo-400' : 'text-gray-500'
                 }`
               }
@@ -411,7 +568,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           ))}
           <button
             onClick={() => setShowMore(true)}
-            className={`flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 text-[10px] font-medium transition-colors ${
+            className={`flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 text-xs font-medium transition-colors ${
               moreIsActive ? 'text-indigo-400' : 'text-gray-500'
             }`}
           >
@@ -441,17 +598,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/60" onClick={() => setShowMore(false)} />
           <div
+            ref={moreSheetRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="more-sheet-title"
             className="relative bg-gray-900 rounded-t-2xl border-t border-gray-700 px-4 pt-4 max-h-[80vh] overflow-y-auto"
             style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}
           >
             <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-4" />
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-white">Menu</span>
+              <span id="more-sheet-title" className="text-sm font-semibold text-white">Menu</span>
               <button onClick={handleSignOut} className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded">Sign Out</button>
             </div>
             {NAV_GROUPS.map(group => (
               <div key={group.id} className="mb-4">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">
                   {group.label}
                 </p>
                 <div className="grid grid-cols-4 gap-2">
@@ -461,7 +622,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       to={item.to}
                       onClick={() => setShowMore(false)}
                       className={({ isActive }) =>
-                        `flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-[11px] font-medium transition-colors ${
+                        `flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-medium transition-colors ${
                           isActive ? 'bg-indigo-600/30 text-indigo-300' : 'bg-gray-800 text-gray-300'
                         }`
                       }

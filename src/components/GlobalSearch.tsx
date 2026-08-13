@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/authStore'
 import { useDebounce } from '../hooks/useDebounce'
 import { avatarColor, AVATAR_ORIGINAL } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Employee']
 const MAX_PER_GROUP = 5
@@ -19,6 +20,8 @@ export default function GlobalSearch({ onClose }: Props) {
   const companyId     = useAuthStore(s => s.companyId)
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const inputRef      = useRef<HTMLInputElement>(null)
+  const panelRef      = useRef<HTMLDivElement>(null)
+  useFocusTrap(panelRef)
 
   const [all, setAll]     = useState<CustomerItem[]>([])
   const [query, setQuery] = useState('')
@@ -78,7 +81,13 @@ export default function GlobalSearch({ onClose }: Props) {
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
 
       {/* Panel */}
-      <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search records"
+        className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+      >
 
         {/* Search input row */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-700 shrink-0">
@@ -93,7 +102,7 @@ export default function GlobalSearch({ onClose }: Props) {
             placeholder="Search all records…"
             className="flex-1 bg-transparent text-white placeholder-gray-500 outline-none text-sm"
           />
-          <kbd className="hidden sm:inline text-[10px] text-gray-500 bg-gray-800 border border-gray-700 px-1.5 py-0.5 rounded font-mono">
+          <kbd className="hidden sm:inline text-xs text-gray-500 bg-gray-800 border border-gray-700 px-1.5 py-0.5 rounded font-mono">
             Esc
           </kbd>
         </div>
@@ -120,7 +129,7 @@ export default function GlobalSearch({ onClose }: Props) {
                   <div key={cat}>
                     {/* Category header */}
                     <div className="px-4 py-1.5 bg-gray-800/60 border-y border-gray-800">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                      <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
                         {CATEGORY_LABELS[cat]}
                       </span>
                     </div>
@@ -154,7 +163,7 @@ export default function GlobalSearch({ onClose }: Props) {
                             {sub && <p className="text-xs text-gray-400 truncate">{sub}</p>}
                           </div>
                           {!c.isActive && (
-                            <span className="text-[10px] text-gray-500 shrink-0">inactive</span>
+                            <span className="text-xs text-gray-500 shrink-0">inactive</span>
                           )}
                         </button>
                       )

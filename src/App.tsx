@@ -3,6 +3,7 @@ import { createBrowserRouter, createRoutesFromElements, RouterProvider, Route, N
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
 import { ToastProvider } from './components/Toast'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // Pages are lazy-loaded — each becomes its own chunk
 const LoginPage          = lazy(() => import('./pages/LoginPage'))
@@ -45,6 +46,7 @@ const HeatMapPage        = lazy(() => import('./pages/heatmap/HeatMapPage'))
 const FollowUpsPage      = lazy(() => import('./pages/followups/FollowUpsPage'))
 const ForecastPage       = lazy(() => import('./pages/forecast/ForecastPage'))
 const BatchPage          = lazy(() => import('./pages/batch/BatchPage'))
+const ServicePlansPage   = lazy(() => import('./pages/serviceplans/ServicePlansPage'))
 
 function PageLoader() {
   return (
@@ -62,13 +64,15 @@ function Protected({ children }: { children: React.ReactNode }) {
   )
 }
 
-// Root layout: provides Toast context + Suspense boundary for lazy pages
+// Root layout: provides Toast context + Suspense + per-page error boundary
 function RootLayout() {
   return (
     <ToastProvider>
-      <Suspense fallback={<PageLoader />}>
-        <Outlet />
-      </Suspense>
+      <ErrorBoundary label="page">
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
+      </ErrorBoundary>
     </ToastProvider>
   )
 }
@@ -125,6 +129,7 @@ const router = createBrowserRouter(
       <Route path="/followups"         element={<Protected><FollowUpsPage /></Protected>} />
       <Route path="/forecast"          element={<Protected><ForecastPage /></Protected>} />
       <Route path="/batch"             element={<Protected><BatchPage /></Protected>} />
+      <Route path="/service-plans"     element={<Protected><ServicePlansPage /></Protected>} />
       <Route path="/tip"               element={<Protected><TipPage /></Protected>} />
       <Route path="/settings"          element={<Protected><SettingsPage /></Protected>} />
       <Route path="/profile"           element={<Protected><ProfilePage /></Protected>} />
@@ -135,7 +140,11 @@ const router = createBrowserRouter(
 )
 
 function App() {
-  return <RouterProvider router={router} />
+  return (
+    <ErrorBoundary label="app">
+      <RouterProvider router={router} />
+    </ErrorBoundary>
+  )
 }
 
 export default App

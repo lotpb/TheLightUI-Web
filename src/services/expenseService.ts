@@ -1,6 +1,6 @@
 import {
   collection, doc, setDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, getDocs, writeBatch, query, where,
+  onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -26,6 +26,36 @@ export function subscribeToExpenses(
         try { items.push(expenseFromDoc(d)) } catch { /* skip malformed */ }
       }
       items.sort((a, b) => b.date.getTime() - a.date.getTime())
+      onData(items)
+    },
+    onError,
+  )
+}
+
+export function subscribeToExpensesToday(
+  onData: (items: Expense[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) {
+    onError(new Error('Not authenticated'))
+    return () => {}
+  }
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('date', '>=', Timestamp.fromDate(todayStart)),
+      where('date', '<=', Timestamp.fromDate(todayEnd)),
+      orderBy('date', 'desc'),
+    ),
+    snap => {
+      const items: Expense[] = []
+      for (const d of snap.docs) {
+        try { items.push(expenseFromDoc(d)) } catch { /* skip malformed */ }
+      }
       onData(items)
     },
     onError,

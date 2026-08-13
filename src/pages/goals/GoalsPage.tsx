@@ -245,7 +245,7 @@ export default function GoalsPage() {
                     <tr key={p.key} className={`hover:bg-gray-700/20 ${period === p.key ? 'bg-indigo-600/5' : ''}`}>
                       <td className="px-4 py-3 text-gray-300 font-medium">
                         {r.short}
-                        {period === p.key && <span className="ml-1.5 text-[10px] text-indigo-400 font-semibold">CURRENT</span>}
+                        {period === p.key && <span className="ml-1.5 text-xs text-indigo-400 font-semibold">CURRENT</span>}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <MiniProgress actual={a.revenue}   target={g.revenue}   format={v => formatCurrency(v)} />
@@ -402,7 +402,7 @@ function GoalCard({
             />
           </div>
           <div
-            className="text-[9px] text-gray-600 absolute -top-0.5"
+            className="text-xs text-gray-600 absolute -top-0.5"
             style={{ left: `${Math.round(periodFraction * 100)}%`, transform: 'translateX(-50%)' }}
           >
             pace

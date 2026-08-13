@@ -252,7 +252,7 @@ export default function ImportPage() {
             <div key={s} className="flex items-center gap-2">
               {i > 0 && <div className="w-8 h-px bg-gray-700" />}
               <div className={`flex items-center gap-1.5 ${active ? 'text-indigo-400' : past ? 'text-gray-400' : 'text-gray-600'}`}>
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
+                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold border ${
                   active ? 'border-indigo-500 bg-indigo-600/20 text-indigo-300' :
                   past   ? 'border-gray-600 bg-gray-700 text-gray-400' :
                            'border-gray-700 text-gray-600'

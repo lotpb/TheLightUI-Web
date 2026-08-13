@@ -244,7 +244,7 @@ function CallbackRow({
           >
             {name || '—'}
           </Link>
-          <span className="text-[10px] text-gray-600 capitalize shrink-0">{c.category}</span>
+          <span className="text-xs text-gray-600 capitalize shrink-0">{c.category}</span>
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
           {c.phone && (
@@ -258,9 +258,9 @@ function CallbackRow({
           {c.adNo && <span className="text-xs text-gray-600">Ad: {c.adNo}</span>}
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-          <span className="text-[10px] text-gray-600">Added {fmtDate(c.creationDate)}</span>
+          <span className="text-xs text-gray-600">Added {fmtDate(c.creationDate)}</span>
           {c.followUpDate && (
-            <span className={`text-[10px] font-medium ${
+            <span className={`text-xs font-medium ${
               followUpOverdue ? 'text-red-400' :
               followUpToday   ? 'text-yellow-400' :
               'text-blue-400'

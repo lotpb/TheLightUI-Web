@@ -45,9 +45,7 @@ export function subscribeToTodos(
     return () => {}
   }
   return onSnapshot(
-    // 'in' catches both tagged docs and legacy ones with no companyId field
-    // (Firestore treats a missing field as null for 'in' queries).
-    query(collection(db, COL), where('companyId', 'in', [companyId, null])),
+    query(collection(db, COL), where('companyId', '==', companyId)),
     snap => {
       const todos: Todo[] = []
       for (const d of snap.docs) {
@@ -116,7 +114,7 @@ export async function getAllTodosOnce(): Promise<Todo[]> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
   const snap = await getDocs(
-    query(collection(db, COL), where('companyId', 'in', [companyId, null]))
+    query(collection(db, COL), where('companyId', '==', companyId))
   )
   const todos: Todo[] = []
   for (const d of snap.docs) {

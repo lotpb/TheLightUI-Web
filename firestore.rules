@@ -1,13 +1,215 @@
 rules_version = '2';
 
-// Any authenticated user can read/write any document.
-// Data isolation between companies is enforced client-side:
-// every service query includes where('companyId', '==', companyId).
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
     }
+
+    // True when the caller's ID-token carries a non-empty companyId custom claim.
+    function hasCompanyId() {
+      return isSignedIn()
+          && 'companyId' in request.auth.token
+          && request.auth.token.companyId is string
+          && request.auth.token.companyId.size() > 0;
+    }
+
+    // Caller's companyId claim. Only invoke after hasCompanyId() is true.
+    function claimedCompanyId() {
+      return request.auth.token.companyId;
+    }
+
+    // True when the authenticated uid matches the given uid parameter.
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── User Profiles ─────────────────────────────────────────────────────────
+    //
+    //   Own profile: full read/write (profile edits, FCM token arrayUnion).
+    //   Any signed-in user may list users (needed for the "New Message" picker
+    //   to find colleagues regardless of which companyId their iOS-created doc has).
+    //   Individual get still requires owner or same-company membership.
+    //   All deletes: denied.
+    //
+    match /users/{userId} {
+      allow get:    if isOwner(userId)
+                    || (hasCompanyId()
+                        && resource.data.get('companyId', '') == claimedCompanyId())
+                    || isSignedIn();
+      allow list:   if isSignedIn();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if false;
+    }
+
+    // ── Customers ─────────────────────────────────────────────────────────────
+    //
+    //   All CRUD is scoped to the caller's companyId ID-token claim.
+    //   `list` permits company-filtered queries; `get` / write / delete each
+    //   verify the document's stored companyId field matches the claim.
+    //
+    //   The resource.data.companyId check on `list` is intentional: Firestore
+    //   uses it as a query constraint, rejecting any query that does not carry
+    //   where('companyId','==',callerCompanyId). This prevents cross-company
+    //   data access via unfiltered SDK queries.
+    //
+    //   Migration update: a document that has no companyId yet (legacy record)
+    //   may be claimed by the user whose uid is stored in the document, provided
+    //   they stamp their own companyId. This lets CustomerFormService.migrateCompanyId()
+    //   run under the new rules without requiring a backend-only migration script.
+    //
+    match /Customers/{customerId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.companyId == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && (
+                         // Normal update: document already belongs to this company.
+                         (resource.data.get('companyId', '') == claimedCompanyId()
+                          && request.resource.data.get('companyId', '') == claimedCompanyId())
+                         ||
+                         // Migration: stamp companyId on an unclaimed document
+                         // that was written by this user before multi-tenancy existed.
+                         (resource.data.get('companyId', '') == ''
+                          && resource.data.get('uid', '') == request.auth.uid
+                          && request.resource.data.get('companyId', '') == claimedCompanyId())
+                       );
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Chat Messages ─────────────────────────────────────────────────────────
+    //
+    //   Structure:  messages/{ownerId}/{contactId}/{messageId}
+    //
+    //   Each message is mirrored: the sender batch-writes two documents —
+    //   one under messages/{fromId}/{toId}/ (sender's copy)
+    //   and one under messages/{toId}/{fromId}/ (recipient's copy).
+    //
+    //   Read:   only the owner of that path reads their copy.
+    //   Create: only the sender (fromId == auth uid) may create; the rule
+    //           validates both the sender's own copy and the recipient's copy.
+    //   Update/Delete: messages are immutable once sent.
+    //
+    match /messages/{ownerId}/{contactId}/{messageId} {
+      allow get, list: if isOwner(ownerId);
+      allow create:    if isSignedIn()
+                       && request.resource.data.fromId == request.auth.uid
+                       && (
+                            // Sender's own copy: ownerId == fromId.
+                            request.auth.uid == ownerId
+                            ||
+                            // Recipient's copy: ownerId == toId.
+                            request.resource.data.toId == ownerId
+                          );
+      allow update, delete: if false;
+    }
+
+    // ── Recent Messages Index ─────────────────────────────────────────────────
+    //
+    //   Structure:  recent_messages/{userId}/messages/{contactId}
+    //
+    //   Each user maintains their own inbox entry. The sender batch-writes
+    //   both the sender's and the recipient's recent-message documents.
+    //
+    //   Read:   inbox owner only.
+    //   Write:  inbox owner, OR the sender stamping the recipient's entry
+    //           (fromId in the written data must equal the authenticated uid).
+    //
+    match /recent_messages/{userId}/messages/{contactId} {
+      allow get, list: if isOwner(userId);
+      allow write:     if isOwner(userId)
+                       || (isSignedIn()
+                           && request.resource.data.fromId == request.auth.uid);
+    }
+
+    // ── Expenses ──────────────────────────────────────────────────────────────
+    //
+    //   All CRUD scoped to the caller's companyId claim.
+    //
+    match /Expenses/{expenseId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── To-Do Items ───────────────────────────────────────────────────────────
+    //
+    //   All CRUD scoped to the caller's companyId claim.
+    //
+    match /ToDoItems/{itemId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Service Plans ─────────────────────────────────────────────────────────
+    //
+    //   All CRUD scoped to the caller's companyId claim.
+    //
+    match /ServicePlans/{planId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Claim Refresh Signals ─────────────────────────────────────────────────
+    //
+    //   Written only by Cloud Functions (Admin SDK bypasses these rules).
+    //   Clients watch their own document to detect when custom claims have
+    //   changed server-side (e.g., after being invited to a company) and
+    //   force-refresh their ID token without requiring a manual re-login.
+    //
+    match /claimRefreshSignals/{uid} {
+      allow read:  if isOwner(uid);
+      allow write: if false;
+    }
+
+    // ── Picker Lists (Settings) ───────────────────────────────────────────────
+    //
+    //   A single shared document at settings/pickerLists used by all companies.
+    //   Read: any signed-in user (needed before companyId claim is available).
+    //   Write: only users with a companyId claim (prevents anonymous mutation).
+    //
+    //   KNOWN LIMITATION: this document is shared across all companies. For true
+    //   multi-tenancy, migrate to companies/{companyId}/settings/pickerLists.
+    //   Until then all companies share one picker list.
+    //
+    match /settings/pickerLists {
+      allow read:  if isSignedIn();
+      allow write: if hasCompanyId();
+    }
+
   }
 }

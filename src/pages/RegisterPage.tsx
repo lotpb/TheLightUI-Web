@@ -1,12 +1,34 @@
 import { useRef, useState, useEffect } from 'react'
 import { usePageTitle } from '../hooks/usePageTitle'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { doc, setDoc } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
 import { sendWelcomeMessage } from '../services/chatService'
 import { updateProfile } from 'firebase/auth'
 import { useAuthStore } from '../stores/authStore'
-import { storage, db } from '../firebase/config'
+import { storage, db, functions } from '../firebase/config'
+import { useRecaptcha } from '../hooks/useRecaptcha'
+
+// ── Password strength ─────────────────────────────────────────────────────────
+
+function strengthScore(p: string): 0 | 1 | 2 | 3 | 4 {
+  if (!p) return 0
+  let s = 0
+  if (p.length >= 8)            s++
+  if (/[A-Z]/.test(p))         s++
+  if (/[0-9]/.test(p))         s++
+  if (/[^A-Za-z0-9]/.test(p))  s++
+  return s as 0 | 1 | 2 | 3 | 4
+}
+
+const STRENGTH_COLORS = ['', 'bg-red-500', 'bg-orange-400', 'bg-amber-400', 'bg-green-500'] as const
+const STRENGTH_LABELS = ['', 'Weak', 'Fair', 'Good', 'Strong'] as const
+const STRENGTH_TEXT   = ['', 'text-red-400', 'text-orange-400', 'text-amber-400', 'text-green-400'] as const
+
+function emailValid(v: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) }
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RegisterPage() {
   usePageTitle('Create Account')
@@ -20,10 +42,22 @@ export default function RegisterPage() {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const [saving, setSaving]         = useState(false)
+  const [verifying, setVerifying]   = useState(false)
+  const [touched, setTouched]       = useState<Record<string, boolean>>({})
+
+  function mark(field: string) { setTouched(t => ({ ...t, [field]: true })) }
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { signUp, loading, error, clearError, user } = useAuthStore()
-  const navigate = useNavigate()
+  const navigate  = useNavigate()
+  const recaptcha = useRecaptcha()
+  const [searchParams] = useSearchParams()
+
+  // Pre-fill email from invite link (?email=...)
+  useEffect(() => {
+    const invited = searchParams.get('email')
+    if (invited) setEmail(invited)
+  }, [])
 
   useEffect(() => {
     if (user && !saving) navigate('/dashboard', { replace: true })
@@ -56,6 +90,21 @@ export default function RegisterPage() {
     if (password.length < 6) {
       setLocalError('Password must be at least 6 characters.')
       return
+    }
+
+    // reCAPTCHA v3 gate — skipped silently when VITE_RECAPTCHA_SITE_KEY is not set
+    if (recaptcha.enabled) {
+      setVerifying(true)
+      try {
+        const token = await recaptcha.execute('register')
+        const verify = httpsCallable(functions, 'verifyRegistration')
+        await verify({ token })
+      } catch {
+        setLocalError('Security check failed. Please try again.')
+        setVerifying(false)
+        return
+      }
+      setVerifying(false)
     }
 
     await signUp(email, password)
@@ -98,7 +147,7 @@ export default function RegisterPage() {
   }
 
   const displayError = localError ?? error
-  const isLoading = loading || saving
+  const isLoading = verifying || loading || saving
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gray-950">
@@ -145,25 +194,33 @@ export default function RegisterPage() {
                 <label className="block text-sm font-medium text-gray-300 mb-1.5">First Name</label>
                 <input
                   type="text"
-                  className="input-field"
+                  className={`input-field ${touched.firstName && !firstName.trim() ? 'border-red-500' : ''}`}
                   placeholder="John"
                   value={firstName}
                   onChange={e => setFirstName(e.target.value)}
+                  onBlur={() => mark('firstName')}
                   required
                   autoComplete="given-name"
                 />
+                {touched.firstName && !firstName.trim() && (
+                  <p className="text-xs text-red-400 mt-1">Required.</p>
+                )}
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-300 mb-1.5">Last Name</label>
                 <input
                   type="text"
-                  className="input-field"
+                  className={`input-field ${touched.lastName && !lastName.trim() ? 'border-red-500' : ''}`}
                   placeholder="Doe"
                   value={lastName}
                   onChange={e => setLastName(e.target.value)}
+                  onBlur={() => mark('lastName')}
                   required
                   autoComplete="family-name"
                 />
+                {touched.lastName && !lastName.trim() && (
+                  <p className="text-xs text-red-400 mt-1">Required.</p>
+                )}
               </div>
             </div>
 
@@ -183,39 +240,67 @@ export default function RegisterPage() {
               <label className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
               <input
                 type="email"
-                className="input-field"
+                className={`input-field ${touched.email && !emailValid(email) ? 'border-red-500' : ''}`}
                 placeholder="you@example.com"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
+                onBlur={() => mark('email')}
                 required
                 autoComplete="email"
               />
+              {touched.email && !emailValid(email) && (
+                <p className="text-xs text-red-400 mt-1">Enter a valid email address.</p>
+              )}
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
               <input
                 type="password"
-                className="input-field"
+                className={`input-field ${touched.password && password.length < 6 ? 'border-red-500' : ''}`}
                 placeholder="••••••••"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
+                onBlur={() => mark('password')}
                 required
                 autoComplete="new-password"
               />
+              {password && (() => {
+                const score = strengthScore(password)
+                return (
+                  <div className="mt-2">
+                    <div className="flex gap-1 h-1">
+                      {([1, 2, 3, 4] as const).map(i => (
+                        <div
+                          key={i}
+                          className={`flex-1 rounded-full transition-colors ${i <= score ? STRENGTH_COLORS[score] : 'bg-gray-700'}`}
+                        />
+                      ))}
+                    </div>
+                    <p className={`text-xs mt-1 ${STRENGTH_TEXT[score]}`}>{STRENGTH_LABELS[score]}</p>
+                  </div>
+                )
+              })()}
+              {touched.password && password.length > 0 && password.length < 6 && (
+                <p className="text-xs text-red-400 mt-1">Must be at least 6 characters.</p>
+              )}
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
               <input
                 type="password"
-                className="input-field"
+                className={`input-field ${touched.confirm && confirm && confirm !== password ? 'border-red-500' : ''}`}
                 placeholder="••••••••"
                 value={confirm}
                 onChange={e => setConfirm(e.target.value)}
+                onBlur={() => mark('confirm')}
                 required
                 autoComplete="new-password"
               />
+              {touched.confirm && confirm && confirm !== password && (
+                <p className="text-xs text-red-400 mt-1">Passwords do not match.</p>
+              )}
             </div>
 
             {displayError && (
@@ -229,7 +314,7 @@ export default function RegisterPage() {
               disabled={isLoading}
               className="btn-primary w-full mt-2"
             >
-              {saving ? 'Saving profile…' : loading ? 'Creating account…' : 'Create Account'}
+              {saving ? 'Saving profile…' : loading ? 'Creating account…' : verifying ? 'Verifying…' : 'Create Account'}
             </button>
 
             <div className="text-center pt-1">

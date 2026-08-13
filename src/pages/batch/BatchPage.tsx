@@ -472,7 +472,7 @@ export default function BatchPage() {
                 {/* Category */}
                 <div className="w-24 hidden sm:block">
                   {c.category && (
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${catBadge(c.category)}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${catBadge(c.category)}`}>
                       {c.category}
                     </span>
                   )}
@@ -486,9 +486,9 @@ export default function BatchPage() {
                 {/* Callback */}
                 <div className="w-20 hidden lg:block">
                   {c.callback.toLowerCase() === 'yes' ? (
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-900/30 text-green-400 border border-green-700/30">Yes</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/30 text-green-400 border border-green-700/30">Yes</span>
                   ) : (
-                    <span className="text-[11px] text-gray-600">—</span>
+                    <span className="text-xs text-gray-600">—</span>
                   )}
                 </div>
 
@@ -497,7 +497,7 @@ export default function BatchPage() {
                   {hasFU ? (
                     <p className="text-xs text-indigo-300">{fmtDate(c.followUpDate!)}</p>
                   ) : (
-                    <span className="text-[11px] text-gray-600">—</span>
+                    <span className="text-xs text-gray-600">—</span>
                   )}
                 </div>
               </div>

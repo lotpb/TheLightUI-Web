@@ -437,10 +437,11 @@ export default function HeatMapPage() {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  const sizeClass = value.length > 10 ? 'text-lg' : value.length > 6 ? 'text-xl' : 'text-2xl'
   return (
     <div className="card p-4">
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</p>
-      <p className="text-2xl font-bold text-white mt-1 truncate">{value}</p>
+      <p className={`${sizeClass} font-bold text-white mt-1 break-words leading-tight`}>{value}</p>
       <p className="text-xs text-gray-500 mt-0.5">{sub}</p>
     </div>
   )

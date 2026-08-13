@@ -221,17 +221,17 @@ function PipelineCard({
       {(c.salesman || apptLabel || (c.city && stage !== 'won')) && (
         <div className="flex flex-wrap gap-1">
           {c.salesman && (
-            <span className="text-[10px] bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full">
+            <span className="text-xs bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full">
               {c.salesman}
             </span>
           )}
           {apptLabel && (
-            <span className="text-[10px] bg-orange-900/40 text-orange-300 px-1.5 py-0.5 rounded-full">
+            <span className="text-xs bg-orange-900/40 text-orange-300 px-1.5 py-0.5 rounded-full">
               📅 {apptLabel}
             </span>
           )}
           {c.city && stage !== 'won' && (
-            <span className="text-[10px] bg-gray-700/60 text-gray-400 px-1.5 py-0.5 rounded-full">
+            <span className="text-xs bg-gray-700/60 text-gray-400 px-1.5 py-0.5 rounded-full">
               {c.city}{c.state ? `, ${c.state}` : ''}
             </span>
           )}

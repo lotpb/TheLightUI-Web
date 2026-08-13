@@ -239,17 +239,17 @@ function JobCard({
       {/* Job / contractor tags */}
       <div className="flex flex-wrap gap-1">
         {c.job && (
-          <span className="text-[10px] bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full truncate max-w-[120px]">
+          <span className="text-xs bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full truncate max-w-[120px]">
             {c.job}
           </span>
         )}
         {c.product && (
-          <span className="text-[10px] bg-gray-700/60 text-gray-400 px-1.5 py-0.5 rounded-full truncate max-w-[100px]">
+          <span className="text-xs bg-gray-700/60 text-gray-400 px-1.5 py-0.5 rounded-full truncate max-w-[100px]">
             {c.product}
           </span>
         )}
         {c.contractor && (
-          <span className="text-[10px] bg-indigo-900/40 text-indigo-300 px-1.5 py-0.5 rounded-full truncate max-w-[100px]">
+          <span className="text-xs bg-indigo-900/40 text-indigo-300 px-1.5 py-0.5 rounded-full truncate max-w-[100px]">
             {c.contractor}
           </span>
         )}
@@ -257,7 +257,7 @@ function JobCard({
 
       {/* Dates */}
       {stage !== 'pending' && (
-        <div className="text-[10px] text-gray-500 space-y-0.5">
+        <div className="text-xs text-gray-500 space-y-0.5">
           {stage === 'scheduled' && (
             <p>Starts {fmtDate(c.startDate)}</p>
           )}
@@ -276,7 +276,7 @@ function JobCard({
 
       {/* Salesman */}
       {c.salesman && (
-        <p className="text-[10px] text-gray-500 truncate">{c.salesman}</p>
+        <p className="text-xs text-gray-500 truncate">{c.salesman}</p>
       )}
     </Link>
   )

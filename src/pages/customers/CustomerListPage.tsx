@@ -516,7 +516,7 @@ export default function CustomerListPage() {
             <span className="flex items-center justify-center gap-1.5">
               {CATEGORY_LABELS[c]}
               {!loading && categoryCounts[c] > 0 && (
-                <span className={`text-[10px] font-bold tabular-nums ${cat === c ? 'opacity-70' : 'opacity-50'}`}>
+                <span className={`text-xs font-bold tabular-nums ${cat === c ? 'opacity-70' : 'opacity-50'}`}>
                   {categoryCounts[c]}
                 </span>
               )}
@@ -549,7 +549,7 @@ export default function CustomerListPage() {
           </svg>
           Filters
           {activeFilterCount > 0 && (
-            <span className="bg-indigo-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            <span className="bg-indigo-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
               {activeFilterCount}
             </span>
           )}
@@ -937,10 +937,10 @@ function CustomerRow({
             <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
             {!c.isActive && <span className="text-xs text-gray-500 shrink-0">inactive</span>}
             {(c.tags ?? []).slice(0, 2).map(tag => (
-              <span key={tag} className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${tagColor(tag)}`}>{tag}</span>
+              <span key={tag} className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${tagColor(tag)}`}>{tag}</span>
             ))}
             {(c.tags ?? []).length > 2 && (
-              <span className="text-[10px] text-gray-600 shrink-0">+{c.tags.length - 2}</span>
+              <span className="text-xs text-gray-600 shrink-0">+{c.tags.length - 2}</span>
             )}
           </div>
           <p className="text-sm text-gray-400 truncate">
@@ -953,7 +953,7 @@ function CustomerRow({
           {c.category.toLowerCase() === 'lead' && (() => {
             const ls = scoreLead(c)
             return (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${ls.badgeClass}`}>
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${ls.badgeClass}`}>
                 <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
                 {ls.label}
               </span>

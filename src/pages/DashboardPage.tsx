@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../hooks/usePageTitle'
 import { fetchSnapshot, type SnapshotData } from '../services/snapshotService'
@@ -6,15 +6,24 @@ import { formatCurrency, fullName } from '../models/customer'
 import { avatarColor, AVATAR_ORIGINAL } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
 import StatCard from '../components/StatCard'
-import SnapshotChart from '../components/SnapshotChart'
+
+// Lazy-load recharts via SnapshotChart so the 115 KB recharts chunk is deferred
+// until the chart actually renders, not on every post-login dashboard load.
+const SnapshotChart = lazy(() => import('../components/SnapshotChart'))
 import { esc } from '../utils/exportUtils'
 import { subscribeToTodos } from '../services/todoService'
-import { subscribeToExpenses } from '../services/expenseService'
+import { subscribeToExpensesToday } from '../services/expenseService'
 import { subscribeToFollowUps } from '../services/customerService'
 import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
+
+function fmtCompact(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}K`
+  return `$${n.toLocaleString()}`
+}
 
 const CHART_ENTRIES = (data: SnapshotData) => [
   { label: 'Leads',    count: data.leadsToday.length,         color: '#6366f1' },
@@ -67,14 +76,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) { setExpensesLoading(false); return }
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
-    const unsub = subscribeToExpenses(
-      items => {
-        setExpensesToday(items.filter(e => e.date >= todayStart && e.date <= todayEnd))
-        setExpensesLoading(false)
-      },
-      () => setExpensesLoading(false),
+    const unsub = subscribeToExpensesToday(
+      items => { setExpensesToday(items); setExpensesLoading(false) },
+      ()    => setExpensesLoading(false),
     )
     return unsub
   }, [user, companyId])
@@ -291,8 +295,8 @@ export default function DashboardPage() {
           </div>
           <div className="grid grid-cols-3 gap-2">
             <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)} color="text-teal-400"   loading={loading} />
-            <StatCard title="Expense"  value={formatCurrency(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
-            <StatCard title="Sales"    value={formatCurrency(salesTotal)}                  color="text-green-400"  loading={loading} />
+            <StatCard title="Expense"  value={fmtCompact(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
+            <StatCard title="Sales"    value={fmtCompact(salesTotal)}                      color="text-green-400"  loading={loading} />
           </div>
         </div>
         <div className="hidden sm:grid gap-2" style={{ gridTemplateColumns: 'repeat(5, 1fr) 1.4fr' }}>
@@ -301,7 +305,7 @@ export default function DashboardPage() {
           <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}     color="text-indigo-300" loading={loading} />
           <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}  color="text-teal-400"   loading={loading} />
           <StatCard title="Expense"  value={formatCurrency(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
-          <StatCard title="Sales"    value={formatCurrency(salesTotal)}                   color="text-green-400"  loading={loading} />
+          <StatCard title="Sales"    value={fmtCompact(salesTotal)}                       color="text-green-400"  loading={loading} />
         </div>
       </section>
 
@@ -320,7 +324,9 @@ export default function DashboardPage() {
       {!loading && chartEntries && chartEntries.some(e => e.count > 0) && (
         <section className="card p-4">
           <p className="text-xs font-semibold text-gray-400 mb-3">Today at a Glance</p>
-          <SnapshotChart entries={chartEntries} />
+          <Suspense fallback={<div className="h-[140px] rounded-lg bg-gray-800 animate-pulse" />}>
+            <SnapshotChart entries={chartEntries} />
+          </Suspense>
         </section>
       )}
 

@@ -399,7 +399,7 @@ function ActionTile({ icon, label, href, to, onClick, active }: ActionTileProps)
   const inner = (
     <>
       <span className="text-xl leading-none">{icon}</span>
-      <span className="text-[10px] font-medium leading-tight text-center">{label}</span>
+      <span className="text-xs font-medium leading-tight text-center">{label}</span>
     </>
   )
   if (href) return <a href={href} className={base}>{inner}</a>
@@ -877,7 +877,7 @@ function ScoreBadge({ customer }: { customer: CustomerItem }) {
           <div className="py-2">
             {ls.factors.map(f => (
               <div key={f.label} className="flex items-center gap-2.5 px-4 py-1.5">
-                <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[9px] ${f.earned > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-700 text-gray-600'}`}>
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-700 text-gray-600'}`}>
                   {f.earned > 0 ? '✓' : '○'}
                 </span>
                 <span className={`flex-1 text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-500'}`}>

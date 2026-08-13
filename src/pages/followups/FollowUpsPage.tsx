@@ -437,12 +437,12 @@ export default function FollowUpsPage() {
                         {c.first} {c.lastname}
                       </Link>
                       {seq && step && (
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
                           {ACTION_ICONS[step.action]} {step.action} — Step {(state!.stepIndex + 1)}/{seq.steps.length}
                         </span>
                       )}
                       {!seq && (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full border border-gray-700 text-gray-400">
+                        <span className="text-xs px-2 py-0.5 rounded-full border border-gray-700 text-gray-400">
                           No sequence
                         </span>
                       )}
