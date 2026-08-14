@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { useLocation, Link } from 'react-router-dom'
+import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman } from '../../services/customerService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
@@ -63,7 +63,8 @@ export default function CustomerListPage() {
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  const [searchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const debouncedSearch = useDebounce(search)
   const [showInactive, setShowInactive] = useState(
     () => localStorage.getItem('thelight.showInactive') === 'true'

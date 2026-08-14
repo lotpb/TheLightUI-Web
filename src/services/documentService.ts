@@ -18,15 +18,15 @@ function docFromSnap(d: { id: string; data: () => Record<string, unknown> }): Cu
   const ts = data['createdAt'] as { toDate?: () => Date } | null
   return {
     id: d.id,
-    companyId:      (data['companyId'] as string) ?? '',
-    customerId:     (data['customerId'] as string) ?? '',
-    name:           (data['name'] as string) ?? '',
-    url:            (data['url'] as string) ?? '',
-    storagePath:    (data['storagePath'] as string) ?? '',
-    size:           (data['size'] as number) ?? 0,
-    mimeType:       (data['mimeType'] as string) ?? '',
-    uploadedBy:     (data['uploadedBy'] as string) ?? '',
-    uploadedByName: (data['uploadedByName'] as string) ?? '',
+    companyId:      typeof data['companyId']      === 'string' ? data['companyId']      : '',
+    customerId:     typeof data['customerId']     === 'string' ? data['customerId']     : '',
+    name:           typeof data['name']           === 'string' ? data['name']           : '',
+    url:            typeof data['url']            === 'string' ? data['url']            : '',
+    storagePath:    typeof data['storagePath']    === 'string' ? data['storagePath']    : '',
+    size:           typeof data['size']           === 'number' ? data['size']           : 0,
+    mimeType:       typeof data['mimeType']       === 'string' ? data['mimeType']       : '',
+    uploadedBy:     typeof data['uploadedBy']     === 'string' ? data['uploadedBy']     : '',
+    uploadedByName: typeof data['uploadedByName'] === 'string' ? data['uploadedByName'] : '',
     createdAt: ts?.toDate?.() ?? new Date(),
   }
 }

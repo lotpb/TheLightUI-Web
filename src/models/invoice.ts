@@ -9,6 +9,7 @@ export interface InvoiceLineItem {
 export interface Invoice {
   id: string
   companyId: string
+  shareToken?: string
   customerId: string
   customerName: string
   customerPhone: string

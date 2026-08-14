@@ -6,12 +6,13 @@ import { type GoalDoc, type GoalValues, emptyGoalValues } from '../models/goal'
 const COLLECTION = 'Goals'
 
 function valuesFromDoc(d: Record<string, unknown>, key: string): GoalValues {
-  const v = d[key] as Record<string, unknown> | undefined
-  if (!v) return emptyGoalValues()
+  const v = d[key]
+  if (typeof v !== 'object' || v === null) return emptyGoalValues()
+  const obj = v as Record<string, unknown>
   return {
-    revenue:   (v['revenue']   as number) ?? 0,
-    leads:     (v['leads']     as number) ?? 0,
-    customers: (v['customers'] as number) ?? 0,
+    revenue:   typeof obj['revenue']   === 'number' ? obj['revenue']   : 0,
+    leads:     typeof obj['leads']     === 'number' ? obj['leads']     : 0,
+    customers: typeof obj['customers'] === 'number' ? obj['customers'] : 0,
   }
 }
 

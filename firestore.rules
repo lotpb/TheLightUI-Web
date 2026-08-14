@@ -166,6 +166,78 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
+    // ── Referrals ─────────────────────────────────────────────────────────────
+    //
+    //   One document per referral pair. All CRUD scoped to the caller's companyId.
+    //
+    match /referrals/{referralId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Time Entries ──────────────────────────────────────────────────────────
+    //
+    //   Clock-in/out records per job. All CRUD scoped to the caller's companyId.
+    //
+    match /timeEntries/{entryId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Public Invoice Snapshots ──────────────────────────────────────────────
+    //
+    //   Document ID is the share token (UUID). Anyone can read a single doc
+    //   (no auth needed — customer link). Only the owning company can write.
+    //
+    match /publicInvoices/{token} {
+      allow get:    if true;
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Product Catalog ───────────────────────────────────────────────────────
+    //
+    //   All CRUD scoped to the caller's companyId claim.
+    //
+    match /catalog/{itemId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Commission Structure ──────────────────────────────────────────────────
+    //
+    //   One document per company. Any authenticated team member can read (to
+    //   calculate their own commission); only users with a companyId claim can
+    //   write (protects other companies' structures).
+    //
+    match /commissionStructures/{companyId} {
+      allow read:  if hasCompanyId() && request.auth.token.companyId == companyId;
+      allow write: if hasCompanyId() && request.auth.token.companyId == companyId;
+    }
+
     // ── Service Plans ─────────────────────────────────────────────────────────
     //
     //   All CRUD scoped to the caller's companyId claim.
@@ -196,15 +268,82 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // ── Picker Lists (Settings) ───────────────────────────────────────────────
+    // ── Activities ────────────────────────────────────────────────────────────
     //
-    //   A single shared document at settings/pickerLists used by all companies.
-    //   Read: any signed-in user (needed before companyId claim is available).
-    //   Write: only users with a companyId claim (prevents anonymous mutation).
+    //   Timeline entries tied to a customer. Always company-scoped.
     //
-    //   KNOWN LIMITATION: this document is shared across all companies. For true
-    //   multi-tenancy, migrate to companies/{companyId}/settings/pickerLists.
-    //   Until then all companies share one picker list.
+    match /Activities/{activityId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Invoices ──────────────────────────────────────────────────────────────
+    //
+    //   All CRUD scoped to the caller's companyId claim.
+    //
+    match /Invoices/{invoiceId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Goals ─────────────────────────────────────────────────────────────────
+    //
+    //   Document ID is the companyId itself (Goals/{companyId}), so the
+    //   path variable is the authoritative ownership check.
+    //
+    match /Goals/{goalCompanyId} {
+      allow read, write: if hasCompanyId()
+                         && claimedCompanyId() == goalCompanyId;
+    }
+
+    // ── Customer Documents ────────────────────────────────────────────────────
+    //
+    //   Firestore metadata records for uploaded files. All CRUD company-scoped.
+    //   Storage access is controlled separately in storage.rules.
+    //
+    match /Documents/{documentId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Company Settings (Picker Lists) ───────────────────────────────────────
+    //
+    //   Per-company settings at companies/{companyId}/settings/{doc}.
+    //   Full read/write restricted to the owning company.
+    //
+    match /companies/{companyId}/settings/{settingId} {
+      allow read, write: if hasCompanyId()
+                         && claimedCompanyId() == companyId;
+    }
+
+    // ── Picker Lists (legacy shared document) ─────────────────────────────────
+    //
+    //   Retained for backward compatibility while the migration to
+    //   companies/{companyId}/settings/pickerLists completes.
+    //   Read: any signed-in user. Write: any user with a companyId claim.
     //
     match /settings/pickerLists {
       allow read:  if isSignedIn();

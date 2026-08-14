@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { getInvoice, updateInvoice, deleteInvoice } from '../../services/invoiceService'
+import { generateShareToken } from '../../services/publicInvoiceService'
 import {
   effectiveStatus, fmtCurrency, invoiceSubtotal, invoiceTaxAmount, invoiceTotal,
   lineItemTotal, statusClasses, statusLabel,
@@ -25,6 +26,7 @@ export default function InvoiceDetailPage() {
   const [statusSaving, setStatusSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [sharing, setSharing] = useState(false)
 
   // Company info (persisted, same keys as QuotePage)
   const [coName,  setCoName]  = useState(() => localStorage.getItem(CO_NAME_KEY)  ?? '')
@@ -57,6 +59,24 @@ export default function InvoiceDetailPage() {
     document.head.appendChild(style)
     return () => { document.getElementById('invoice-print-css')?.remove() }
   }, [])
+
+  async function handleShare() {
+    if (!invoice) return
+    setSharing(true)
+    try {
+      const token = await generateShareToken(invoice, {
+        name: coName, address: coAddr, phone: coPhone, email: coEmail,
+      })
+      setInvoice({ ...invoice, shareToken: token })
+      const url = `${window.location.origin}/i/${token}`
+      await navigator.clipboard.writeText(url)
+      toast('Share link copied to clipboard!', 'success')
+    } catch {
+      toast('Could not generate share link', 'error')
+    } finally {
+      setSharing(false)
+    }
+  }
 
   function saveCoInfo() {
     localStorage.setItem(CO_NAME_KEY,  coName)
@@ -127,6 +147,14 @@ export default function InvoiceDetailPage() {
         </Link>
         <div className="flex items-center gap-2 flex-wrap">
           <Link to={`/invoices/${id}/edit`} className="btn-secondary text-sm px-3 py-1.5">Edit</Link>
+          <button
+            onClick={handleShare}
+            disabled={sharing}
+            className="btn-secondary text-sm px-3 py-1.5"
+            title={invoice?.shareToken ? 'Refresh and copy share link' : 'Generate customer share link'}
+          >
+            {sharing ? '…' : invoice?.shareToken ? '🔗 Share Link' : '🔗 Share'}
+          </button>
           <button
             onClick={() => window.print()}
             className="btn-secondary text-sm px-3 py-1.5"

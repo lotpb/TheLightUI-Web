@@ -363,7 +363,9 @@ function DirectionsTab({
         <div key={i} className="flex gap-3 px-4 py-3 border-b border-gray-800/50">
           <span className="text-xs text-indigo-400 font-bold shrink-0 w-5 pt-0.5">{i + 1}</span>
           <div className="min-w-0">
-            {/* Strip HTML tags from step instructions */}
+            {/* step.instructions comes from google.maps.DirectionsStep (Maps JS SDK),
+                which returns HTML with <b> tags for road names. This is Google-controlled
+                data, not user input, so dangerouslySetInnerHTML is safe here. */}
             <p className="text-sm text-gray-200 leading-snug"
               dangerouslySetInnerHTML={{ __html: step.instructions }} />
             {step.distance && (

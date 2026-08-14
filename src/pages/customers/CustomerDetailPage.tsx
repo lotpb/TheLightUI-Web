@@ -197,7 +197,7 @@ export default function CustomerDetailPage() {
           <ActionTile
             onClick={handleToggleActive}
             icon={customer.isActive ? '⭐' : '☆'}
-            label={customer.isActive ? 'Following' : 'Follow'}
+            label="Active"
             active={customer.isActive}
           />
           <ActionTile
@@ -393,7 +393,7 @@ function ActionTile({ icon, label, href, to, onClick, active }: ActionTileProps)
   const base =
     `flex flex-col items-center justify-center gap-1.5 w-16 shrink-0 py-3 rounded-2xl transition-colors cursor-pointer select-none ${
       active
-        ? 'bg-indigo-600/40 text-indigo-300'
+        ? 'bg-gray-700 text-white hover:bg-gray-600'
         : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
     }`
   const inner = (

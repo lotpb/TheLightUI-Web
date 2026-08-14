@@ -29,17 +29,24 @@ export interface PickerLists {
 
 const REF = () => doc(db, 'companies', getCompanyId(), 'settings', 'pickerLists')
 
+function safeStrArr(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  return v.filter((x): x is string => typeof x === 'string')
+}
+
 export async function fetchPickerLists(): Promise<PickerLists> {
   const snap = await getDoc(REF())
   if (!snap.exists()) return { salesman: [], job: [], product: [], advertiser: [], contractor: [] }
   const d = snap.data()
   return {
-    salesman:   (d['salesman']   as string[]) ?? [],
-    job:        (d['job']        as string[]) ?? [],
-    product:    (d['product']    as string[]) ?? [],
-    advertiser: (d['advertiser'] as string[]) ?? [],
-    contractor: (d['contractor'] as string[]) ?? [],
-    labels:     (d['labels']     as Partial<PickerLabels> | undefined) ?? undefined,
+    salesman:   safeStrArr(d['salesman']),
+    job:        safeStrArr(d['job']),
+    product:    safeStrArr(d['product']),
+    advertiser: safeStrArr(d['advertiser']),
+    contractor: safeStrArr(d['contractor']),
+    labels:     typeof d['labels'] === 'object' && d['labels'] !== null
+                  ? (d['labels'] as Partial<PickerLabels>)
+                  : undefined,
   }
 }
 

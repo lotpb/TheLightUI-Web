@@ -8,7 +8,7 @@ import {
   type User,
 } from 'firebase/auth'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { doc, setDoc, onSnapshot } from 'firebase/firestore'
+import { doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
 import { auth } from '../firebase/config'
 import { db } from '../firebase/config'
 
@@ -63,6 +63,11 @@ export const useAuthStore = create<AuthState>((set) => ({
   signOut: async () => {
     claimSignalUnsub?.()
     claimSignalUnsub = null
+    userDocUnsub?.()
+    userDocUnsub = null
+    stopHeartbeat()
+    const { user } = useAuthStore.getState()
+    if (user) markOffline(user.uid)
     await fbSignOut(auth)
     set({ companyId: null, role: null, isReady: false })
   },
@@ -87,8 +92,24 @@ export function getCompanyId(): string {
   return useAuthStore.getState().companyId ?? ''
 }
 
-// Cleanup handle for the per-user Firestore claim-refresh signal watcher.
+// Cleanup handles
 let claimSignalUnsub: (() => void) | null = null
+let userDocUnsub: (() => void) | null = null
+let presenceHeartbeat: ReturnType<typeof setInterval> | null = null
+
+function markOnline(uid: string) {
+  setDoc(doc(db, 'users', uid), { isOnline: true, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {})
+}
+function markOffline(uid: string) {
+  setDoc(doc(db, 'users', uid), { isOnline: false, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {})
+}
+function startHeartbeat(uid: string) {
+  if (presenceHeartbeat) clearInterval(presenceHeartbeat)
+  presenceHeartbeat = setInterval(() => markOnline(uid), 2 * 60 * 1000)
+}
+function stopHeartbeat() {
+  if (presenceHeartbeat) { clearInterval(presenceHeartbeat); presenceHeartbeat = null }
+}
 
 // Force-refresh the ID token and apply updated claims to the store.
 // Triggered by the Firestore claimRefreshSignals/{uid} document changing,
@@ -97,10 +118,11 @@ async function refreshClaims(user: User): Promise<void> {
   try {
     await user.getIdToken(/* forceRefresh */ true)
     const fresh = await user.getIdTokenResult()
-    const companyId = fresh.claims['companyId'] as string | undefined
-    const role     = fresh.claims['role']      as string | undefined
+    const companyId = typeof fresh.claims['companyId'] === 'string' ? fresh.claims['companyId'] : undefined
     if (companyId) {
-      useAuthStore.setState({ companyId, role: role ?? null, isReady: true })
+      // Only update companyId — role is managed by the Firestore userDoc listener
+      // so we don't overwrite a Firestore-sourced role with a stale custom claim.
+      useAuthStore.setState({ companyId, isReady: true })
     }
   } catch {
     // Network error — stale claims remain; user can refresh the page to retry
@@ -129,8 +151,8 @@ onAuthStateChanged(auth, async (user) => {
     const tokenResult = await user.getIdTokenResult()
     if (generation !== authGeneration) return
 
-    let companyId = tokenResult.claims['companyId'] as string | undefined
-    let role = tokenResult.claims['role'] as string | undefined
+    let companyId = typeof tokenResult.claims['companyId'] === 'string' ? tokenResult.claims['companyId'] : undefined
+    let role      = typeof tokenResult.claims['role']      === 'string' ? tokenResult.claims['role']      : undefined
 
     if (!companyId) {
       // Existing user predating multi-tenancy — create their company now
@@ -147,9 +169,9 @@ onAuthStateChanged(auth, async (user) => {
       const refreshed = await user.getIdTokenResult()
       if (generation !== authGeneration) return
 
-      if (refreshed.claims['companyId']) {
-        companyId = refreshed.claims['companyId'] as string
-        role = refreshed.claims['role'] as string
+      if (typeof refreshed.claims['companyId'] === 'string') {
+        companyId = refreshed.claims['companyId']
+        role = typeof refreshed.claims['role'] === 'string' ? refreshed.claims['role'] : role
       }
     }
 
@@ -166,11 +188,32 @@ onAuthStateChanged(auth, async (user) => {
       () => {}  // ignore errors (doc may not exist until first invite)
     )
 
-    // Sync companyId to the Firestore user document. Old iOS clients wrote the
-    // user doc without merge, erasing the companyId set by onUserCreated.
-    // This ensures every web login repairs the document.
+    // Watch the Firestore user doc for role/companyId changes.
+    // This ensures the store stays current even when the setUserRole CF is not deployed
+    // (role is written directly to Firestore by teamService.setMemberRole).
+    userDocUnsub?.()
+    userDocUnsub = onSnapshot(
+      doc(db, 'users', user.uid),
+      (snap) => {
+        if (!snap.exists()) return
+        const d = snap.data() as Record<string, unknown>
+        const fsRole      = typeof d['role']      === 'string' ? d['role']      : null
+        const fsCompanyId = typeof d['companyId'] === 'string' ? d['companyId'] : null
+        const state = useAuthStore.getState()
+        if (fsRole && fsRole !== state.role) {
+          useAuthStore.setState({ role: fsRole })
+        }
+        if (fsCompanyId && fsCompanyId !== state.companyId) {
+          useAuthStore.setState({ companyId: fsCompanyId, isReady: true })
+        }
+      },
+      () => {}
+    )
+
+    // Sync companyId and mark user online.
     if (companyId) {
-      setDoc(doc(db, 'users', user.uid), { companyId }, { merge: true }).catch(() => {})
+      setDoc(doc(db, 'users', user.uid), { companyId, isOnline: true, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {})
+      startHeartbeat(user.uid)
     }
   } catch (err) {
     if (generation !== authGeneration) return
@@ -186,12 +229,18 @@ document.addEventListener('visibilitychange', () => {
   const { user } = useAuthStore.getState()
   if (!user) return
   user.getIdTokenResult().then(result => {
-    const companyId = result.claims['companyId'] as string | undefined
-    const role      = result.claims['role']      as string | undefined
+    const companyId = typeof result.claims['companyId'] === 'string' ? result.claims['companyId'] : undefined
     if (companyId && companyId !== useAuthStore.getState().companyId) {
-      useAuthStore.setState({ companyId, role: role ?? null })
+      useAuthStore.setState({ companyId })
     }
   }).catch(() => {})
+})
+
+// Mark offline when the tab is closed or navigated away.
+window.addEventListener('pagehide', () => {
+  const { user } = useAuthStore.getState()
+  if (user) markOffline(user.uid)
+  stopHeartbeat()
 })
 
 function friendlyAuthError(msg: string): string {

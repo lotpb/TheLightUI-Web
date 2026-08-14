@@ -63,8 +63,13 @@ export function subscribeToExpensesToday(
 }
 
 export async function getExpense(id: string): Promise<Expense | null> {
+  const myCompanyId = getCompanyId()
   const snap = await getDoc(doc(db, COL, id))
   if (!snap.exists()) return null
+  if ((snap.data()['companyId'] as string | undefined) !== myCompanyId) {
+    console.error(`[getExpense] companyId mismatch on doc ${id}`)
+    return null
+  }
   return expenseFromDoc(snap)
 }
 

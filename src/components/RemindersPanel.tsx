@@ -1,65 +1,60 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { fullName, formatCurrency, type CustomerItem } from '../models/customer'
+import type { Notification, NotifType } from '../hooks/useReminders'
+
 interface Props {
-  items: CustomerItem[]
+  notifications: Notification[]
   permission: NotificationPermission
   onRequestPermission: () => void
   onClose: () => void
 }
 
-function fmtTime(d: Date): string {
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtDate(d: Date): string {
+  const today    = new Date(); today.setHours(0, 0, 0, 0)
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999)
+  const diff     = Math.round((d.getTime() - today.getTime()) / 86400000)
+  if (diff < 0)   return `${Math.abs(diff)}d overdue`
+  if (diff === 0) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  if (diff === 1) return 'Tomorrow'
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-interface Group {
-  label: string
-  colorClass: string
-  items: CustomerItem[]
+const TYPE_META: Record<NotifType, { label: string; icon: string; bg: string; text: string }> = {
+  followup:    { label: 'Follow-up',    icon: '🔔', bg: 'bg-yellow-900/30', text: 'text-yellow-400' },
+  task:        { label: 'Task',         icon: '✓',  bg: 'bg-violet-900/30', text: 'text-violet-400' },
+  serviceplan: { label: 'Service Plan', icon: '↻',  bg: 'bg-teal-900/30',   text: 'text-teal-400'   },
+  appointment: { label: 'Appointment',  icon: '📅', bg: 'bg-orange-900/30', text: 'text-orange-400' },
 }
 
-function buildGroups(items: CustomerItem[]): Group[] {
-  const now   = new Date()
-  const today = new Date(now); today.setHours(0, 0, 0, 0)
-  const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
-  const tomorrowStart = new Date(today); tomorrowStart.setDate(today.getDate() + 1)
-  const tomorrowEnd   = new Date(tomorrowStart); tomorrowEnd.setHours(23, 59, 59, 999)
+const URGENCY_GROUPS: Array<{ key: Notification['urgency']; label: string; labelColor: string }> = [
+  { key: 'overdue',  label: 'Overdue',   labelColor: 'text-red-400' },
+  { key: 'today',    label: 'Today',     labelColor: 'text-yellow-400' },
+  { key: 'tomorrow', label: 'Tomorrow',  labelColor: 'text-blue-400' },
+  { key: 'soon',     label: 'This Week', labelColor: 'text-gray-400' },
+]
 
-  const overdue: CustomerItem[]   = []
-  const todayList: CustomerItem[] = []
-  const tomorrow: CustomerItem[]  = []
-  const later: CustomerItem[]     = []
+// ─── Panel ────────────────────────────────────────────────────────────────────
 
-  for (const c of items) {
-    if (!c.followUpDate) continue
-    const d = c.followUpDate
-    if (d < today)          overdue.push(c)
-    else if (d <= todayEnd) todayList.push(c)
-    else if (d <= tomorrowEnd) tomorrow.push(c)
-    else later.push(c)
-  }
-
-  const groups: Group[] = []
-  if (overdue.length)   groups.push({ label: 'Overdue',   colorClass: 'text-red-400',    items: overdue })
-  if (todayList.length) groups.push({ label: 'Today',     colorClass: 'text-yellow-400', items: todayList })
-  if (tomorrow.length)  groups.push({ label: 'Tomorrow',  colorClass: 'text-blue-400',   items: tomorrow })
-  if (later.length)     groups.push({ label: 'This Week', colorClass: 'text-gray-400',   items: later })
-  return groups
-}
-
-export default function RemindersPanel({ items, permission, onRequestPermission, onClose }: Props) {
-  // Close on Escape
+export default function RemindersPanel({ notifications, permission, onRequestPermission, onClose }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const groups = buildGroups(items)
+  const grouped = URGENCY_GROUPS.map(g => ({
+    ...g,
+    items: notifications.filter(n => n.urgency === g.key),
+  })).filter(g => g.items.length > 0)
+
+  // Count by type for the summary strip
+  const byType = notifications.reduce<Record<NotifType, number>>(
+    (acc, n) => { acc[n.type] = (acc[n.type] ?? 0) + 1; return acc },
+    { followup: 0, task: 0, serviceplan: 0, appointment: 0 },
+  )
+  const hasAny = notifications.length > 0
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -68,11 +63,14 @@ export default function RemindersPanel({ items, permission, onRequestPermission,
 
       {/* Panel */}
       <div className="relative w-80 max-w-full h-full bg-gray-900 border-l border-gray-800 flex flex-col shadow-2xl">
+
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
           <div>
-            <h2 className="text-base font-semibold text-white">Reminders</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Follow-up appointments</p>
+            <h2 className="text-base font-semibold text-white">Notifications</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {notifications.length === 0 ? 'All clear' : `${notifications.length} item${notifications.length !== 1 ? 's' : ''} need attention`}
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -85,7 +83,23 @@ export default function RemindersPanel({ items, permission, onRequestPermission,
           </button>
         </div>
 
-        {/* Permission banner */}
+        {/* Type summary strip */}
+        {hasAny && (
+          <div className="flex gap-2 px-3 py-2 border-b border-gray-800/60 flex-wrap">
+            {(Object.entries(byType) as [NotifType, number][])
+              .filter(([, count]) => count > 0)
+              .map(([type, count]) => {
+                const m = TYPE_META[type]
+                return (
+                  <span key={type} className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${m.bg} ${m.text} font-medium`}>
+                    {m.icon} {count} {m.label}{count !== 1 ? 's' : ''}
+                  </span>
+                )
+              })}
+          </div>
+        )}
+
+        {/* Browser notification permission banner */}
         {permission !== 'granted' && (
           <div className="mx-3 mt-3 bg-indigo-900/30 border border-indigo-700/40 rounded-xl px-3 py-3">
             <p className="text-xs text-indigo-300 font-medium">
@@ -106,51 +120,64 @@ export default function RemindersPanel({ items, permission, onRequestPermission,
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto py-3">
-          {items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-2">
+          {!hasAny ? (
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
               <svg className="w-10 h-10 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
               </svg>
-              <p className="text-sm text-gray-500">No upcoming follow-ups</p>
+              <p className="text-sm text-gray-500">Nothing needs attention this week</p>
             </div>
           ) : (
-            groups.map(group => (
-              <div key={group.label} className="mb-4">
-                <p className={`px-4 py-1 text-xs font-semibold uppercase tracking-wider ${group.colorClass}`}>
-                  {group.label}
+            grouped.map(group => (
+              <div key={group.key} className="mb-4">
+                <p className={`px-4 py-1 text-xs font-semibold uppercase tracking-wider ${group.labelColor}`}>
+                  {group.label} · {group.items.length}
                 </p>
                 <div className="space-y-1 px-3">
-                  {group.items.map(c => (
-                    <Link
-                      key={c.id}
-                      to={`/records/${c.id}`}
-                      onClick={onClose}
-                      className="flex items-start gap-3 p-2.5 rounded-xl hover:bg-gray-800 transition-colors group"
-                    >
-                      <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center shrink-0 mt-0.5">
-                        <span className="text-xs font-semibold text-gray-300">
-                          {[c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
-                        </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-200 truncate group-hover:text-white">
-                          {fullName(c) || '—'}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {c.followUpDate
-                            ? `${fmtDate(c.followUpDate)} at ${fmtTime(c.followUpDate)}`
-                            : ''}
-                          {c.phone ? ` · ${c.phone}` : ''}
-                        </p>
-                        {c.amount > 0 && (
-                          <p className="text-xs text-green-500/70 mt-0.5">{formatCurrency(c.amount)}</p>
-                        )}
-                      </div>
-                      <svg className="w-4 h-4 text-gray-600 shrink-0 mt-1 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                      </svg>
-                    </Link>
-                  ))}
+                  {group.items.map(n => {
+                    const m = TYPE_META[n.type]
+                    return (
+                      <Link
+                        key={n.id}
+                        to={n.linkTo}
+                        onClick={onClose}
+                        className="flex items-start gap-3 p-2.5 rounded-xl hover:bg-gray-800 transition-colors group"
+                      >
+                        {/* Type icon */}
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-sm ${m.bg}`}>
+                          <span>{m.icon}</span>
+                        </div>
+
+                        {/* Text */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className={`text-[10px] font-semibold uppercase tracking-wide ${m.text}`}>{m.label}</span>
+                          </div>
+                          <p className="text-sm font-medium text-gray-200 truncate group-hover:text-white leading-tight">
+                            {n.title}
+                          </p>
+                          {n.subtitle && (
+                            <p className="text-xs text-gray-500 truncate mt-0.5">{n.subtitle}</p>
+                          )}
+                        </div>
+
+                        {/* Due date */}
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          <span className={`text-xs font-medium ${
+                            group.key === 'overdue' ? 'text-red-400' :
+                            group.key === 'today'   ? 'text-yellow-400' :
+                            group.key === 'tomorrow'? 'text-blue-400' :
+                            'text-gray-500'
+                          }`}>
+                            {fmtDate(n.dueDate)}
+                          </span>
+                          <svg className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                          </svg>
+                        </div>
+                      </Link>
+                    )
+                  })}
                 </div>
               </div>
             ))
@@ -160,7 +187,7 @@ export default function RemindersPanel({ items, permission, onRequestPermission,
         {/* Footer */}
         <div className="px-4 py-3 border-t border-gray-800">
           <p className="text-xs text-gray-600 text-center">
-            Showing follow-ups from yesterday through next 2 weeks
+            Follow-ups · Tasks · Service Plans · this week
           </p>
         </div>
       </div>

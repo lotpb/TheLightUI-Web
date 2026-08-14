@@ -23,7 +23,7 @@ function csvEscape(s: string) { return `"${s.replace(/"/g, '""')}"` }
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BlastPage() {
-  usePageTitle('Blast')
+  usePageTitle('Broadcast')
   const companyId = useAuthStore(s => s.companyId)
   const toast = useToast()
 
@@ -136,7 +136,7 @@ export default function BlastPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Blast</h1>
+          <h1 className="text-2xl font-bold text-white">Broadcast</h1>
           <p className="text-sm text-gray-400 mt-0.5">Send a message to a filtered segment</p>
         </div>
         {!loading && (

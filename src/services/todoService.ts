@@ -1,6 +1,6 @@
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, getDocs, writeBatch, serverTimestamp, Timestamp, query, where,
+  doc, getDoc, getDocs, writeBatch, serverTimestamp, Timestamp, query, where,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -85,11 +85,15 @@ export async function addTodo(
 }
 
 export async function getTodo(id: string): Promise<Todo | null> {
-  const snap = await import('firebase/firestore').then(({ getDoc, doc: firestoreDoc }) =>
-    getDoc(firestoreDoc(db, COL, id))
-  )
+  const myCompanyId = getCompanyId()
+  const snap = await getDoc(doc(db, COL, id))
   if (!snap.exists()) return null
-  return docToTodo(snap.id, snap.data() as Record<string, unknown>)
+  const data = snap.data() as Record<string, unknown>
+  if ((data['companyId'] as string | undefined) !== myCompanyId) {
+    console.error(`[getTodo] companyId mismatch on doc ${id}`)
+    return null
+  }
+  return docToTodo(snap.id, data)
 }
 
 export async function toggleTodo(id: string, isCompleted: boolean): Promise<void> {

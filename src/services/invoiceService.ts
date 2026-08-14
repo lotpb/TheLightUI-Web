@@ -25,6 +25,7 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
   return {
     id,
     companyId:       String(data.companyId       ?? ''),
+    shareToken:      data.shareToken ? String(data.shareToken) : undefined,
     customerId:      String(data.customerId       ?? ''),
     customerName:    String(data.customerName     ?? ''),
     customerPhone:   String(data.customerPhone    ?? ''),
@@ -63,9 +64,15 @@ export function subscribeToInvoices(
 }
 
 export async function getInvoice(id: string): Promise<Invoice | null> {
+  const myCompanyId = getCompanyId()
   const snap = await getDoc(doc(db, COL, id))
   if (!snap.exists()) return null
-  return docToInvoice(snap.id, snap.data() as Record<string, unknown>)
+  const data = snap.data() as Record<string, unknown>
+  if ((data['companyId'] as string | undefined) !== myCompanyId) {
+    console.error(`[getInvoice] companyId mismatch on doc ${id}`)
+    return null
+  }
+  return docToInvoice(snap.id, data)
 }
 
 export async function createInvoice(

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { createInvoice, getInvoice, updateInvoice } from '../../services/invoiceService'
 import { subscribeToCustomers } from '../../services/customerService'
+import { subscribeToCatalog } from '../../services/catalogService'
 import { fullName, type CustomerItem } from '../../models/customer'
+import type { CatalogItem } from '../../models/catalogItem'
 import {
   fmtCurrency, generateInvoiceNumber, lineItemTotal,
   type Invoice, type InvoiceLineItem,
@@ -46,6 +48,12 @@ export default function InvoiceFormPage() {
   const [customerQuery, setCustQuery] = useState('')
   const [showCustList, setShowCustList] = useState(false)
 
+  // Catalog picker state
+  const [catalog, setCatalog]           = useState<CatalogItem[]>([])
+  const [showCatalog, setShowCatalog]   = useState(false)
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const catalogRef = useRef<HTMLDivElement>(null)
+
   // Form state
   const [customerId,      setCustomerId]      = useState('')
   const [customerName,    setCustomerName]    = useState('')
@@ -65,6 +73,23 @@ export default function InvoiceFormPage() {
     const unsub = subscribeToCustomers(items => setCustomers(items), () => {})
     return unsub
   }, [companyId])
+
+  useEffect(() => {
+    const unsub = subscribeToCatalog(setCatalog, () => {})
+    return unsub
+  }, [companyId])
+
+  // Close catalog dropdown on outside click
+  useEffect(() => {
+    if (!showCatalog) return
+    function onDown(e: MouseEvent) {
+      if (catalogRef.current && !catalogRef.current.contains(e.target as Node)) {
+        setShowCatalog(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [showCatalog])
 
   // Load existing invoice (edit mode)
   useEffect(() => {
@@ -129,6 +154,22 @@ export default function InvoiceFormPage() {
     if (lineItems.length === 1) return
     setLineItems(prev => prev.filter((_, i) => i !== idx))
   }
+
+  function addFromCatalog(item: CatalogItem) {
+    setLineItems(prev => [...prev, { description: item.name + (item.description ? ` — ${item.description}` : ''), qty: 1, rate: item.price }])
+    setShowCatalog(false)
+    setCatalogQuery('')
+  }
+
+  const catalogSuggestions = useMemo(() => {
+    const q = catalogQuery.trim().toLowerCase()
+    if (!q) return catalog.slice(0, 20)
+    return catalog.filter(i =>
+      i.name.toLowerCase().includes(q) ||
+      i.description.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q),
+    ).slice(0, 20)
+  }, [catalog, catalogQuery])
 
   const subtotal = lineItems.reduce((s, l) => s + lineItemTotal(l), 0)
   const taxAmt   = subtotal * (taxRate / 100)
@@ -266,14 +307,67 @@ export default function InvoiceFormPage() {
 
       {/* Line items */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between gap-2">
           <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Line Items</p>
-          <button
-            onClick={() => setLineItems(prev => [...prev, emptyLine()])}
-            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            + Add line
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Catalog picker */}
+            {catalog.length > 0 && (
+              <div className="relative" ref={catalogRef}>
+                <button
+                  type="button"
+                  onClick={() => { setShowCatalog(v => !v); setCatalogQuery('') }}
+                  className="text-xs text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1"
+                >
+                  📦 Catalog
+                </button>
+                {showCatalog && (
+                  <div className="absolute right-0 top-full mt-1 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">
+                    <div className="p-2 border-b border-gray-700/50">
+                      <input
+                        autoFocus
+                        type="text"
+                        value={catalogQuery}
+                        onChange={e => setCatalogQuery(e.target.value)}
+                        placeholder="Search catalog…"
+                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div className="max-h-64 overflow-y-auto">
+                      {catalogSuggestions.length === 0 ? (
+                        <p className="px-4 py-3 text-sm text-gray-500">No items found</p>
+                      ) : (
+                        catalogSuggestions.map(item => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => addFromCatalog(item)}
+                            className="w-full text-left px-4 py-2.5 hover:bg-gray-700/50 transition-colors flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-200 truncate">{item.name}</p>
+                              {item.description && (
+                                <p className="text-xs text-gray-500 truncate">{item.description}</p>
+                              )}
+                            </div>
+                            <span className="text-sm font-semibold text-green-400 shrink-0">
+                              ${item.price.toFixed(2)}/{item.unit}
+                            </span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setLineItems(prev => [...prev, emptyLine()])}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              + Add line
+            </button>
+          </div>
         </div>
 
         <div className="divide-y divide-gray-700/30">

@@ -1,13 +1,20 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, getDocs, writeBatch, query, where, Timestamp,
-  type Unsubscribe,
+  onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy,
+  startAfter, limit, Timestamp,
+  type QueryDocumentSnapshot, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { customerFromDoc, customerToFirestore, type CustomerItem } from '../models/customer'
 import { getCompanyId } from '../stores/authStore'
 
 const COLLECTION = 'Customers'
+
+// Safety cap for the real-time listener. Prevents loading 100k+ documents into
+// the browser's JS heap. Companies that grow past this limit should migrate to
+// server-side aggregation (Cloud Functions) for analytics and cursor pagination
+// for the list view. 2 000 covers virtually all production use cases today.
+const REALTIME_LIMIT = 2_000
 
 export function subscribeToCustomers(
   onData: (items: CustomerItem[]) => void,
@@ -18,11 +25,20 @@ export function subscribeToCustomers(
     onError(new Error('Not authenticated'))
     return () => {}
   }
-  // No orderBy — docs missing creationDate are silently dropped by Firestore
-  // when orderBy is used. Sort client-side so every document is included.
+  // No orderBy on a data field — docs missing that field are silently dropped
+  // by Firestore when orderBy is used. Sort client-side so every document is
+  // included. The limit is applied without orderBy; Firestore uses document-ID
+  // order as the default, which is stable and requires no composite index.
   return onSnapshot(
-    query(collection(db, COLLECTION), where('companyId', '==', companyId)),
+    query(collection(db, COLLECTION), where('companyId', '==', companyId), limit(REALTIME_LIMIT)),
     (snap) => {
+      if (snap.size === REALTIME_LIMIT) {
+        console.warn(
+          `[subscribeToCustomers] hit ${REALTIME_LIMIT}-document cap for company ${companyId}. ` +
+          'Records beyond this limit are not visible. Implement server-side aggregation and ' +
+          'cursor pagination to support larger datasets.'
+        )
+      }
       const items: CustomerItem[] = []
       for (const d of snap.docs) {
         try {
@@ -39,8 +55,13 @@ export function subscribeToCustomers(
 }
 
 export async function getCustomer(id: string): Promise<CustomerItem | null> {
+  const myCompanyId = getCompanyId()
   const snap = await getDoc(doc(db, COLLECTION, id))
   if (!snap.exists()) return null
+  if ((snap.data()['companyId'] as string | undefined) !== myCompanyId) {
+    console.error(`[getCustomer] companyId mismatch on doc ${id}`)
+    return null
+  }
   return customerFromDoc(snap)
 }
 
@@ -73,6 +94,7 @@ export async function deactivateCustomer(id: string): Promise<void> {
 }
 
 export async function bulkDeactivate(ids: string[]): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
@@ -84,6 +106,7 @@ export async function bulkDeactivate(ids: string[]): Promise<void> {
 }
 
 export async function bulkAssignSalesman(ids: string[], salesman: string): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
@@ -99,6 +122,7 @@ export async function updateTags(id: string, tags: string[]): Promise<void> {
 }
 
 export async function bulkSetCategory(ids: string[], category: string): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
@@ -110,6 +134,7 @@ export async function bulkSetCategory(ids: string[], category: string): Promise<
 }
 
 export async function bulkSetFollowUpDate(ids: string[], date: Date | null): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   const value = date ? Timestamp.fromDate(date) : null
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
@@ -122,6 +147,7 @@ export async function bulkSetFollowUpDate(ids: string[], date: Date | null): Pro
 }
 
 export async function bulkSetCallback(ids: string[], callback: string): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
@@ -133,6 +159,7 @@ export async function bulkSetCallback(ids: string[], callback: string): Promise<
 }
 
 export async function bulkDelete(ids: string[]): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
@@ -267,18 +294,33 @@ export function exportCustomersToJSON(items: CustomerItem[]): string {
   return JSON.stringify(records, null, 2)
 }
 
+// Fetches all company customers in 500-document cursor-paginated chunks.
+// orderBy('__name__') is always indexed (no composite index needed) and
+// ensures every document is included regardless of field presence.
+const EXPORT_PAGE_SIZE = 500
+
 export async function getAllCustomersOnce(): Promise<CustomerItem[]> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
-  const snap = await getDocs(
-    query(collection(db, COLLECTION), where('companyId', '==', companyId))
-  )
-  const items: CustomerItem[] = []
-  for (const d of snap.docs) {
-    try { items.push(customerFromDoc(d)) } catch { /* skip malformed */ }
+
+  const all: CustomerItem[] = []
+  let cursor: QueryDocumentSnapshot | undefined
+
+  while (true) {
+    const snap = await getDocs(
+      cursor
+        ? query(collection(db, COLLECTION), where('companyId', '==', companyId), orderBy('__name__'), startAfter(cursor), limit(EXPORT_PAGE_SIZE))
+        : query(collection(db, COLLECTION), where('companyId', '==', companyId), orderBy('__name__'), limit(EXPORT_PAGE_SIZE))
+    )
+    for (const d of snap.docs) {
+      try { all.push(customerFromDoc(d)) } catch { /* skip malformed */ }
+    }
+    if (snap.size < EXPORT_PAGE_SIZE) break   // last page
+    cursor = snap.docs[snap.docs.length - 1]
   }
-  items.sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
-  return items
+
+  all.sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
+  return all
 }
 
 export async function importCustomersFromJSON(

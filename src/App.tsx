@@ -36,7 +36,7 @@ const CallbackQueuePage  = lazy(() => import('./pages/callback/CallbackQueuePage
 const TargetsPage        = lazy(() => import('./pages/targets/TargetsPage'))
 const ActivityFeedPage   = lazy(() => import('./pages/activity/ActivityFeedPage'))
 const ImportPage         = lazy(() => import('./pages/import/ImportPage'))
-const BlastPage          = lazy(() => import('./pages/blast/BlastPage'))
+const BroadcastPage      = lazy(() => import('./pages/blast/BlastPage'))
 const FunnelPage         = lazy(() => import('./pages/funnel/FunnelPage'))
 const AppointmentsPage   = lazy(() => import('./pages/appointments/AppointmentsPage'))
 const InvoiceListPage    = lazy(() => import('./pages/invoices/InvoiceListPage'))
@@ -47,6 +47,12 @@ const FollowUpsPage      = lazy(() => import('./pages/followups/FollowUpsPage'))
 const ForecastPage       = lazy(() => import('./pages/forecast/ForecastPage'))
 const BatchPage          = lazy(() => import('./pages/batch/BatchPage'))
 const ServicePlansPage   = lazy(() => import('./pages/serviceplans/ServicePlansPage'))
+const LeaderboardPage    = lazy(() => import('./pages/leaderboard/LeaderboardPage'))
+const CatalogPage        = lazy(() => import('./pages/catalog/CatalogPage'))
+const PublicInvoicePage   = lazy(() => import('./pages/invoices/PublicInvoicePage'))
+const TimeTrackingPage   = lazy(() => import('./pages/timetracking/TimeTrackingPage'))
+const ReferralsPage      = lazy(() => import('./pages/referrals/ReferralsPage'))
+const TeamPage           = lazy(() => import('./pages/team/TeamPage'))
 
 function PageLoader() {
   return (
@@ -83,6 +89,7 @@ const router = createBrowserRouter(
     <Route element={<RootLayout />}>
       <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/i/:token" element={<PublicInvoicePage />} />
       <Route path="/" element={<Protected><Navigate to="/dashboard" replace /></Protected>} />
 
       <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
@@ -118,7 +125,7 @@ const router = createBrowserRouter(
       <Route path="/targets"           element={<Protected><TargetsPage /></Protected>} />
       <Route path="/activity"          element={<Protected><ActivityFeedPage /></Protected>} />
       <Route path="/import"            element={<Protected><ImportPage /></Protected>} />
-      <Route path="/blast"             element={<Protected><BlastPage /></Protected>} />
+      <Route path="/blast"             element={<Protected><BroadcastPage /></Protected>} />
       <Route path="/funnel"            element={<Protected><FunnelPage /></Protected>} />
       <Route path="/appointments"      element={<Protected><AppointmentsPage /></Protected>} />
       <Route path="/invoices"          element={<Protected><InvoiceListPage /></Protected>} />
@@ -130,6 +137,11 @@ const router = createBrowserRouter(
       <Route path="/forecast"          element={<Protected><ForecastPage /></Protected>} />
       <Route path="/batch"             element={<Protected><BatchPage /></Protected>} />
       <Route path="/service-plans"     element={<Protected><ServicePlansPage /></Protected>} />
+      <Route path="/time-tracking"     element={<Protected><TimeTrackingPage /></Protected>} />
+      <Route path="/referrals"         element={<Protected><ReferralsPage /></Protected>} />
+      <Route path="/team"              element={<Protected><TeamPage /></Protected>} />
+      <Route path="/leaderboard"       element={<Protected><LeaderboardPage /></Protected>} />
+      <Route path="/catalog"           element={<Protected><CatalogPage /></Protected>} />
       <Route path="/tip"               element={<Protected><TipPage /></Protected>} />
       <Route path="/settings"          element={<Protected><SettingsPage /></Protected>} />
       <Route path="/profile"           element={<Protected><ProfilePage /></Protected>} />
