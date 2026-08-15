@@ -1,5 +1,5 @@
 
-# TheLight-Website
+# TheLight - See your business Clearly
 @ Software Solutions
 
 ## About
