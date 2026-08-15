@@ -1,5 +1,6 @@
 
-# TheLight-Web
+# TheLight-Website
+@ Software Solutions
 
 ## About
 The Light is a modern Application designed to make managing your business simple and efficient.
