@@ -1,5 +1,7 @@
 
-# TheLight Software
+<img width="1774" height="887" alt="TheLight Logo2" src="https://github.com/user-attachments/assets/848a60c6-ebcd-464a-a309-57311377cbbd" />
+
+
 ### See your business Clearly
 @ Software Solutions
 
