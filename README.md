@@ -1,16 +1,17 @@
 
-# TheLight - See your business Clearly
+# TheLight Software
+### See your business Clearly
 @ Software Solutions
 
-## About
+### About
 The Light is a modern Application designed to make managing your business simple and efficient.
-## Website
+### Website
  https://thelightui.web.app/
 
 
 
 
-Powerful CRM & Business Management
+## Powerful CRM & Business Management
 
 Customer & Lead Management
 Manage customers, leads, vendors, and employees in one place. Search, filter, assign salespeople, track follow-ups, and keep detailed customer histories.
