@@ -9,8 +9,6 @@ The Light is a modern Application designed to make managing your business simple
  https://thelightui.web.app/
 
 
-
-
 ## Powerful CRM & Business Management
 
 Customer & Lead Management
@@ -46,3 +44,8 @@ Manage company settings, user profiles, authentication, and account preferences 
 Everything Your Team Needs in One Place
 
 TheLight brings CRM, sales, communication, scheduling, financial management, reporting, and productivity together in one powerful platform—helping your team stay organized, close more business, and grow.
+
+<hr>
+<img width="1095" height="1224" alt="Dashboard | TheLight" src="https://github.com/user-attachments/assets/0dca4d09-1ee0-457d-91b5-c68b6f39b6b3" />
+
+
