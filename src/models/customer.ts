@@ -30,8 +30,8 @@ export interface CustomerItem {
   contractor: string
   photo: string
   lastUpdateDate: Date
-  startDate: Date
-  completionDate: Date
+  startDate: Date | null
+  completionDate: Date | null
   quantity: number
   salesman: string
   job: string
@@ -45,6 +45,21 @@ export interface CustomerItem {
   manager: string
   followUpDate: Date | null
   tags: string[]
+  paymentTerms: string
+  taxId: string
+  accountNumber: string
+  payType: string
+  commissionRate: string
+  userRole: string
+  lastLogin: string
+  employeeStatus: string
+  leadStatus: string
+  lastContactDate: string
+  contactAttempts: number
+  companyName: string
+  leadSource: string
+  paymentStatus: string
+  customFields: Record<string, string>
 }
 
 export const emptyCustomer = (): CustomerItem => ({
@@ -66,8 +81,8 @@ export const emptyCustomer = (): CustomerItem => ({
   contractor: '',
   photo: '',
   lastUpdateDate: new Date(),
-  startDate: new Date(),
-  completionDate: new Date(),
+  startDate: null,
+  completionDate: null,
   quantity: 0,
   salesman: '',
   job: '',
@@ -81,6 +96,21 @@ export const emptyCustomer = (): CustomerItem => ({
   manager: '',
   followUpDate: null,
   tags: [],
+  paymentTerms: '',
+  taxId: '',
+  accountNumber: '',
+  payType: '',
+  commissionRate: '',
+  userRole: '',
+  lastLogin: '',
+  employeeStatus: '',
+  leadStatus: '',
+  lastContactDate: '',
+  contactAttempts: 0,
+  companyName: '',
+  leadSource: '',
+  paymentStatus: '',
+  customFields: {},
 })
 
 // Mirrors the defensive parsing in CustomerFirestore.swift
@@ -100,6 +130,11 @@ function parseAdNo(v: unknown): string {
 function parseDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
   return new Date()
+}
+
+function parseDateOrNull(v: unknown): Date | null {
+  if (v instanceof Timestamp) return v.toDate()
+  return null
 }
 
 function str(data: DocumentData, field: string): string {
@@ -144,8 +179,8 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     contractor: str(d, 'contractor'),
     photo: str(d, 'photo'),
     lastUpdateDate: parseDate(d['lastUpdate']),
-    startDate: parseDate(d['start']),
-    completionDate: parseDate(d['completion']),
+    startDate: parseDateOrNull(d['start']),
+    completionDate: parseDateOrNull(d['completion']),
     quantity: num(d, 'quan'),        // Firestore field is "quan", not "quantity"
     salesman: str(d, 'salesman'),
     job: str(d, 'job'),
@@ -159,7 +194,31 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     manager: str(d, 'manager'),
     followUpDate: d['followUpDate'] ? parseDate(d['followUpDate']) : null,
     tags: Array.isArray(d['tags']) ? (d['tags'] as unknown[]).filter((t): t is string => typeof t === 'string') : [],
+    paymentTerms: str(d, 'paymentTerms'),
+    taxId: str(d, 'taxId'),
+    accountNumber: str(d, 'accountNumber'),
+    payType: str(d, 'payType'),
+    commissionRate: str(d, 'commissionRate'),
+    userRole: str(d, 'userRole'),
+    lastLogin: str(d, 'lastLogin'),
+    employeeStatus: str(d, 'employeeStatus'),
+    leadStatus: str(d, 'leadStatus'),
+    lastContactDate: str(d, 'lastContactDate'),
+    contactAttempts: num(d, 'contactAttempts'),
+    companyName: str(d, 'companyName'),
+    leadSource: str(d, 'leadSource'),
+    paymentStatus: str(d, 'paymentStatus'),
+    customFields: parseCustomFields(d['customFields']),
   }
+}
+
+function parseCustomFields(v: unknown): Record<string, string> {
+  if (!v || typeof v !== 'object') return {}
+  const out: Record<string, string> = {}
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === 'string' || typeof val === 'number') out[k] = String(val)
+  }
+  return out
 }
 
 export function customerToFirestore(c: CustomerItem, userId?: string): Record<string, unknown> {
@@ -183,8 +242,8 @@ export function customerToFirestore(c: CustomerItem, userId?: string): Record<st
     comments: c.comments,
     spouse: c.spouse,
     photo: c.photo,
-    start: Timestamp.fromDate(c.startDate),
-    completion: Timestamp.fromDate(c.completionDate),
+    start: c.startDate ? Timestamp.fromDate(c.startDate) : null,
+    completion: c.completionDate ? Timestamp.fromDate(c.completionDate) : null,
     lastUpdate: Timestamp.fromDate(new Date()),
     creationDate: Timestamp.fromDate(c.creationDate),
     callback: c.callback,
@@ -195,6 +254,21 @@ export function customerToFirestore(c: CustomerItem, userId?: string): Record<st
     manager: c.manager,
     followUpDate: c.followUpDate ? Timestamp.fromDate(c.followUpDate) : null,
     tags: c.tags ?? [],
+    paymentTerms: c.paymentTerms,
+    taxId: c.taxId,
+    accountNumber: c.accountNumber,
+    payType: c.payType,
+    commissionRate: c.commissionRate,
+    userRole: c.userRole,
+    lastLogin: c.lastLogin,
+    employeeStatus: c.employeeStatus,
+    leadStatus: c.leadStatus,
+    lastContactDate: c.lastContactDate,
+    contactAttempts: c.contactAttempts,
+    companyName: c.companyName,
+    leadSource: c.leadSource,
+    paymentStatus: c.paymentStatus,
+    customFields: c.customFields ?? {},
   }
   if (userId) data['uid'] = userId
   if (c.category) data['category'] = c.category
@@ -209,6 +283,7 @@ export function formatCurrency(cents: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents)
 }
 
-export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'>): string {
+export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'> & { category?: string }): string {
+  if (c.category?.toLowerCase() === 'vendor') return c.first || ''
   return [c.first, c.lastname].filter(Boolean).join(' ')
 }

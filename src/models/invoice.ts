@@ -1,4 +1,5 @@
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue'
+export type InvoiceStatus   = 'draft' | 'sent' | 'paid' | 'overdue'
+export type RecurringInterval = 'monthly' | 'quarterly' | 'yearly'
 
 export interface InvoiceLineItem {
   description: string
@@ -24,6 +25,11 @@ export interface Invoice {
   taxRate: number
   createdAt: Date
   updatedAt: Date
+  recurring?: RecurringInterval | null
+  nextRecurDate?: Date | null
+  lastGeneratedAt?: Date | null
+  generatedFrom?: string | null
+  paymentLink?: string | null
 }
 
 export function lineItemTotal(item: InvoiceLineItem): number {

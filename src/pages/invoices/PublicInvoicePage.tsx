@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { getPublicInvoice, type PublicInvoiceSnapshot } from '../../services/publicInvoiceService'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { fmtCurrency, lineItemTotal } from '../../models/invoice'
+import { isSafeHttpUrl } from '../../utils/safeUrl'
 
 function subtotal(inv: PublicInvoiceSnapshot) {
   return inv.lineItems.reduce((s, l) => s + lineItemTotal(l), 0)
@@ -29,8 +31,12 @@ function statusInfo(status: string, dueDate: Date) {
 
 export default function PublicInvoicePage() {
   const { token } = useParams<{ token: string }>()
+  const [searchParams] = useSearchParams()
   const [invoice, setInvoice] = useState<PublicInvoiceSnapshot | null>(null)
   const [loading, setLoading]  = useState(true)
+  const [paying, setPaying]    = useState(false)
+  const [payError, setPayError] = useState<string | null>(null)
+  const justPaid = searchParams.get('paid') === '1'
 
   useEffect(() => {
     document.title = 'Invoice'
@@ -39,6 +45,34 @@ export default function PublicInvoicePage() {
       .then(inv => { setInvoice(inv); if (inv) document.title = `Invoice ${inv.invoiceNumber}` })
       .finally(() => setLoading(false))
   }, [token])
+
+  async function handlePayNow() {
+    if (!token || !invoice) return
+    // If a custom payment link is stored on the snapshot, use it directly —
+    // but only if it's a genuine http(s) URL. A non-http(s) value can't be a
+    // legitimate payment link, so surface an error instead of navigating
+    // there or silently falling back to a processor the company didn't ask for.
+    if (invoice.paymentLink) {
+      if (!isSafeHttpUrl(invoice.paymentLink)) {
+        setPayError('This invoice\'s payment link is misconfigured. Please contact us directly.')
+        return
+      }
+      window.location.href = invoice.paymentLink
+      return
+    }
+    // Fall back to Stripe Checkout Session (requires STRIPE_SECRET_KEY configured)
+    setPaying(true)
+    setPayError(null)
+    try {
+      const fns = getFunctions()
+      const createCheckout = httpsCallable<{ token: string }, { url: string }>(fns, 'createStripeCheckout')
+      const result = await createCheckout({ token })
+      window.location.href = result.data.url
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : 'Payment unavailable. Please contact us directly.')
+      setPaying(false)
+    }
+  }
 
   // Print CSS
   useEffect(() => {
@@ -76,13 +110,34 @@ export default function PublicInvoicePage() {
   const sub = subtotal(invoice)
   const tax = taxAmount(invoice)
   const tot = total(invoice)
-  const { label: statusLabel, color: statusColor, bg: statusBg } = statusInfo(invoice.status, invoice.dueDate)
+  const isPaid = invoice.status === 'paid' || justPaid
+  const { label: statusLabel, color: statusColor, bg: statusBg } = statusInfo(isPaid ? 'paid' : invoice.status, invoice.dueDate)
 
   return (
     <div style={{ minHeight: '100vh', background: '#f1f5f9', fontFamily: 'system-ui, -apple-system, sans-serif', padding: '24px 16px 48px' }}>
 
+      {/* Payment success banner */}
+      {justPaid && (
+        <div style={{ maxWidth: 680, margin: '0 auto 16px', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 12, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 20 }}>✅</span>
+          <div>
+            <p style={{ margin: 0, fontWeight: 700, color: '#15803d', fontSize: 14 }}>Payment received — thank you!</p>
+            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#166534' }}>A receipt will be sent to your email if provided.</p>
+          </div>
+        </div>
+      )}
+
       {/* Print / actions bar */}
-      <div className="no-print" style={{ maxWidth: 680, margin: '0 auto 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+      <div className="no-print" style={{ maxWidth: 680, margin: '0 auto 16px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        {!isPaid && (
+          <button
+            onClick={handlePayNow}
+            disabled={paying}
+            style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: paying ? '#6b7280' : '#16a34a', color: 'white', fontSize: 13, cursor: paying ? 'default' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            {paying ? '⏳ Redirecting…' : '💳 Pay Now'}
+          </button>
+        )}
         <button
           onClick={() => window.print()}
           style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', color: '#475569', fontSize: 13, cursor: 'pointer', fontWeight: 500 }}
@@ -90,6 +145,12 @@ export default function PublicInvoicePage() {
           🖨️ Print
         </button>
       </div>
+
+      {payError && (
+        <div style={{ maxWidth: 680, margin: '0 auto 12px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 10, padding: '10px 16px' }}>
+          <p style={{ margin: 0, fontSize: 13, color: '#dc2626' }}>{payError}</p>
+        </div>
+      )}
 
       {/* Invoice document */}
       <div style={{ maxWidth: 680, margin: '0 auto', background: 'white', borderRadius: 16, boxShadow: '0 4px 24px rgba(0,0,0,0.08)', overflow: 'hidden' }}>

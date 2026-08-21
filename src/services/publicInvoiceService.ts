@@ -33,6 +33,7 @@ export interface PublicInvoiceSnapshot {
   coPhone: string
   coEmail: string
   sharedAt: Date
+  paymentLink: string | null
 }
 
 function toDate(v: unknown): Date {
@@ -71,6 +72,7 @@ export async function generateShareToken(
     coPhone:         coInfo.phone,
     coEmail:         coInfo.email,
     sharedAt:        serverTimestamp(),
+    paymentLink:     invoice.paymentLink ?? null,
   })
 
   if (!invoice.shareToken) {
@@ -108,5 +110,6 @@ export async function getPublicInvoice(token: string): Promise<PublicInvoiceSnap
     coPhone:  String(d.coPhone  ?? ''),
     coEmail:  String(d.coEmail  ?? ''),
     sharedAt: toDate(d.sharedAt),
+    paymentLink: d.paymentLink ? String(d.paymentLink) : null,
   }
 }

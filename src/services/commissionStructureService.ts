@@ -30,12 +30,12 @@ export function subscribeToCommissionStructure(
   if (!companyId) return () => {}
   return onSnapshot(doc(db, COL, companyId), snap => {
     if (!snap.exists()) { onData(DEFAULT_STRUCTURE); return }
-    const d = snap.data() as Partial<CommissionStructure>
+    const d = snap.data() as Record<string, unknown>
     onData({
-      mode:        d.mode ?? 'flat',
+      mode:        d.mode === 'flat' || d.mode === 'tiered' ? d.mode : 'flat',
       defaultRate: typeof d.defaultRate === 'number' ? d.defaultRate : 10,
-      tiers:       Array.isArray(d.tiers) ? d.tiers : [],
-      overrides:   d.overrides && typeof d.overrides === 'object' ? d.overrides : {},
+      tiers:       Array.isArray(d.tiers) ? d.tiers as CommissionTier[] : [],
+      overrides:   d.overrides && typeof d.overrides === 'object' ? d.overrides as Record<string, number> : {},
     })
   })
 }

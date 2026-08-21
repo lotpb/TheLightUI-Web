@@ -30,7 +30,7 @@ export function scoreLead(c: CustomerItem): LeadScore {
     factor('Appointment in future',  20, !!(c.startDate && c.startDate.getTime() > Date.now())),
     factor('Job or product known',   10, !!(c.job.trim() || c.product.trim())),
     factor('Salesman assigned',       5, !!c.salesman.trim()),
-    factor('Lead source known',       5, !!c.adNo.trim()),
+    factor('Lead source known',       5, !!c.leadSource.trim()),
     factor('Has deal amount',         5, c.amount > 0),
   ]
 

@@ -11,7 +11,7 @@ import type { CustomerItem } from '../../models/customer'
 
 const EPOCH_THRESHOLD = 86_400_000   // dates at/before epoch+1day are sentinel zeros
 
-function isValidDate(d: Date) { return d.getTime() > EPOCH_THRESHOLD }
+function isValidDate(d: Date | null): d is Date { return !!d && d.getTime() > EPOCH_THRESHOLD }
 
 function isCustomer(c: CustomerItem) {
   return c.category.toLowerCase() === 'customer'

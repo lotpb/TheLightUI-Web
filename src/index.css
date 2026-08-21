@@ -113,14 +113,35 @@ html.light-mode {
   --gray-950: 241 245 249;
   --gray-900: 232 238 245;
   --gray-800: 255 255 255;
-  --gray-700: 241 245 249;
-  --gray-600: 203 213 225;
-  --gray-500: 148 163 184;
-  --gray-400: 100 116 139;
-  --gray-300: 71 85 105;
-  --gray-200: 51 65 85;
-  --gray-100: 30 41 59;
+  --gray-700: 210 220 232;  /* distinct from 950 so buttons/inputs are visible */
+  --gray-600: 175 190 207;
+  --gray-500: 71 85 105;
+  --gray-400: 51 65 85;
+  --gray-300: 30 41 59;
+  --gray-200: 15 23 42;
+  --gray-100: 8 12 28;
 }
+
+/* text-white maps to --color-white (dark navy in light mode) which is correct
+   for text on card/page backgrounds, but elements with a solid colored
+   background (indigo buttons, red badges, active nav) still need true white. */
+html.light-mode .bg-indigo-600,
+html.light-mode .bg-indigo-500,
+html.light-mode .bg-red-500,
+html.light-mode .bg-red-600,
+html.light-mode .bg-violet-600,
+html.light-mode .btn-primary {
+  color: rgb(255 255 255) !important;
+}
+
+/* Hardcoded Tailwind color overrides for light mode readability */
+html.light-mode .text-green-400  { color: #15803d !important; } /* amount/success: green-700 */
+html.light-mode .text-green-500  { color: #15803d !important; }
+html.light-mode .text-indigo-400 { color: #4338ca !important; } /* links: indigo-700 */
+html.light-mode .text-indigo-300 { color: #4f46e5 !important; } /* role badges */
+html.light-mode .text-teal-300   { color: #0f766e !important; }
+html.light-mode .text-yellow-300 { color: #a16207 !important; }
+html.light-mode .text-red-400    { color: #b91c1c !important; }
 
 /* ─────────────────────────────────────────────────────────────────────── */
 
@@ -131,6 +152,10 @@ html.light-mode {
   .input-field {
     @apply w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100
            placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent;
+  }
+  input[type="date"].input-field {
+    -webkit-appearance: none;
+    appearance: none;
   }
   .select-field {
     @apply w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100

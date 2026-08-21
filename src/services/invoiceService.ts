@@ -5,7 +5,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
-import type { Invoice, InvoiceLineItem } from '../models/invoice'
+import { generateInvoiceNumber, type Invoice, type InvoiceLineItem, type RecurringInterval } from '../models/invoice'
 
 const COL = 'Invoices'
 
@@ -40,6 +40,11 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     taxRate:    Number(data.taxRate  ?? 0),
     createdAt:  toDate(data.createdAt),
     updatedAt:  toDate(data.updatedAt),
+    recurring:       (data.recurring as RecurringInterval | null | undefined) ?? null,
+    nextRecurDate:   data.nextRecurDate ? toDate(data.nextRecurDate) : null,
+    lastGeneratedAt: data.lastGeneratedAt ? toDate(data.lastGeneratedAt) : null,
+    generatedFrom:   data.generatedFrom ? String(data.generatedFrom) : null,
+    paymentLink:     data.paymentLink ? String(data.paymentLink) : null,
   }
 }
 
@@ -94,6 +99,9 @@ export async function createInvoice(
     lineItems:  inv.lineItems,
     notes:      inv.notes,
     taxRate:    inv.taxRate,
+    recurring:      inv.recurring     ?? null,
+    nextRecurDate:  inv.nextRecurDate  ? Timestamp.fromDate(inv.nextRecurDate)  : null,
+    generatedFrom:  inv.generatedFrom  ?? null,
     createdAt:  serverTimestamp(),
     updatedAt:  serverTimestamp(),
   })
@@ -117,7 +125,55 @@ export async function updateInvoice(
   if (fields.lineItems       !== undefined) updates.lineItems       = fields.lineItems
   if (fields.notes           !== undefined) updates.notes           = fields.notes
   if (fields.taxRate         !== undefined) updates.taxRate         = fields.taxRate
+  if (fields.recurring        !== undefined) updates.recurring        = fields.recurring ?? null
+  if (fields.nextRecurDate    !== undefined) updates.nextRecurDate    = fields.nextRecurDate    ? Timestamp.fromDate(fields.nextRecurDate)    : null
+  if (fields.lastGeneratedAt  !== undefined) updates.lastGeneratedAt  = fields.lastGeneratedAt  ? Timestamp.fromDate(fields.lastGeneratedAt)  : null
+  if (fields.paymentLink      !== undefined) updates.paymentLink      = fields.paymentLink ?? null
   await updateDoc(doc(db, COL, id), updates)
+}
+
+function advanceByInterval(from: Date, interval: RecurringInterval): Date {
+  const d = new Date(from)
+  switch (interval) {
+    case 'monthly':   d.setMonth(d.getMonth() + 1); break
+    case 'quarterly': d.setMonth(d.getMonth() + 3); break
+    case 'yearly':    d.setFullYear(d.getFullYear() + 1); break
+  }
+  return d
+}
+
+export async function generateNextInvoice(template: Invoice): Promise<string> {
+  if (!template.recurring) throw new Error('Invoice is not set to recurring')
+  const issueDate = template.nextRecurDate ?? new Date()
+  const dueOffset = template.dueDate.getTime() - template.issueDate.getTime()
+  const dueDate   = new Date(issueDate.getTime() + Math.max(dueOffset, 0))
+
+  const newId = await createInvoice({
+    companyId:       template.companyId,
+    customerId:      template.customerId,
+    customerName:    template.customerName,
+    customerPhone:   template.customerPhone,
+    customerEmail:   template.customerEmail,
+    customerAddress: template.customerAddress,
+    invoiceNumber:   generateInvoiceNumber(),
+    issueDate,
+    dueDate,
+    status:          'sent',
+    lineItems:       template.lineItems,
+    notes:           template.notes,
+    taxRate:         template.taxRate,
+    recurring:       null,
+    nextRecurDate:   null,
+    lastGeneratedAt: null,
+    generatedFrom:   template.id,
+  })
+
+  await updateInvoice(template.id, {
+    nextRecurDate:   advanceByInterval(issueDate, template.recurring),
+    lastGeneratedAt: new Date(),
+  })
+
+  return newId
 }
 
 export async function deleteInvoice(id: string): Promise<void> {

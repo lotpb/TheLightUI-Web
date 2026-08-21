@@ -1,12 +1,27 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import type { Notification, NotifType } from '../hooks/useReminders'
+import type { Notification, NotifType, RecentActivity } from '../hooks/useReminders'
 
 interface Props {
   notifications: Notification[]
+  recentActivity: RecentActivity[]
   permission: NotificationPermission
   onRequestPermission: () => void
   onClose: () => void
+}
+
+const ACTIVITY_META: Record<RecentActivity['kind'], { icon: string; color: string }> = {
+  lead:     { icon: '👤', color: 'text-indigo-400' },
+  customer: { icon: '🏠', color: 'text-green-400'  },
+  invoice:  { icon: '🧾', color: 'text-amber-400'  },
+}
+
+function fmtAgo(d: Date): string {
+  const diff = Math.round((Date.now() - d.getTime()) / 60000)
+  if (diff < 1)  return 'Just now'
+  if (diff < 60) return `${diff}m ago`
+  const hrs = Math.floor(diff / 60)
+  return hrs === 1 ? '1h ago' : `${hrs}h ago`
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -37,7 +52,7 @@ const URGENCY_GROUPS: Array<{ key: Notification['urgency']; label: string; label
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
-export default function RemindersPanel({ notifications, permission, onRequestPermission, onClose }: Props) {
+export default function RemindersPanel({ notifications, recentActivity, permission, onRequestPermission, onClose }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -120,7 +135,7 @@ export default function RemindersPanel({ notifications, permission, onRequestPer
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto py-3">
-          {!hasAny ? (
+          {!hasAny && recentActivity.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3">
               <svg className="w-10 h-10 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -128,66 +143,96 @@ export default function RemindersPanel({ notifications, permission, onRequestPer
               <p className="text-sm text-gray-500">Nothing needs attention this week</p>
             </div>
           ) : (
-            grouped.map(group => (
-              <div key={group.key} className="mb-4">
-                <p className={`px-4 py-1 text-xs font-semibold uppercase tracking-wider ${group.labelColor}`}>
-                  {group.label} · {group.items.length}
-                </p>
-                <div className="space-y-1 px-3">
-                  {group.items.map(n => {
-                    const m = TYPE_META[n.type]
-                    return (
-                      <Link
-                        key={n.id}
-                        to={n.linkTo}
-                        onClick={onClose}
-                        className="flex items-start gap-3 p-2.5 rounded-xl hover:bg-gray-800 transition-colors group"
-                      >
-                        {/* Type icon */}
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-sm ${m.bg}`}>
-                          <span>{m.icon}</span>
-                        </div>
-
-                        {/* Text */}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 mb-0.5">
-                            <span className={`text-[10px] font-semibold uppercase tracking-wide ${m.text}`}>{m.label}</span>
+            <>
+              {grouped.map(group => (
+                <div key={group.key} className="mb-4">
+                  <p className={`px-4 py-1 text-xs font-semibold uppercase tracking-wider ${group.labelColor}`}>
+                    {group.label} · {group.items.length}
+                  </p>
+                  <div className="space-y-1 px-3">
+                    {group.items.map(n => {
+                      const m = TYPE_META[n.type]
+                      return (
+                        <Link
+                          key={n.id}
+                          to={n.linkTo}
+                          onClick={onClose}
+                          className="flex items-start gap-3 p-2.5 rounded-xl hover:bg-gray-800 transition-colors group"
+                        >
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-sm ${m.bg}`}>
+                            <span>{m.icon}</span>
                           </div>
-                          <p className="text-sm font-medium text-gray-200 truncate group-hover:text-white leading-tight">
-                            {n.title}
-                          </p>
-                          {n.subtitle && (
-                            <p className="text-xs text-gray-500 truncate mt-0.5">{n.subtitle}</p>
-                          )}
-                        </div>
-
-                        {/* Due date */}
-                        <div className="shrink-0 flex flex-col items-end gap-1">
-                          <span className={`text-xs font-medium ${
-                            group.key === 'overdue' ? 'text-red-400' :
-                            group.key === 'today'   ? 'text-yellow-400' :
-                            group.key === 'tomorrow'? 'text-blue-400' :
-                            'text-gray-500'
-                          }`}>
-                            {fmtDate(n.dueDate)}
-                          </span>
-                          <svg className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                          </svg>
-                        </div>
-                      </Link>
-                    )
-                  })}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className={`text-[10px] font-semibold uppercase tracking-wide ${m.text}`}>{m.label}</span>
+                            </div>
+                            <p className="text-sm font-medium text-gray-200 truncate group-hover:text-white leading-tight">
+                              {n.title}
+                            </p>
+                            {n.subtitle && (
+                              <p className="text-xs text-gray-500 truncate mt-0.5">{n.subtitle}</p>
+                            )}
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-1">
+                            <span className={`text-xs font-medium ${
+                              group.key === 'overdue' ? 'text-red-400' :
+                              group.key === 'today'   ? 'text-yellow-400' :
+                              group.key === 'tomorrow'? 'text-blue-400' :
+                              'text-gray-500'
+                            }`}>
+                              {fmtDate(n.dueDate)}
+                            </span>
+                            <svg className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                            </svg>
+                          </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+
+              {/* Recent Activity */}
+              {recentActivity.length > 0 && (
+                <div className="mb-4">
+                  <p className="px-4 py-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    Recent Activity · {recentActivity.length}
+                  </p>
+                  <div className="space-y-1 px-3">
+                    {recentActivity.map(item => {
+                      const meta = ACTIVITY_META[item.kind]
+                      return (
+                        <Link
+                          key={item.id}
+                          to={item.linkTo}
+                          onClick={onClose}
+                          className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-800 transition-colors group"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center shrink-0 text-sm">
+                            <span>{meta.icon}</span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-gray-200 truncate group-hover:text-white leading-tight">
+                              {item.label}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate mt-0.5">{item.sub}</p>
+                          </div>
+                          <span className="text-xs text-gray-600 shrink-0">{fmtAgo(item.createdAt)}</span>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-gray-800">
           <p className="text-xs text-gray-600 text-center">
-            Follow-ups · Tasks · Service Plans · this week
+            Follow-ups · Tasks · Service Plans · Appointments · 24h activity
           </p>
         </div>
       </div>

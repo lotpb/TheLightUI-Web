@@ -7,7 +7,7 @@ import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePrefStore } from '../../stores/prefStore'
 import { useAuthStore } from '../../stores/authStore'
@@ -18,6 +18,32 @@ import { formatFileSize, fileIcon, type CustomerDocument } from '../../models/do
 import { updateTags } from '../../services/customerService'
 import { tagColor } from '../../utils/tagColor'
 import { scoreLead } from '../../utils/leadScore'
+import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
+import type { CustomFieldDef } from '../../models/customField'
+import { subscribeToEmailThread, markEmailRead } from '../../services/emailMessageService'
+import type { EmailMessage } from '../../models/emailMessage'
+import { calculateHealthScore, type CustomerHealth } from '../../utils/customerHealth'
+import { subscribeToTemplates } from '../../services/templateService'
+import { interpolate, type MessageTemplate } from '../../models/template'
+import {
+  subscribeToSequences, subscribeToCustomerEnrollments,
+  enrollCustomer, pauseEnrollment, resumeEnrollment, cancelEnrollment,
+} from '../../services/sequenceService'
+import type { Sequence, SequenceEnrollment } from '../../models/sequence'
+import { subscribeToInvoices } from '../../services/invoiceService'
+import { subscribeToServicePlans } from '../../services/servicePlanService'
+import { generatePortalLink } from '../../services/customerPortalService'
+import type { Invoice } from '../../models/invoice'
+import type { ServicePlan } from '../../models/servicePlan'
+import { collection, getDocs, query, where } from 'firebase/firestore'
+import { db } from '../../firebase/config'
+
+const ROLE_COLORS: Record<string, string> = {
+  owner:    'bg-yellow-500/20 text-yellow-300 border-yellow-600/30',
+  admin:    'bg-indigo-500/20 text-indigo-300 border-indigo-600/30',
+  salesman: 'bg-teal-500/20 text-teal-300 border-teal-600/30',
+  viewer:   'bg-gray-500/20 text-gray-400 border-gray-600/30',
+}
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -29,6 +55,14 @@ export default function CustomerDetailPage() {
   const [deleting, setDeleting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [compose, setCompose] = useState<'email' | 'sms' | null>(null)
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>([])
+  const [allPlans,    setAllPlans]    = useState<ServicePlan[]>([])
+  const [portalLink,  setPortalLink]  = useState<string | null>(null)
+  const [generatingPortal, setGeneratingPortal] = useState(false)
+  const companyId = useAuthStore(s => s.companyId)
+  const isReady   = useAuthStore(s => s.isReady)
+  const [linkedRole, setLinkedRole] = useState<string>('')
+  const [linkedLastSeen, setLinkedLastSeen] = useState<Date | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -36,6 +70,55 @@ export default function CustomerDetailPage() {
       .then(c => { setCustomer(c); setLoading(false) })
       .catch(() => setLoading(false))
   }, [id])
+
+  useEffect(() => {
+    const isEmployee = customer?.category?.toLowerCase() === 'employee'
+    if (!isEmployee || !customer?.email || !companyId) { setLinkedRole(''); setLinkedLastSeen(null); return }
+    const emailLower = customer.email.trim().toLowerCase()
+    const q = query(collection(db, 'users'), where('companyId', '==', companyId))
+    getDocs(q).then(snap => {
+      const match = snap.docs.find(d => {
+        const e = d.data()['email']
+        return typeof e === 'string' && e.toLowerCase() === emailLower
+      })
+      if (match) {
+        const data = match.data()
+        setLinkedRole(typeof data['role'] === 'string' ? data['role'] : '')
+        setLinkedLastSeen(data['lastSeen']?.toDate?.() ?? null)
+      } else {
+        setLinkedRole('')
+        setLinkedLastSeen(null)
+      }
+    }).catch(() => { setLinkedRole(''); setLinkedLastSeen(null) })
+  }, [customer?.email, customer?.category, companyId])
+
+  useEffect(() => {
+    return subscribeToInvoices(setAllInvoices, () => {})
+  }, [companyId])
+
+  useEffect(() => {
+    if (!isReady) return
+    return subscribeToServicePlans(setAllPlans, () => {})
+  }, [companyId, isReady])
+
+  async function handlePortalLink() {
+    if (!customer) return
+    setGeneratingPortal(true)
+    try {
+      const url = await generatePortalLink(
+        customer,
+        allInvoices,
+        allPlans.filter(p => p.customerId === customer.id),
+      )
+      setPortalLink(url)
+      await navigator.clipboard.writeText(url)
+      toast('Portal link copied to clipboard!', 'success')
+    } catch {
+      toast('Failed to generate portal link', 'error')
+    } finally {
+      setGeneratingPortal(false)
+    }
+  }
 
   async function handleDelete() {
     if (!id || !customer) return
@@ -51,12 +134,15 @@ export default function CustomerDetailPage() {
 
   async function handleToggleActive() {
     if (!id || !customer) return
+    const isEmployee = customer.category?.toLowerCase() === 'employee'
     if (customer.isActive) {
-      await deactivateCustomer(id)
-      setCustomer({ ...customer, isActive: false })
+      const employeeStatus = isEmployee ? 'Inactive' : customer.employeeStatus
+      await deactivateCustomer(id, isEmployee ? { employeeStatus } : {})
+      setCustomer({ ...customer, isActive: false, employeeStatus })
     } else {
-      await updateCustomer(id, { ...customer, isActive: true })
-      setCustomer({ ...customer, isActive: true })
+      const employeeStatus = isEmployee ? 'Active' : customer.employeeStatus
+      await updateCustomer(id, { ...customer, isActive: true, employeeStatus })
+      setCustomer({ ...customer, isActive: true, employeeStatus })
     }
   }
 
@@ -82,11 +168,19 @@ export default function CustomerDetailPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       {/* Back + actions */}
-      <div className="flex items-center justify-between mb-6">
-        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm">
+      <div className="flex items-start justify-between mb-6 gap-2 flex-wrap">
+        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm mt-1">
           ← Back
         </button>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <button
+            onClick={handlePortalLink}
+            disabled={generatingPortal}
+            title={portalLink ? 'Re-generate and copy portal link' : 'Generate customer portal link'}
+            className="btn-secondary text-sm px-3 py-1.5"
+          >
+            {generatingPortal ? '…' : portalLink ? '🔗 Portal' : '🔗 Portal'}
+          </button>
           <Link to={`/records/${id}/edit`} className="btn-secondary text-sm px-3 py-1.5">Edit</Link>
           <button onClick={() => setConfirmOpen(true)} disabled={deleting} className="btn-danger text-sm px-3 py-1.5">
             {deleting ? '…' : 'Delete'}
@@ -104,9 +198,11 @@ export default function CustomerDetailPage() {
                 {customer.photo ? (
                   <img src={customer.photo} alt={name} style={{ width: '56px', height: '56px', borderRadius: '9999px', objectFit: 'cover', display: 'block' }} />
                 ) : (
-                  <div style={{ width: '56px', height: '56px', borderRadius: '9999px', background: (coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL).bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <span style={{ fontSize: '18px', fontWeight: 700, color: (coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL).text }}>
-                      {[customer.first[0], customer.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
+                  <div style={{ width: '56px', height: '56px', borderRadius: '9999px', background: (coloredAvatars ? avatarColor(name) : avatarOriginal()).bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: '18px', fontWeight: 700, color: (coloredAvatars ? avatarColor(name) : avatarOriginal()).text }}>
+                      {customer.category.toLowerCase() === 'vendor'
+                        ? (customer.first[0] || '?').toUpperCase()
+                        : [customer.first[0], customer.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
                     </span>
                   </div>
                 )}
@@ -118,9 +214,6 @@ export default function CustomerDetailPage() {
                     ? customer.first || '—'
                     : [customer.first, customer.lastname].filter(Boolean).join(' ') || '—'}
                 </h1>
-                {customer.category.toLowerCase() === 'vendor' && customer.lastname && (
-                  <p style={{ fontSize: '18px', fontWeight: 600, color: 'rgb(156,163,175)', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{customer.lastname}</p>
-                )}
                 {/* Mobile: two lines (vendors: first only) */}
                 <div className="sm:hidden">
                   <h1 style={{ fontSize: '22px', fontWeight: 700, color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>{customer.first || '—'}</h1>
@@ -240,8 +333,11 @@ export default function CustomerDetailPage() {
             onUpdate={tags => setCustomer({ ...customer, tags })}
           />
         </div>
-        {(customer.category.toLowerCase() === 'lead') && (
+        {customer.category.toLowerCase() === 'lead' && (
           <ScoreBadge customer={customer} />
+        )}
+        {customer.category.toLowerCase() === 'customer' && (
+          <HealthScoreBadge customer={customer} invoices={allInvoices} plans={allPlans} />
         )}
       </div>
 
@@ -250,51 +346,78 @@ export default function CustomerDetailPage() {
         <FieldGroup title="Contact">
           <Field label="Phone"    value={customer.phone} />
           <Field label="Email"    value={customer.email || '—'} />
-          {customer.category.toLowerCase() !== 'employee' && (
+          {customer.category.toLowerCase() !== 'employee' && customer.category.toLowerCase() !== 'lead' && (
             <Field
               label={customer.category.toLowerCase() === 'customer' ? 'Spouse' : 'Web Page'}
               value={customer.spouse}
             />
           )}
-          {customer.category.toLowerCase() !== 'vendor' && (
-            <div className="flex items-baseline px-4 py-3 gap-4">
-              <span className="text-sm text-gray-500 w-28 shrink-0">Called</span>
-              <span className="text-base flex-1 flex items-center gap-1.5">
-                <svg className={`w-4 h-4 fill-current shrink-0 ${customer.callback.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-                <span className={customer.callback.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
-                  {customer.callback.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+          {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'customer' && (
+            <div className="px-4 py-3">
+              <FieldCell label="Called">
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-4 h-4 fill-current shrink-0 ${customer.callback.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                  <span className={customer.callback.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
+                    {customer.callback.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                  </span>
                 </span>
-              </span>
+              </FieldCell>
             </div>
           )}
         </FieldGroup>
 
         <FieldGroup title="Address">
-          <Field label="Street"  value={customer.street} />
-          <Field label="City"    value={customer.city} />
-          <Field label="State"   value={customer.state} />
-          <Field label="ZIP"     value={customer.zip} />
+          <Field label="Street" value={customer.street} />
+          <FieldRow>
+            <FieldCell label="City">{customer.city || '—'}</FieldCell>
+            <FieldCell label="State">{customer.state || '—'}</FieldCell>
+            <FieldCell label="ZIP">{customer.zip || '—'}</FieldCell>
+          </FieldRow>
         </FieldGroup>
 
         <FieldGroup title={customer.category.toLowerCase() === 'employee' ? 'Employee Info' : 'Job Info'}>
           {customer.category.toLowerCase() !== 'vendor' && (
-            <Field label={labels.salesman} value={customer.salesman} />
+            customer.category.toLowerCase() === 'employee' ? (
+              <FieldRow>
+                <FieldCell label="Salesperson">{customer.salesman || '—'}</FieldCell>
+                <FieldCell label="Emp. Status">
+                  {customer.employeeStatus
+                    ? <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                        customer.employeeStatus === 'Active'   ? 'bg-green-500/20 text-green-300 border-green-600/30' :
+                        customer.employeeStatus === 'Inactive' ? 'bg-red-500/20 text-red-300 border-red-600/30' :
+                        customer.employeeStatus === 'On Leave' ? 'bg-yellow-500/20 text-yellow-300 border-yellow-600/30' :
+                        'bg-gray-700 text-gray-400 border-gray-600/30'
+                      }`}>{customer.employeeStatus}</span>
+                    : <span className="text-gray-500 text-sm">—</span>}
+                </FieldCell>
+              </FieldRow>
+            ) : (
+              null
+            )
           )}
           {customer.category.toLowerCase() !== 'employee' && (
             <>
               {customer.category.toLowerCase() === 'vendor' && (
                 <>
-                  <Field label="Profession" value={customer.lastname || '—'} />
-                  <div className="flex items-baseline px-4 py-3 gap-4">
-                    <span className="text-sm text-gray-500 w-28 shrink-0">Called</span>
-                    <span className="text-base flex-1 flex items-center gap-1.5">
-                      <svg className={`w-4 h-4 fill-current shrink-0 ${customer.salesman.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-                      <span className={customer.salesman.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
-                        {customer.salesman.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                  {(customer.profession || customer.callback) && (
+                    <FieldRow>
+                      <FieldCell label="Profession">{customer.profession || '—'}</FieldCell>
+                      <FieldCell label="Manager">{customer.callback || '—'}</FieldCell>
+                    </FieldRow>
+                  )}
+                  <FieldRow>
+                    <FieldCell label="Payment Terms">{customer.paymentTerms || '—'}</FieldCell>
+                    <FieldCell label="Called">
+                      <span className="flex items-center gap-1.5">
+                        <svg className={`w-4 h-4 fill-current shrink-0 ${customer.salesman.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                        <span className={customer.salesman.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
+                          {customer.salesman.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                        </span>
                       </span>
-                    </span>
-                  </div>
-                  <Field label="Manager" value={customer.callback || '—'} />
+                    </FieldCell>
+                  </FieldRow>
+                  <Field label="Tax ID"         value={customer.taxId} />
+                  <Field label="Account Number" value={customer.accountNumber} />
                 </>
               )}
               {customer.category.toLowerCase() === 'customer' && (
@@ -302,51 +425,135 @@ export default function CustomerDetailPage() {
               )}
             </>
           )}
-          <Field label={labels.job}     value={customer.job} />
-          <Field label={labels.product} value={customer.product} />
-          <Field label="Quantity"   value={customer.quantity > 0 ? String(customer.quantity) : ''} />
-          <Field
-            label={customer.category.toLowerCase() === 'employee' ? 'Department' : labels.advertiser}
-            value={customer.adNo}
-          />
+          {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'employee' ? (
+            (customer.salesman || customer.job) && (
+              <FieldRow>
+                <FieldCell label={labels.salesman}>{customer.salesman || '—'}</FieldCell>
+                <FieldCell label={labels.job}>{customer.job || '—'}</FieldCell>
+              </FieldRow>
+            )
+          ) : (
+            <Field label={labels.job} value={customer.job} />
+          )}
+          {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'employee' ? (
+            (customer.product || customer.quantity > 0) && (
+              <FieldRow>
+                <FieldCell label={labels.product}>{customer.product || '—'}</FieldCell>
+                <FieldCell label="Quantity">{customer.quantity > 0 ? String(customer.quantity) : '—'}</FieldCell>
+              </FieldRow>
+            )
+          ) : (
+            <>
+              <Field label={labels.product} value={customer.product} />
+              <Field label="Quantity" value={customer.quantity > 0 ? String(customer.quantity) : ''} />
+            </>
+          )}
           {customer.category.toLowerCase() === 'employee' && (
-            <Field label="Rating" value={customer.rate} />
+            <>
+              <FieldRow>
+                <FieldCell label="Department">{customer.adNo || '—'}</FieldCell>
+                <FieldCell label="Rating">{customer.rate || '—'}</FieldCell>
+              </FieldRow>
+              <FieldRow>
+                <FieldCell label="Pay Type">{customer.payType || '—'}</FieldCell>
+                <FieldCell label="Commission">{customer.commissionRate || '—'}</FieldCell>
+              </FieldRow>
+              <FieldRow>
+                <FieldCell label="User Role">
+                  {(linkedRole || customer.userRole)
+                    ? (() => { const r = linkedRole || customer.userRole; return (
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${ROLE_COLORS[r.toLowerCase()] ?? 'bg-gray-700 text-gray-400 border-gray-600/30'}`}>
+                          {r.charAt(0).toUpperCase() + r.slice(1)}
+                        </span>
+                      )})()
+                    : <span className="text-gray-500 text-sm">—</span>}
+                </FieldCell>
+                <FieldCell label="Last Login">
+                  <DateChip>
+                    {linkedLastSeen
+                      ? linkedLastSeen.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+                      : customer.lastLogin || <span className="text-gray-500">—</span>}
+                  </DateChip>
+                </FieldCell>
+              </FieldRow>
+            </>
           )}
         </FieldGroup>
 
-        {customer.category.toLowerCase() === 'lead' && (
-          <FieldGroup title="Personal">
-            <Field label="Spouse" value={customer.spouse} />
+        {customer.category.toLowerCase() === 'customer' && (
+          <FieldGroup title="Customer Info">
+            <Field label="Company Name"   value={customer.companyName} />
+            <FieldRow>
+              <FieldCell label="Lead Source">{customer.leadSource || '—'}</FieldCell>
+              <FieldCell label="Called">
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-4 h-4 fill-current shrink-0 ${customer.callback.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                  <span className={customer.callback.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
+                    {customer.callback.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                  </span>
+                </span>
+              </FieldCell>
+            </FieldRow>
+            {(customer.paymentStatus || customer.paymentTerms) && (
+              <FieldRow>
+                <FieldCell label="Payment Status">{customer.paymentStatus || '—'}</FieldCell>
+                <FieldCell label="Payment Terms">{customer.paymentTerms || '—'}</FieldCell>
+              </FieldRow>
+            )}
           </FieldGroup>
+        )}
+
+        {customer.category.toLowerCase() === 'lead' && (
+          <>
+            <FieldGroup title="Lead Info">
+              {(customer.leadSource || customer.leadStatus) && (
+                <FieldRow>
+                  <FieldCell label="Lead Source">{customer.leadSource || '—'}</FieldCell>
+                  <FieldCell label="Lead Status">{customer.leadStatus || '—'}</FieldCell>
+                </FieldRow>
+              )}
+              {(customer.lastContactDate || customer.contactAttempts > 0) && (
+                <FieldRow>
+                  <FieldCell label="Last Contact"><DateChip>{formatISODateShort(customer.lastContactDate) || '—'}</DateChip></FieldCell>
+                  <FieldCell label="Attempts">{customer.contactAttempts > 0 ? String(customer.contactAttempts) : '—'}</FieldCell>
+                </FieldRow>
+              )}
+            </FieldGroup>
+            <FieldGroup title="Personal">
+              <Field label="Spouse" value={customer.spouse} />
+            </FieldGroup>
+          </>
         )}
         {customer.category.toLowerCase() === 'employee' && (
           <FieldGroup title="Personal">
-            <SsnField value={customer.spouse} />
-            <Field label="Driver License"  value={customer.driverLicense} />
+            <FieldRow>
+              <FieldCell label="Social Security"><SsnValue value={customer.spouse} /></FieldCell>
+              <FieldCell label="Driver License">{customer.driverLicense || '—'}</FieldCell>
+            </FieldRow>
+            <DateField label="Birth Date" value={customer.birthDate} />
           </FieldGroup>
         )}
 
         <FieldGroup title="Dates">
           {customer.category.toLowerCase() === 'lead' && (
-            <Field label="Apt Date" value={formatDate(customer.startDate)} />
+            <DateField label="Apt Date" value={formatDate(customer.startDate)} />
           )}
           {customer.category.toLowerCase() === 'employee' && (
-            <>
-              <Field label="Start Date" value={formatDate(customer.startDate)      || '—'} />
-              <Field label="End Date"   value={formatDate(customer.completionDate) || '—'} />
-            </>
+            <FieldRow>
+              <FieldCell label="Start Date"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
+              <FieldCell label="Termination"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+            </FieldRow>
           )}
           {customer.category.toLowerCase() === 'customer' && (
-            <>
-              <Field label="Start Date"  value={formatDate(customer.startDate)} />
-              <Field label="Complete"    value={formatDate(customer.completionDate)} />
-            </>
+            <FieldRow>
+              <FieldCell label="Start"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
+              <FieldCell label="Complete"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+            </FieldRow>
           )}
-          <Field label="Date Added"  value={formatDate(customer.creationDate)  || '—'} />
-          <Field label="Last Update" value={formatDate(customer.lastUpdateDate) || '—'} />
-          {customer.category.toLowerCase() === 'employee' && (
-            <Field label="Birth Date" value={customer.birthDate} />
-          )}
+          <FieldRow>
+            <FieldCell label="Date Added"><DateChip>{formatDate(customer.creationDate) || '—'}</DateChip></FieldCell>
+            <FieldCell label="Last Update"><DateChip>{formatDate(customer.lastUpdateDate) || '—'}</DateChip></FieldCell>
+          </FieldRow>
         </FieldGroup>
 
         <FollowUpSection
@@ -354,11 +561,14 @@ export default function CustomerDetailPage() {
           followUpDate={customer.followUpDate}
           onUpdate={date => setCustomer({ ...customer, followUpDate: date })}
         />
+        <CustomFieldsSection customer={customer} />
         <NotesSection
           customer={customer}
           onUpdate={comments => setCustomer({ ...customer, comments })}
         />
         <ActivityLogSection customerId={id!} />
+        <EmailThreadSection customerId={id!} />
+        <SequencesSection customer={customer} />
         <DocumentsSection customerId={id!} />
       </div>
 
@@ -407,6 +617,30 @@ function ActionTile({ icon, label, href, to, onClick, active }: ActionTileProps)
   return <button onClick={onClick} className={base}>{inner}</button>
 }
 
+function CustomFieldsSection({ customer }: { customer: CustomerItem }) {
+  const [defs, setDefs] = useState<CustomFieldDef[]>([])
+  useEffect(() => subscribeToCustomFieldDefs(setDefs, () => {}), [])
+
+  if (defs.length === 0) return null
+
+  const pairs: CustomFieldDef[][] = []
+  for (let i = 0; i < defs.length; i += 2) pairs.push(defs.slice(i, i + 2))
+
+  return (
+    <FieldGroup title="Custom Fields">
+      {pairs.map((pair, i) => (
+        <FieldRow key={i}>
+          {pair.map(def => (
+            <FieldCell key={def.id} label={def.label}>
+              {customer.customFields?.[def.key] || '—'}
+            </FieldCell>
+          ))}
+        </FieldRow>
+      ))}
+    </FieldGroup>
+  )
+}
+
 function FieldGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="card overflow-hidden">
@@ -418,6 +652,25 @@ function FieldGroup({ title, children }: { title: string; children: React.ReactN
   )
 }
 
+// Label sits above its value; used both standalone and inside multi-column FieldRow grids.
+function FieldCell({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-sm text-gray-500 mb-1">{label}</p>
+      <div className="text-base text-gray-200 break-words">{children}</div>
+    </div>
+  )
+}
+
+function FieldRow({ children }: { children: React.ReactNode }) {
+  const cols = Array.isArray(children) ? children.length : 1
+  return (
+    <div className={`grid gap-4 px-4 py-3 ${cols >= 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+      {children}
+    </div>
+  )
+}
+
 function maskSsn(raw: string): string {
   const digits = raw.replace(/\D/g, '')
   if (digits.length === 9) return `•••-••-${digits.slice(5)}`
@@ -425,15 +678,12 @@ function maskSsn(raw: string): string {
   return '••••'
 }
 
-function SsnField({ value }: { value: string }) {
+function SsnValue({ value }: { value: string }) {
   const [revealed, setRevealed] = useState(false)
-  if (!value) return null
+  if (!value) return <span className="text-gray-500">—</span>
   return (
-    <div className="flex items-center px-4 py-3 gap-4">
-      <span className="text-sm text-gray-500 w-28 shrink-0">Social Security</span>
-      <span className="text-base text-gray-200 flex-1 font-mono tracking-wide">
-        {revealed ? value : maskSsn(value)}
-      </span>
+    <div className="flex items-center gap-3">
+      <span className="font-mono tracking-wide">{revealed ? value : maskSsn(value)}</span>
       <button
         type="button"
         onClick={() => setRevealed(r => !r)}
@@ -458,16 +708,42 @@ function SsnField({ value }: { value: string }) {
 function Field({ label, value }: { label: string; value: string }) {
   if (!value) return null
   return (
-    <div className="flex items-baseline px-4 py-3 gap-4">
-      <span className="text-sm text-gray-500 w-28 shrink-0">{label}</span>
-      <span className="text-base text-gray-200 flex-1 break-words">{value}</span>
+    <div className="px-4 py-3">
+      <FieldCell label={label}>{value}</FieldCell>
     </div>
   )
 }
 
-function formatDate(d: Date): string {
+// Matches the Follow-up section's date chip so every date value shares the same background.
+function DateChip({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="input-field inline-block w-auto text-sm py-1.5" style={{ cursor: 'default' }}>
+      {children}
+    </div>
+  )
+}
+
+function DateField({ label, value }: { label: string; value: string }) {
+  if (!value) return null
+  return (
+    <div className="px-4 py-3">
+      <FieldCell label={label}><DateChip>{value}</DateChip></FieldCell>
+    </div>
+  )
+}
+
+function formatDate(d: Date | null): string {
   if (!d || isNaN(d.getTime())) return ''
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatISODateShort(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso + 'T00:00:00')
+  if (isNaN(d.getTime())) return iso
+  const month = d.toLocaleDateString('en-US', { month: 'short' })
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${month} ${day} ${d.getFullYear()}`
 }
 
 function FollowUpSection({
@@ -531,13 +807,20 @@ function FollowUpSection({
         )}
       </div>
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-        <input
-          type="date"
-          value={toInputValue(followUpDate)}
-          onChange={e => handleChange(e.target.value)}
-          disabled={saving}
-          className="input-field text-sm py-1.5 w-auto"
-        />
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <div className="input-field text-sm py-1.5" style={{ minWidth: '130px', cursor: 'pointer', userSelect: 'none' }}>
+            {followUpDate
+              ? (() => { const d = followUpDate; const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${mo[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}` })()
+              : <span className="text-gray-400">Select date</span>}
+          </div>
+          <input
+            type="date"
+            value={toInputValue(followUpDate)}
+            onChange={e => handleChange(e.target.value)}
+            disabled={saving}
+            style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
+          />
+        </div>
         {followUpDate && (
           <>
             {statusLabel && (
@@ -685,6 +968,50 @@ function NotesSection({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function EmailThreadSection({ customerId }: { customerId: string }) {
+  const [messages, setMessages] = useState<EmailMessage[]>([])
+
+  useEffect(() => subscribeToEmailThread(customerId, setMessages, () => {}), [customerId])
+
+  if (messages.length === 0) return null
+
+  function fmtTime(d: Date): string {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
+      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Email Thread</p>
+      </div>
+      <div className="divide-y divide-gray-700/30">
+        {messages.map(m => (
+          <div
+            key={m.id}
+            className="px-4 py-3"
+            onClick={() => { if (m.direction === 'inbound' && !m.read) markEmailRead(m.id) }}
+          >
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                m.direction === 'outbound' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-green-500/20 text-green-300'
+              }`}>
+                {m.direction === 'outbound' ? 'Sent' : 'Received'}
+              </span>
+              {m.direction === 'inbound' && !m.read && (
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" title="Unread" />
+              )}
+              <span className="text-xs text-gray-500">{fmtTime(m.createdAt)}</span>
+            </div>
+            {m.subject && <p className="text-sm font-medium text-gray-200 mt-1">{m.subject}</p>}
+            <p className="text-sm text-gray-400 mt-0.5 whitespace-pre-wrap line-clamp-3">{m.body}</p>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -895,6 +1222,84 @@ function ScoreBadge({ customer }: { customer: CustomerItem }) {
   )
 }
 
+// ── Customer Health Score ─────────────────────────────────────────────────────
+
+function HealthScoreBadge({
+  customer,
+  invoices,
+  plans,
+}: {
+  customer: CustomerItem
+  invoices: Invoice[]
+  plans: ServicePlan[]
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const hs: CustomerHealth = calculateHealthScore(customer, invoices, plans)
+
+  useEffect(() => {
+    if (!open) return
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${hs.badgeClass}`}
+        title="Customer health score"
+      >
+        <span className={`w-1.5 h-1.5 rounded-full ${hs.dotClass}`} />
+        {hs.label} · {hs.score}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-72 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+            <p className="text-sm font-semibold text-white">Health Score</p>
+            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${hs.badgeClass}`}>
+              {hs.score} / 100 — {hs.label}
+            </span>
+          </div>
+          <div className="px-4 py-2.5 border-b border-gray-800">
+            <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${hs.barClass}`}
+                style={{ width: `${hs.score}%` }}
+              />
+            </div>
+          </div>
+          <div className="py-2">
+            {hs.factors.map(f => (
+              <div key={f.label} className="flex items-start gap-2.5 px-4 py-1.5">
+                <span className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-600'}`}>
+                  {f.earned > 0 ? '✓' : '○'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <span className={`text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-500'}`}>{f.label}</span>
+                  {f.detail && (
+                    <p className="text-xs text-gray-600 truncate">{f.detail}</p>
+                  )}
+                </div>
+                <span className={`text-xs tabular-nums shrink-0 ${f.earned > 0 ? 'text-emerald-400 font-medium' : 'text-gray-600'}`}>
+                  {f.earned}/{f.max}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="px-4 py-2 border-t border-gray-800">
+            <p className="text-xs text-gray-600">Updates live as you add notes, invoices, and service plans</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Tags ──────────────────────────────────────────────────────────────────────
 
 function TagsSection({
@@ -1060,17 +1465,53 @@ function ComposeModal({
     : ''
 
   const isEmail   = mode === 'email'
-  const templates = buildTemplates(mode, firstName, name, apptDate)
+  const builtIn   = buildTemplates(mode, firstName, name, apptDate)
+
+  // Load saved templates from Firestore
+  const [savedTemplates, setSavedTemplates] = useState<MessageTemplate[]>([])
+  useEffect(() => {
+    return subscribeToTemplates(
+      ts => setSavedTemplates(ts.filter(t => t.type === mode || t.type === 'both')),
+      () => {},
+    )
+  }, [mode])
+
+  const vars = {
+    firstName, name, date: apptDate,
+    amount: customer.amount > 0 ? formatCurrency(customer.amount) : '',
+    phone:  customer.phone,
+    email:  customer.email,
+  }
+
+  // Tabs: saved templates first (marked with a ★), then built-in
+  const allTabs: Array<{ label: string; subject: string; body: string; saved?: boolean }> = [
+    ...savedTemplates.map(t => ({
+      label:   t.name,
+      subject: interpolate(t.subject, vars),
+      body:    interpolate(t.body, vars),
+      saved:   true,
+    })),
+    ...builtIn.map(t => ({ label: t.label, subject: t.subject ?? '', body: t.body })),
+  ]
 
   const [tmplIdx, setTmplIdx]   = useState(0)
-  const [subject, setSubject]   = useState(templates[0].subject ?? '')
-  const [body, setBody]         = useState(templates[0].body)
+  const [subject, setSubject]   = useState(allTabs[0]?.subject ?? '')
+  const [body, setBody]         = useState(allTabs[0]?.body ?? '')
   const [copied, setCopied]     = useState(false)
+
+  // When saved templates load, re-initialize body from the selected tab
+  useEffect(() => {
+    const tab = allTabs[tmplIdx]
+    if (tab) { setSubject(tab.subject); setBody(tab.body) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedTemplates.length])
+
+  const templates = allTabs
 
   function selectTemplate(i: number) {
     setTmplIdx(i)
-    setSubject(templates[i].subject ?? '')
-    setBody(templates[i].body)
+    setSubject(allTabs[i].subject ?? '')
+    setBody(allTabs[i].body)
   }
 
   function buildHref() {
@@ -1116,14 +1557,15 @@ function ComposeModal({
         <div className="flex gap-1.5 px-4 py-2.5 border-b border-gray-700 shrink-0 overflow-x-auto scrollbar-none">
           {templates.map((t, i) => (
             <button
-              key={t.label}
+              key={`${t.label}-${i}`}
               onClick={() => selectTemplate(i)}
-              className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+              className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
                 tmplIdx === i
                   ? 'bg-indigo-600 text-white'
                   : 'bg-gray-800 text-gray-400 hover:text-gray-200'
               }`}
             >
+              {t.saved && <span className="text-yellow-400 text-xs">★</span>}
               {t.label}
             </button>
           ))}
@@ -1350,6 +1792,190 @@ function DocumentsSection({ customerId }: { customerId: string }) {
           onClick={() => fileRef.current?.click()}
         >
           Drop more files here or click to attach
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Sequences ─────────────────────────────────────────────────────────────────
+
+function SequencesSection({ customer }: { customer: CustomerItem }) {
+  const toast = useToast()
+  const [sequences,    setSequences]    = useState<Sequence[]>([])
+  const [enrollments,  setEnrollments]  = useState<SequenceEnrollment[]>([])
+  const [enrollOpen,   setEnrollOpen]   = useState(false)
+  const [enrolling,    setEnrolling]    = useState<string | null>(null)
+  const enrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => subscribeToSequences(setSequences, () => {}), [])
+  useEffect(() => subscribeToCustomerEnrollments(customer.id, setEnrollments, () => {}), [customer.id])
+
+  useEffect(() => {
+    if (!enrollOpen) return
+    function handle(e: MouseEvent) {
+      if (enrollRef.current && !enrollRef.current.contains(e.target as Node)) setEnrollOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [enrollOpen])
+
+  async function handleEnroll(seq: Sequence) {
+    setEnrolling(seq.id)
+    setEnrollOpen(false)
+    try {
+      await enrollCustomer(seq, customer.id, fullName(customer))
+      toast(`Enrolled in "${seq.name}"`, 'success')
+    } catch {
+      toast('Failed to enroll', 'error')
+    } finally {
+      setEnrolling(null)
+    }
+  }
+
+  async function handlePause(id: string) {
+    try { await pauseEnrollment(id); toast('Paused', 'success') }
+    catch { toast('Failed to pause', 'error') }
+  }
+
+  async function handleResume(enr: SequenceEnrollment) {
+    const seq = sequences.find(s => s.id === enr.sequenceId)
+    if (!seq) return
+    try {
+      await resumeEnrollment(enr.id, seq.steps, enr.nextStepIdx, enr.startedAt)
+      toast('Resumed', 'success')
+    } catch { toast('Failed to resume', 'error') }
+  }
+
+  async function handleCancel(id: string) {
+    try { await cancelEnrollment(id); toast('Cancelled', 'success') }
+    catch { toast('Failed to cancel', 'error') }
+  }
+
+  const activeEnrollments = enrollments.filter(e => e.status === 'active' || e.status === 'paused')
+  const pastEnrollments   = enrollments.filter(e => e.status === 'completed' || e.status === 'cancelled')
+
+  const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
+    active:    { label: 'Active',    cls: 'bg-green-500/15 text-green-300' },
+    paused:    { label: 'Paused',    cls: 'bg-amber-500/15 text-amber-300' },
+    completed: { label: 'Completed', cls: 'bg-indigo-500/15 text-indigo-300' },
+    cancelled: { label: 'Cancelled', cls: 'bg-gray-700/50 text-gray-500' },
+  }
+
+  function daysAgo(d: Date) {
+    const days = Math.floor((Date.now() - d.getTime()) / 86_400_000)
+    return days === 0 ? 'today' : `${days}d ago`
+  }
+
+  function daysUntil(d: Date) {
+    const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000)
+    if (days <= 0) return 'today'
+    return `in ${days}d`
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+          Sequences {activeEnrollments.length > 0 && (
+            <span className="text-gray-600 font-normal normal-case">({activeEnrollments.length} active)</span>
+          )}
+        </p>
+        {sequences.length > 0 && (
+          <div ref={enrollRef} className="relative">
+            <button
+              onClick={() => setEnrollOpen(v => !v)}
+              disabled={!!enrolling}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40"
+            >
+              {enrolling ? '…' : '+ Enroll'}
+            </button>
+            {enrollOpen && (
+              <div className="absolute right-0 top-full mt-1 w-52 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                <p className="px-3 py-2 text-xs text-gray-500 border-b border-gray-700">Choose a sequence</p>
+                {sequences.map(seq => (
+                  <button
+                    key={seq.id}
+                    onClick={() => handleEnroll(seq)}
+                    className="w-full text-left px-3 py-2.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                  >
+                    <p className="font-medium leading-snug">{seq.name}</p>
+                    <p className="text-xs text-gray-500">{seq.steps.length} step{seq.steps.length !== 1 ? 's' : ''}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {activeEnrollments.length === 0 && pastEnrollments.length === 0 ? (
+        <div className="px-4 py-5 text-center">
+          <p className="text-sm text-gray-500">No active sequences</p>
+          {sequences.length === 0 && (
+            <p className="text-xs text-gray-600 mt-1">
+              Create sequences at <a href="/sequences" className="text-indigo-400 hover:text-indigo-300">Outreach → Sequences</a>
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-700/30">
+          {activeEnrollments.map(enr => {
+            const st = STATUS_STYLE[enr.status]
+            const seq = sequences.find(s => s.id === enr.sequenceId)
+            return (
+              <div key={enr.id} className="px-4 py-3 flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                    <span className="text-sm font-medium text-gray-200">{enr.sequenceName}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Started {daysAgo(enr.startedAt)}
+                    {enr.status === 'active' && seq && enr.nextStepIdx < seq.steps.length && (
+                      <> · step {enr.nextStepIdx + 1}/{seq.steps.length} runs {daysUntil(enr.nextRunAt)}</>
+                    )}
+                    {enr.completedStepIndices.length > 0 && (
+                      <> · {enr.completedStepIndices.length} step{enr.completedStepIndices.length !== 1 ? 's' : ''} done</>
+                    )}
+                  </p>
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  {enr.status === 'active' && (
+                    <button
+                      onClick={() => handlePause(enr.id)}
+                      className="text-xs text-gray-500 hover:text-amber-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    >
+                      Pause
+                    </button>
+                  )}
+                  {enr.status === 'paused' && (
+                    <button
+                      onClick={() => handleResume(enr)}
+                      className="text-xs text-green-400 hover:text-green-300 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    >
+                      Resume
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleCancel(enr.id)}
+                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+          {pastEnrollments.slice(0, 3).map(enr => {
+            const st = STATUS_STYLE[enr.status]
+            return (
+              <div key={enr.id} className="px-4 py-2.5 flex items-center justify-between gap-3 opacity-60">
+                <span className="text-sm text-gray-400">{enr.sequenceName}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

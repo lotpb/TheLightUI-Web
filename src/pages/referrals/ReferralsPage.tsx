@@ -5,7 +5,7 @@ import { subscribeToCustomers } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ interface ReferrerStat {
 
 function ReferrerCard({ stat, rank, coloredAvatars }: { stat: ReferrerStat; rank: number; coloredAvatars: boolean }) {
   const [open, setOpen] = useState(false)
-  const color = coloredAvatars ? avatarColor(stat.name) : AVATAR_ORIGINAL
+  const color = coloredAvatars ? avatarColor(stat.name) : avatarOriginal()
   const initials = stat.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   const medals = ['🥇', '🥈', '🥉']
 

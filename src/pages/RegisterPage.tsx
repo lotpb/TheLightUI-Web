@@ -47,7 +47,8 @@ export default function RegisterPage() {
 
   function mark(field: string) { setTouched(t => ({ ...t, [field]: true })) }
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef  = useRef<HTMLInputElement>(null)
+  const submittingRef = useRef(false)  // prevents premature navigation during signup
   const { signUp, loading, error, clearError, user } = useAuthStore()
   const navigate  = useNavigate()
   const recaptcha = useRecaptcha()
@@ -60,7 +61,15 @@ export default function RegisterPage() {
   }, [])
 
   useEffect(() => {
-    if (user && !saving) navigate('/dashboard', { replace: true })
+    if (user && !submittingRef.current) {
+      const pendingCode = sessionStorage.getItem('pendingInviteCode')
+      if (pendingCode) {
+        sessionStorage.removeItem('pendingInviteCode')
+        navigate(`/join?code=${pendingCode}`, { replace: true })
+      } else {
+        navigate('/dashboard', { replace: true })
+      }
+    }
   }, [user, saving, navigate])
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -107,10 +116,14 @@ export default function RegisterPage() {
       setVerifying(false)
     }
 
+    submittingRef.current = true
     await signUp(email, password)
 
     const { user: newUser, error: signUpError } = useAuthStore.getState()
-    if (signUpError || !newUser) return
+    if (signUpError || !newUser) {
+      submittingRef.current = false
+      return
+    }
 
     setSaving(true)
     try {
@@ -128,6 +141,19 @@ export default function RegisterPage() {
         photoURL: photoURL || undefined,
       })
 
+      // Wait for auth setup (setupAccount CF) to complete so we write profile
+      // data AFTER the CF, not before. This prevents the CF from overwriting
+      // firstName/lastName/phone if it does a non-merge set on the user doc.
+      if (!useAuthStore.getState().isReady) {
+        await new Promise<void>((resolve) => {
+          const unsub = useAuthStore.subscribe((state) => {
+            if (state.isReady) { unsub(); resolve() }
+          })
+          setTimeout(() => { unsub(); resolve() }, 15000)
+        })
+      }
+
+      // merge:true preserves companyId/role written by setupAccount CF
       await setDoc(doc(db, 'users', newUser.uid), {
         uid: newUser.uid,
         firstName,
@@ -136,13 +162,24 @@ export default function RegisterPage() {
         email,
         profileImageUrl: photoURL,
         createdAt: new Date().toISOString(),
-      })
+      }, { merge: true })
 
       await sendWelcomeMessage(newUser.uid, email)
+
+      // Navigate explicitly here rather than relying on the useEffect,
+      // so we only redirect after the profile is fully saved.
+      const pendingCode = sessionStorage.getItem('pendingInviteCode')
+      if (pendingCode) {
+        sessionStorage.removeItem('pendingInviteCode')
+        navigate(`/join?code=${pendingCode}`, { replace: true })
+      } else {
+        navigate('/dashboard', { replace: true })
+      }
     } catch (err) {
       setLocalError('Account created but profile save failed. You can update it in Settings.')
     } finally {
       setSaving(false)
+      submittingRef.current = false
     }
   }
 

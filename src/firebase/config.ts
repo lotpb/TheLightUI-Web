@@ -3,6 +3,7 @@ import { getAuth } from 'firebase/auth'
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 import { getFunctions } from 'firebase/functions'
+import { getMessaging, isSupported, type Messaging } from 'firebase/messaging'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -21,3 +22,13 @@ export const db      = initializeFirestore(app, {
 })
 export const storage   = getStorage(app)
 export const functions = getFunctions(app)
+
+// Messaging isn't available in every browser (e.g. Safari < 16, non-secure
+// contexts), so resolve it lazily and cache the one-time support check.
+let messagingPromise: Promise<Messaging | null> | null = null
+export function getMessagingIfSupported(): Promise<Messaging | null> {
+  if (!messagingPromise) {
+    messagingPromise = isSupported().then(ok => (ok ? getMessaging(app) : null)).catch(() => null)
+  }
+  return messagingPromise
+}

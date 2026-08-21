@@ -30,19 +30,27 @@ service cloud.firestore {
     // ── User Profiles ─────────────────────────────────────────────────────────
     //
     //   Own profile: full read/write (profile edits, FCM token arrayUnion).
-    //   Any signed-in user may list users (needed for the "New Message" picker
-    //   to find colleagues regardless of which companyId their iOS-created doc has).
-    //   Individual get still requires owner or same-company membership.
+    //   list/get of other users is scoped to same-company membership only —
+    //   the "New Message" picker (ChatRepository.fetchAvailableUsers) already
+    //   queries whereField("companyId", isEqualTo: callerCompanyId), so this
+    //   constraint doesn't change that flow's behavior, it just stops an
+    //   unfiltered or cross-company query from succeeding server-side.
     //   All deletes: denied.
     //
     match /users/{userId} {
       allow get:    if isOwner(userId)
                     || (hasCompanyId()
-                        && resource.data.get('companyId', '') == claimedCompanyId())
-                    || isSignedIn();
-      allow list:   if isSignedIn();
+                        && resource.data.get('companyId', '') == claimedCompanyId());
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
       allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
+      allow update: if isOwner(userId)
+                    // Owner/admin may change only the role or companyId of a
+                    // team member who shares the same companyId.
+                    || (isSignedIn()
+                        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['owner', 'admin']
+                        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('companyId', '') == resource.data.get('companyId', '')
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'companyId']));
       allow delete: if false;
     }
 
@@ -211,10 +219,47 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
+    // ── Customer Portals ──────────────────────────────────────────────────────
+    //   Public read (token acts as auth). Company members can write.
+    //
+    match /customerPortals/{token} {
+      allow get:    if true;
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Service Requests (public submissions from customer portal) ────────────
+    //   Anyone can create; only company members can read/delete.
+    //
+    match /serviceRequests/{requestId} {
+      allow create: if true;
+      allow read, delete: if hasCompanyId()
+                          && resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
     // ── Product Catalog ───────────────────────────────────────────────────────
     //
     //   All CRUD scoped to the caller's companyId claim.
     //
+    // ── Invites ───────────────────────────────────────────────────────────────
+    //   Any signed-in user can read (to redeem). Only company members can create.
+    //   Update allowed once (to mark used). No delete.
+    match /invites/{code} {
+      allow get:    if isSignedIn();
+      allow list:   if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow create: if hasCompanyId();
+      allow update: if isSignedIn() && resource.data.used == false;
+      allow delete: if false;
+    }
+
     match /catalog/{itemId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
@@ -325,6 +370,225 @@ service cloud.firestore {
                     && resource.data.companyId == claimedCompanyId();
       allow create: if hasCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Signing Requests ──────────────────────────────────────────────────────
+    //
+    //   Token-based e-signature documents. Doc ID is a UUID (the signing link token).
+    //   Public get so the signing page loads without auth.
+    //   Company members create. Signer (unauthed) can update status pending→signed.
+    //   Company members delete.
+    //
+    match /signingRequests/{token} {
+      allow get:    if true;
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      // Signer submits: only pending→signed transition, companyId unchanged
+      allow update: if resource.data.get('status', '') == 'pending'
+                    && request.resource.data.get('status', '') == 'signed'
+                    && request.resource.data.get('companyId', '') == resource.data.get('companyId', '');
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Lead Capture Forms ────────────────────────────────────────────────────
+    //
+    //   Settings stored per company (doc ID = companyId).
+    //   Public get so the public form page can load settings without auth.
+    //   Writes restricted to the owning company.
+    //
+    match /leadForms/{formCompanyId} {
+      allow get:   if true;
+      allow write: if hasCompanyId() && claimedCompanyId() == formCompanyId;
+    }
+
+    // ── Lead Submissions ──────────────────────────────────────────────────────
+    //
+    //   Anyone can submit (public contact form). Only the owning company can
+    //   read, update status, or delete submissions.
+    //
+    match /leadSubmissions/{subId} {
+      allow create: if true;
+      allow read, update, delete: if hasCompanyId()
+                                  && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Document Templates ────────────────────────────────────────────────────
+    //
+    //   Reusable proposal/contract/report/letter templates. Company-scoped.
+    //
+    match /docTemplates/{templateId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Email Campaigns ───────────────────────────────────────────────────────
+    //
+    //   Campaign definitions. All CRUD scoped to the caller's companyId claim.
+    //
+    match /campaigns/{campaignId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Campaign Recipients ───────────────────────────────────────────────────
+    //
+    //   One doc per contact per campaign. All CRUD scoped to the caller's companyId.
+    //
+    match /campaignRecipients/{recipientId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Email Messages (two-way email sync) ───────────────────────────────────
+    //
+    //   Sent + received emails, threaded per customer. Written only by Cloud
+    //   Functions (bulkSendEmail, automation actions, emailInboundWebhook) via
+    //   the admin SDK, which bypasses these rules — so create is locked down.
+    //
+    match /emailMessages/{messageId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if false;
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Custom Field Definitions ──────────────────────────────────────────────
+    //
+    //   Company-defined extra fields on Customer records. All CRUD scoped to
+    //   the caller's companyId claim; values live inline on Customers docs.
+    //
+    match /customFieldDefs/{fieldId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Automation Rules ──────────────────────────────────────────────────────
+    //
+    //   If/Then triggers on Customers/Invoices. All CRUD scoped to companyId.
+    //   Fired server-side by Cloud Functions using the admin SDK (bypasses rules).
+    //
+    match /automationRules/{ruleId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Automation Log ────────────────────────────────────────────────────────
+    //
+    //   Read-only fire history, written only by Cloud Functions (admin SDK).
+    //
+    match /automationLog/{logId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create, update, delete: if false;
+    }
+
+    // ── Message Templates ─────────────────────────────────────────────────────
+    //
+    //   Reusable email/SMS templates. All CRUD scoped to the caller's companyId.
+    //
+    match /messageTemplates/{templateId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Follow-up Sequences ───────────────────────────────────────────────────
+    //
+    //   Drip campaign templates. All CRUD scoped to the caller's companyId.
+    //
+    match /sequences/{sequenceId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Sequence Enrollments ──────────────────────────────────────────────────
+    //
+    //   Per-customer enrollment records. All CRUD scoped to the caller's companyId.
+    //   Cloud Functions use Admin SDK and bypass these rules.
+    //
+    match /sequenceEnrollments/{enrollmentId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }

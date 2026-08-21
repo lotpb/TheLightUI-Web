@@ -7,7 +7,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useDebounce } from '../../hooks/useDebounce'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSearchShortcut } from '../../hooks/useSearchShortcut'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
 export default function ChatInboxPage() {
@@ -177,7 +177,7 @@ function InboxRow({ message: m, currentUserId, contactProfile }: { message: Rece
     : initials(contactEmail)
   const isFromMe = m.fromId === currentUserId
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
-  const color = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+  const color = coloredAvatars ? avatarColor(name) : avatarOriginal()
 
   return (
     <Link

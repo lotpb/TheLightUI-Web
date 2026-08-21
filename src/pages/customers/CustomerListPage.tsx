@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman } from '../../services/customerService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
@@ -8,11 +9,13 @@ import { useToast } from '../../components/Toast'
 import { useDebounce } from '../../hooks/useDebounce'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSearchShortcut } from '../../hooks/useSearchShortcut'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePrefStore } from '../../stores/prefStore'
+import { usePermissions } from '../../hooks/usePermissions'
 import { tagColor } from '../../utils/tagColor'
 import { scoreLead } from '../../utils/leadScore'
+import { calculateHealthScoreLight } from '../../utils/customerHealth'
 import CSVImportModal from '../../components/CSVImportModal'
 
 const PAGE_SIZE = 50
@@ -59,10 +62,12 @@ export default function CustomerListPage() {
   const companyId = useAuthStore(s => s.companyId)
   const labels = usePickerStore(s => s.labels)
   const toast = useToast()
+  const perms = usePermissions()
 
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hitRecordCap, setHitRecordCap] = useState(false)
   const [searchParams] = useSearchParams()
   const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const debouncedSearch = useDebounce(search)
@@ -84,7 +89,7 @@ export default function CustomerListPage() {
   const [filterOpen, setFilterOpen]         = useState(false)
   const [filterSalesman, setFilterSalesman] = useState('')
   const [filterState, setFilterState]       = useState('')
-  const [filterAdNo, setFilterAdNo]         = useState('')
+  const [filterLeadSource, setFilterLeadSource] = useState('')
   const [filterProduct, setFilterProduct]   = useState('')
   const [filterCallback, setFilterCallback] = useState('')
   const [filterDateFrom, setFilterDateFrom] = useState('')
@@ -103,13 +108,14 @@ export default function CustomerListPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [assignOpen, setAssignOpen]   = useState(false)
   const [bulkWorking, setBulkWorking] = useState(false)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
   const closeAssign = useCallback(() => setAssignOpen(false), [])
   useClickOutside(assignRef, closeAssign, assignOpen)
 
   function clearAdvancedFilters() {
     setFilterSalesman('')
     setFilterState('')
-    setFilterAdNo('')
+    setFilterLeadSource('')
     setFilterProduct('')
     setFilterCallback('')
     setFilterDateFrom('')
@@ -185,6 +191,28 @@ export default function CustomerListPage() {
     exportCustomersJSON(toExport)
   }
 
+  async function handleBulkEmail(subject: string, body: string) {
+    const ids = [...selectedIds]
+    setBulkWorking(true)
+    try {
+      const fns = getFunctions()
+      const result = await httpsCallable<
+        { customerIds: string[]; subject: string; body: string },
+        { sent: number; skipped: number }
+      >(fns, 'bulkSendEmail')({ customerIds: ids, subject, body })
+      const { sent, skipped } = result.data
+      toast(
+        `Sent ${sent} email${sent !== 1 ? 's' : ''}${skipped > 0 ? ` · ${skipped} skipped (no email)` : ''}.`,
+        sent > 0 ? 'success' : 'error',
+      )
+      clearSelection()
+    } catch (err) {
+      toast(`Email send failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
   const closeMenu     = useCallback(() => setMenuOpen(false), [])
   const closeSortOpen = useCallback(() => setSortOpen(false), [])
   const closeTag      = useCallback(() => setTagOpen(false), [])
@@ -205,7 +233,7 @@ export default function CustomerListPage() {
   useEffect(() => {
     setLoading(true)
     const unsub = subscribeToCustomers(
-      items => { setAll(items); setLoading(false) },
+      (items, hitCap) => { setAll(items); setHitRecordCap(hitCap); setLoading(false) },
       err => { setError(err.message); setLoading(false) },
     )
     return unsub
@@ -238,9 +266,9 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
-  const uniqueAdNos = useMemo<string[]>(() => {
+  const uniqueLeadSources = useMemo<string[]>(() => {
     const set = new Set<string>()
-    all.filter(c => categoryMatches(c.category, cat) && c.adNo.trim()).forEach(c => set.add(c.adNo.trim()))
+    all.filter(c => categoryMatches(c.category, cat) && c.leadSource.trim()).forEach(c => set.add(c.leadSource.trim()))
     return [...set].sort()
   }, [all, cat])
 
@@ -251,7 +279,7 @@ export default function CustomerListPage() {
   }, [all, cat])
 
   const activeFilterCount = [
-    filterSalesman, filterState, filterAdNo, filterProduct,
+    filterSalesman, filterState, filterLeadSource, filterProduct,
     filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
   ].filter(Boolean).length
 
@@ -272,7 +300,7 @@ export default function CustomerListPage() {
     // Advanced filters
     if (filterSalesman) items = items.filter(c => c.salesman === filterSalesman)
     if (filterState)    items = items.filter(c => c.state === filterState)
-    if (filterAdNo)     items = items.filter(c => c.adNo === filterAdNo)
+    if (filterLeadSource) items = items.filter(c => c.leadSource === filterLeadSource)
     if (filterProduct)  items = items.filter(c => c.product === filterProduct)
     if (filterCallback === 'yes') items = items.filter(c => c.callback.toLowerCase() === 'yes')
     else if (filterCallback === 'no') items = items.filter(c => c.callback.toLowerCase() !== 'yes')
@@ -301,12 +329,12 @@ export default function CustomerListPage() {
     })
     return items
   }, [all, cat, debouncedSearch, showInactive, tagFilter, sortField, sortDir,
-      filterSalesman, filterState, filterAdNo, filterProduct, filterCallback,
+      filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
       filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
 
   // Reset to page 1 whenever anything changes the filtered set
   useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
-    filterSalesman, filterState, filterAdNo, filterProduct, filterCallback,
+    filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
     filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
 
   const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -461,21 +489,25 @@ export default function CustomerListPage() {
             </button>
             {menuOpen && (
               <div className="absolute right-0 mt-1 w-44 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                <button
-                  onClick={() => { closeMenu(); fileInputRef.current?.click() }}
-                  disabled={importing}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
-                >
-                  <span className="text-base">↑</span>
-                  {importing ? 'Importing…' : 'Import JSON'}
-                </button>
-                <button
-                  onClick={() => { closeMenu(); setCsvImportOpen(true) }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2.5"
-                >
-                  <span className="text-base">📥</span>
-                  Import CSV
-                </button>
+                {perms.canImport && (
+                  <>
+                    <button
+                      onClick={() => { closeMenu(); fileInputRef.current?.click() }}
+                      disabled={importing}
+                      className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
+                    >
+                      <span className="text-base">↑</span>
+                      {importing ? 'Importing…' : 'Import JSON'}
+                    </button>
+                    <button
+                      onClick={() => { closeMenu(); setCsvImportOpen(true) }}
+                      className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2.5"
+                    >
+                      <span className="text-base">📥</span>
+                      Import CSV
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => { closeMenu(); handleExport() }}
                   disabled={loading}
@@ -496,9 +528,11 @@ export default function CustomerListPage() {
               </div>
             )}
           </div>
-          <Link to={`/records/new?category=${cat}`} className="btn-primary text-sm px-3 py-1.5">
-            + New
-          </Link>
+          {perms.canEdit && (
+            <Link to={`/records/new?category=${cat}`} className="btn-primary text-sm px-3 py-1.5">
+              + New
+            </Link>
+          )}
         </div>
       </div>
 
@@ -635,16 +669,16 @@ export default function CustomerListPage() {
                 </select>
               </div>
             )}
-            {uniqueAdNos.length > 0 && (
+            {uniqueLeadSources.length > 0 && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Ad Source</label>
+                <label className="block text-xs text-gray-500 mb-1">Lead Source</label>
                 <select
-                  value={filterAdNo}
-                  onChange={e => setFilterAdNo(e.target.value)}
+                  value={filterLeadSource}
+                  onChange={e => setFilterLeadSource(e.target.value)}
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
                 >
                   <option value="">All</option>
-                  {uniqueAdNos.map(s => <option key={s} value={s}>{s}</option>)}
+                  {uniqueLeadSources.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
             )}
@@ -741,8 +775,14 @@ export default function CustomerListPage() {
         </div>
       )}
 
+      {hitRecordCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4">
+          ⚠ Showing the first 2,000 records only. Some records may not be visible — contact support to raise this limit.
+        </div>
+      )}
+
       {/* Bulk action bar — replaces record count when items are selected */}
-      {!loading && someSelected ? (
+      {!loading && someSelected && perms.canBulkAction ? (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <button onClick={clearSelection} className="text-gray-400 hover:text-gray-200 transition-colors" aria-label="Clear selection">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -784,6 +824,13 @@ export default function CustomerListPage() {
             )}
           </div>
           <button
+            onClick={() => setEmailModalOpen(true)}
+            disabled={bulkWorking}
+            className="text-sm px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-40"
+          >
+            Email
+          </button>
+          <button
             onClick={handleBulkExport}
             disabled={bulkWorking}
             className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40"
@@ -804,8 +851,8 @@ export default function CustomerListPage() {
       )}
 
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
-        {/* Select-all checkbox row */}
-        {!loading && filtered.length > 0 && (
+        {/* Select-all checkbox row — hidden for roles without bulk actions */}
+        {!loading && filtered.length > 0 && perms.canBulkAction && (
           <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
             <input
               type="checkbox"
@@ -850,6 +897,7 @@ export default function CustomerListPage() {
               customer={c}
               selected={selectedIds.has(c.id)}
               onToggle={() => toggleOne(c.id)}
+              showCheckbox={perms.canBulkAction}
             />
           ))
         )}
@@ -892,6 +940,18 @@ export default function CustomerListPage() {
           }}
         />
       )}
+      {emailModalOpen && (
+        <BulkEmailModal
+          recipientCount={selectedIds.size}
+          emailCount={filtered.filter(c => selectedIds.has(c.id) && c.email?.includes('@')).length}
+          working={bulkWorking}
+          onSend={(subject, body) => {
+            setEmailModalOpen(false)
+            handleBulkEmail(subject, body)
+          }}
+          onClose={() => setEmailModalOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -900,39 +960,64 @@ function CustomerRow({
   customer: c,
   selected,
   onToggle,
+  showCheckbox = true,
 }: {
   customer: CustomerItem
   selected: boolean
   onToggle: () => void
+  showCheckbox?: boolean
 }) {
-  const name = fullName(c)
-  const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
+  const name = c.category.toLowerCase() === 'vendor' ? (c.first || '—') : fullName(c)
+  const initials = [c.first[0], c.category.toLowerCase() !== 'vendor' ? c.lastname[0] : ''].filter(Boolean).join('').toUpperCase()
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
-  const color = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+  const color = coloredAvatars ? avatarColor(name) : avatarOriginal()
 
   return (
-    <div className={`flex items-center gap-3 px-4 py-3 transition-colors ${selected ? 'bg-indigo-600/10' : 'hover:bg-gray-700/30'}`}>
-      <input
-        type="checkbox"
-        checked={selected}
-        onChange={onToggle}
-        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
-        onClick={e => e.stopPropagation()}
-      />
+    <div className={`group flex items-center gap-3 px-4 py-3 transition-colors ${selected ? 'bg-indigo-600/10' : 'hover:bg-gray-700/30'}`}>
+      {/* Avatar doubles as the selection toggle */}
+      {showCheckbox ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="relative w-9 h-9 rounded-full shrink-0 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          aria-label={selected ? 'Deselect' : 'Select'}
+        >
+          {selected ? (
+            <div className="w-full h-full bg-indigo-600 flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            </div>
+          ) : (
+            <>
+              <div className="w-full h-full flex items-center justify-center" style={{ background: color.bg }}>
+                {c.photo
+                  ? <img src={c.photo} alt={name} className="w-full h-full object-cover" />
+                  : <span className="text-sm font-semibold" style={{ color: color.text }}>{initials || '?'}</span>
+                }
+              </div>
+              {/* Hover: dim avatar and show checkbox hint */}
+              <div className="absolute inset-0 bg-gray-900/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <div className="w-4 h-4 rounded border-2 border-white" />
+              </div>
+            </>
+          )}
+        </button>
+      ) : (
+        <div
+          className="w-9 h-9 rounded-full shrink-0 overflow-hidden flex items-center justify-center"
+          style={{ background: color.bg }}
+        >
+          {c.photo
+            ? <img src={c.photo} alt={name} className="w-full h-full object-cover" />
+            : <span className="text-sm font-semibold" style={{ color: color.text }}>{initials || '?'}</span>
+          }
+        </div>
+      )}
       <Link
         to={`/records/${c.id}`}
         className="flex items-center gap-3 flex-1 min-w-0"
       >
-        <div
-          className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 overflow-hidden"
-          style={{ background: color.bg }}
-        >
-          {c.photo ? (
-            <img src={c.photo} alt={name} className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-sm font-semibold" style={{ color: color.text }}>{initials || '?'}</span>
-          )}
-        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
@@ -957,6 +1042,15 @@ function CustomerRow({
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${ls.badgeClass}`}>
                 <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
                 {ls.label}
+              </span>
+            )
+          })()}
+          {c.category.toLowerCase() === 'customer' && (() => {
+            const hs = calculateHealthScoreLight(c)
+            return (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${hs.badgeClass}`}>
+                <span className={`w-1 h-1 rounded-full ${hs.dotClass}`} />
+                {hs.label}
               </span>
             )
           })()}
@@ -1013,6 +1107,104 @@ function SkeletonRow() {
       <div className="flex-1 space-y-2">
         <div className="h-3.5 bg-gray-700 rounded w-40" />
         <div className="h-3 bg-gray-700/60 rounded w-28" />
+      </div>
+    </div>
+  )
+}
+
+function BulkEmailModal({
+  recipientCount,
+  emailCount,
+  working,
+  onSend,
+  onClose,
+}: {
+  recipientCount: number
+  emailCount: number
+  working: boolean
+  onSend: (subject: string, body: string) => void
+  onClose: () => void
+}) {
+  const [subject, setSubject] = useState('Hi {first}, a message for you')
+  const [body, setBody]       = useState('')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!subject.trim() || !body.trim()) return
+    onSend(subject, body)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700/60">
+          <h2 className="text-base font-semibold text-white">Send Email</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Recipient summary */}
+          <div className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+            emailCount === 0
+              ? 'bg-red-900/30 border border-red-700/50 text-red-300'
+              : 'bg-indigo-900/30 border border-indigo-700/50 text-indigo-300'
+          }`}>
+            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+            </svg>
+            {emailCount === 0
+              ? `None of the ${recipientCount} selected records have an email address.`
+              : `${emailCount} of ${recipientCount} selected record${recipientCount !== 1 ? 's' : ''} have an email address.`}
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">Subject</label>
+            <input
+              type="text"
+              value={subject}
+              onChange={e => setSubject(e.target.value)}
+              required
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+              placeholder="Email subject…"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">Body</label>
+            <textarea
+              value={body}
+              onChange={e => setBody(e.target.value)}
+              required
+              rows={7}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600 resize-none"
+              placeholder="Write your message…"
+            />
+            <p className="text-xs text-gray-600 mt-1">
+              Merge tags: <span className="text-gray-500 font-mono">{'{first}'}</span> <span className="text-gray-500 font-mono">{'{lastname}'}</span> <span className="text-gray-500 font-mono">{'{city}'}</span> <span className="text-gray-500 font-mono">{'{salesman}'}</span>
+            </p>
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2 rounded-xl border border-gray-700 text-sm text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={working || emailCount === 0 || !subject.trim() || !body.trim()}
+              className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {working ? 'Sending…' : `Send to ${emailCount} recipient${emailCount !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )

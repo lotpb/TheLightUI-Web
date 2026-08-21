@@ -7,7 +7,7 @@ import {
 } from '../../services/chatService'
 import { initials, displayName, type ChatMessage, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
 interface LocationState {
@@ -134,8 +134,8 @@ export default function ChatLogPage() {
       {/* Header */}
       <div className="flex items-center gap-3 px-8 py-3 border-b border-gray-800 bg-gray-900 shrink-0">
         <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 mr-1">←</button>
-        <div className="relative w-9 h-9 rounded-full flex items-center justify-center overflow-hidden shrink-0" style={{ background: (coloredAvatars ? avatarColor(contactName) : AVATAR_ORIGINAL).bg }}>
-          <span className="text-xs font-bold" style={{ color: (coloredAvatars ? avatarColor(contactName) : AVATAR_ORIGINAL).text }}>{contactIni || '?'}</span>
+        <div className="relative w-9 h-9 rounded-full flex items-center justify-center overflow-hidden shrink-0" style={{ background: (coloredAvatars ? avatarColor(contactName) : avatarOriginal()).bg }}>
+          <span className="text-xs font-bold" style={{ color: (coloredAvatars ? avatarColor(contactName) : avatarOriginal()).text }}>{contactIni || '?'}</span>
           {contact?.profileImageUrl && (
             <img
               src={contact.profileImageUrl}

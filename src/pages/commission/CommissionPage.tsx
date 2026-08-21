@@ -318,6 +318,16 @@ export default function CommissionPage() {
   const [paid, setPaid]           = useState<Record<string, boolean>>({})
   const [editingRate, setEditingRate] = useState<string | null>(null)
   const [editValue,   setEditValue]   = useState('')
+  const [inclCats, setInclCats] = useState<Set<string>>(new Set(['customer', 'lead']))
+
+  function toggleCat(cat: string) {
+    setInclCats(prev => {
+      const next = new Set(prev)
+      if (next.has(cat) && next.size > 1) next.delete(cat)
+      else next.add(cat)
+      return next
+    })
+  }
 
   // Load paid status from localStorage (period-specific, local is fine)
   useEffect(() => {
@@ -348,7 +358,7 @@ export default function CommissionPage() {
   const rows = useMemo<CommissionRow[]>(() => {
     const map = new Map<string, { customers: number; revenue: number }>()
     for (const c of periodItems) {
-      if (c.category.toLowerCase() !== 'customer') continue
+      if (!inclCats.has(c.category.toLowerCase())) continue
       const name = c.salesman.trim() || 'Unassigned'
       const row  = map.get(name) ?? { customers: 0, revenue: 0 }
       row.customers++
@@ -362,7 +372,7 @@ export default function CommissionPage() {
         return { name, customers, revenue, rate, commission, isOverride, paid: isPaid }
       })
       .sort((a, b) => b.revenue - a.revenue)
-  }, [periodItems, structure, paid, pKey])
+  }, [periodItems, structure, paid, pKey, inclCats])
 
   const totals = useMemo(() => ({
     revenue:     rows.reduce((s, r) => s + r.revenue, 0),
@@ -425,14 +435,14 @@ export default function CommissionPage() {
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-white">Commission Tracker</h1>
           <p className="text-sm text-gray-400 mt-0.5">
-            Click a rate to set a per-person override · click a row to mark paid/unpaid
+            Tap a rate to override · tap a row to mark paid
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <button
             onClick={() => setShowEditor(s => !s)}
             className={`text-sm px-3 py-1.5 rounded-lg font-medium transition-colors ${
@@ -459,19 +469,37 @@ export default function CommissionPage() {
         />
       )}
 
-      {/* Period selector */}
-      <div className="flex gap-1.5 flex-wrap">
-        {PERIODS.map(p => (
-          <button
-            key={p}
-            onClick={() => setPeriod(p)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              period === p ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {PERIOD_LABELS[p]}
-          </button>
-        ))}
+      {/* Period selector + category toggles */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex gap-1.5 flex-wrap">
+          {PERIODS.map(p => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+                period === p ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {PERIOD_LABELS[p]}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5 border-l border-gray-700 pl-4">
+          <span className="text-xs text-gray-500 mr-0.5">Include:</span>
+          {(['customer', 'lead'] as const).map(cat => (
+            <button
+              key={cat}
+              onClick={() => toggleCat(cat)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors capitalize ${
+                inclCats.has(cat)
+                  ? cat === 'customer' ? 'bg-teal-600 text-white' : 'bg-orange-600 text-white'
+                  : 'bg-gray-800 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {cat === 'customer' ? 'Customers' : 'Leads'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* KPI cards */}
@@ -505,7 +533,10 @@ export default function CommissionPage() {
       ) : (
         <div className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-            <p className="text-sm font-semibold text-gray-200">{smLabel} Commission</p>
+            <p className="text-sm font-semibold text-gray-200">
+              {smLabel} Commission
+              {inclCats.size > 1 && <span className="ml-2 text-xs font-normal text-gray-500">(Leads + Customers)</span>}
+            </p>
             <div className="flex items-center gap-3">
               {structure.mode === 'tiered' && (
                 <span className="text-xs text-indigo-400 bg-indigo-900/30 px-2 py-0.5 rounded-full">

@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { getDoc, doc } from 'firebase/firestore'
+import { db } from '../firebase/config'
 import { usePageTitle } from '../hooks/usePageTitle'
 import { fetchSnapshot, type SnapshotData } from '../services/snapshotService'
 import { formatCurrency, fullName } from '../models/customer'
-import { avatarColor, AVATAR_ORIGINAL } from '../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
 import StatCard from '../components/StatCard'
 
@@ -14,10 +16,14 @@ import { esc } from '../utils/exportUtils'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToExpensesToday } from '../services/expenseService'
 import { subscribeToFollowUps } from '../services/customerService'
+import { subscribeToAllActivities } from '../services/activityService'
+import { ACTIVITY_TYPES, type Activity } from '../models/activity'
 import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
+
+const ACTIVITY_PREVIEW = 8
 
 function fmtCompact(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
@@ -47,6 +53,9 @@ export default function DashboardPage() {
   const [expensesToday, setExpensesToday] = useState<Expense[]>([])
   const [expensesLoading, setExpensesLoading] = useState(true)
   const [followUps, setFollowUps] = useState<CustomerItem[]>([])
+  const [activities, setActivities] = useState<Activity[]>([])
+  const [activityNameMap, setActivityNameMap] = useState<Map<string, string>>(new Map())
+  const [activitiesLoading, setActivitiesLoading] = useState(true)
   const user = useAuthStore(s => s.user)
   const companyId = useAuthStore(s => s.companyId)
 
@@ -89,6 +98,34 @@ export default function DashboardPage() {
     return unsub
   }, [user, companyId])
 
+  useEffect(() => {
+    if (!user) { setActivitiesLoading(false); return }
+    const unsub = subscribeToAllActivities(
+      items => { setActivities(items.slice(0, ACTIVITY_PREVIEW)); setActivitiesLoading(false) },
+      ()    => setActivitiesLoading(false),
+    )
+    return unsub
+  }, [user, companyId])
+
+  // Resolve customer names for the preview entries via individual doc reads
+  useEffect(() => {
+    if (activities.length === 0) return
+    const ids = [...new Set(activities.map(a => a.customerId))]
+    Promise.all(ids.map(async id => {
+      try {
+        const snap = await getDoc(doc(db, 'Customers', id))
+        if (!snap.exists()) return null
+        const d = snap.data() as Record<string, unknown>
+        const name = `${d.first ?? ''} ${d.lastname ?? ''}`.trim()
+        return [id, name || '—'] as [string, string]
+      } catch { return null }
+    })).then(results => {
+      const map = new Map<string, string>()
+      for (const r of results) if (r) map.set(r[0], r[1])
+      setActivityNameMap(map)
+    })
+  }, [activities])
+
   const salesTotal = data?.salesToday.reduce((s, c) => s + c.amount, 0) ?? 0
   const chartEntries = data ? CHART_ENTRIES(data) : null
 
@@ -120,22 +157,26 @@ export default function DashboardPage() {
       </div>`
     }
 
+    const expenseTotal = expensesToday.reduce((s, e) => s + e.amount, 0)
+
     const todayTable = buildTable(
-      ['', 'Leads', 'Appts', 'Customers', 'Sales', 'Jobs'],
+      ['', 'Leads', 'Appts', 'Customers', 'Sales', 'Jobs', 'Expenses'],
       [['Today',
         String(snap.leadsToday.length),
         String(snap.appointmentsToday.length),
         String(snap.customersToday.length),
         formatCurrency(salesTotal),
         String(snap.jobsStartingToday.length),
+        formatCurrency(expenseTotal),
       ]]
     )
 
     const overallTable = buildTable(
-      ['', 'Active Leads', 'Active Customers', 'Total Sales'],
+      ['', 'Active Leads', 'Active Customers', 'Active Tasks', 'Total Sales'],
       [['Overall',
         String(snap.activeLeadCount),
         String(snap.activeCustomerCount),
+        String(todos.length),
         formatCurrency(snap.totalCustomerSales),
       ]]
     )
@@ -157,7 +198,7 @@ export default function DashboardPage() {
         ['Name', 'Phone', 'Location', 'Salesman', 'Appt Date', 'Callback'],
         snap.appointmentsToday.map(c => [
           fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
-          c.salesman, fmtDate(c.startDate), c.callback,
+          c.salesman, c.startDate ? fmtDate(c.startDate) : '', c.callback,
         ]),
       )
     ) : ''
@@ -192,7 +233,39 @@ export default function DashboardPage() {
         snap.jobsStartingToday.map(c => [
           fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
           c.salesman, c.contractor, c.job, c.product,
-          fmtDate(c.startDate), fmtDate(c.completionDate),
+          c.startDate ? fmtDate(c.startDate) : '', c.completionDate ? fmtDate(c.completionDate) : '',
+        ]),
+      )
+    ) : ''
+
+    const expensesSect = expensesToday.length ? section(
+      'Expenses Today', formatCurrency(expenseTotal),
+      buildTable(
+        ['Title', 'Category', 'Amount'],
+        expensesToday.map(e => [e.title, e.category, formatCurrency(e.amount)]),
+      )
+    ) : ''
+
+    const tasksSect = todos.length ? section(
+      'Active Tasks', String(todos.length),
+      buildTable(
+        ['Task', 'Priority', 'Due Date'],
+        todos.map(t => [
+          t.title,
+          t.priority,
+          t.dueDate ? fmtDate(t.dueDate) : '',
+        ]),
+      )
+    ) : ''
+
+    const followUpsSect = followUps.length ? section(
+      'Follow-ups', String(followUps.length),
+      buildTable(
+        ['Name', 'Phone', 'Follow-up Date'],
+        followUps.map(c => [
+          fullName(c),
+          c.phone,
+          c.followUpDate ? fmtDate(c.followUpDate) : '',
         ]),
       )
     ) : ''
@@ -240,6 +313,9 @@ export default function DashboardPage() {
   ${customersSect}
   ${salesSect}
   ${jobsSect}
+  ${expensesSect}
+  ${tasksSect}
+  ${followUpsSect}
 </body>
 </html>`
 
@@ -368,6 +444,13 @@ export default function DashboardPage() {
       <ListSection
         title="Jobs in Progress" color="text-teal-400" badgeColor="bg-teal-600"
         items={data?.jobsStartingToday} loading={loading} emptyMsg="No jobs starting today"
+      />
+
+      {/* Recent Activity */}
+      <ActivityTimelineCard
+        activities={activities}
+        nameMap={activityNameMap}
+        loading={activitiesLoading}
       />
     </div>
   )
@@ -575,6 +658,99 @@ function FollowUpsCard({ items }: { items: CustomerItem[] }) {
   )
 }
 
+function timeAgo(d: Date): string {
+  const diff = Date.now() - d.getTime()
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1)   return 'Just now'
+  if (mins < 60)  return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24)   return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7)   return `${days}d ago`
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function ActivityTimelineCard({
+  activities,
+  nameMap,
+  loading,
+}: {
+  activities: Activity[]
+  nameMap: Map<string, string>
+  loading: boolean
+}) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <p className="section-header mb-0 text-sky-400">Recent Activity</p>
+          {!loading && activities.length > 0 && (
+            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-sky-600">
+              {activities.length}
+            </span>
+          )}
+        </div>
+        <Link to="/activity" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card px-4 py-3">
+        {loading ? (
+          <div className="space-y-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex gap-3 animate-pulse">
+                <div className="w-7 h-7 rounded-full bg-gray-700 shrink-0" />
+                <div className="flex-1 space-y-2 pt-0.5">
+                  <div className="h-3 bg-gray-700 rounded w-40" />
+                  <div className="h-3 bg-gray-700/60 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : activities.length === 0 ? (
+          <p className="text-sm text-gray-500 py-1">No activity logged yet</p>
+        ) : (
+          <div className="relative">
+            <div className="absolute left-3.5 top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
+            <div className="space-y-0">
+              {activities.map((a, idx) => {
+                const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
+                const customerName = nameMap.get(a.customerId) ?? '…'
+                const isLast = idx === activities.length - 1
+                return (
+                  <div key={a.id} className={`relative flex gap-3 ${isLast ? 'pb-0' : 'pb-4'}`}>
+                    <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 z-10">
+                      <span className="text-xs leading-none">{meta.icon}</span>
+                    </div>
+                    <div className="flex-1 min-w-0 pt-0.5">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <Link
+                          to={`/records/${a.customerId}`}
+                          className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors truncate"
+                        >
+                          {customerName}
+                        </Link>
+                        <span className="text-xs text-gray-600">·</span>
+                        <span className="text-xs text-gray-500">{meta.label}</span>
+                        <span className="text-xs text-gray-600">·</span>
+                        <span className="text-xs text-gray-600">{a.userName}</span>
+                        <span className="text-xs text-gray-700 ml-auto shrink-0">{timeAgo(a.createdAt)}</span>
+                      </div>
+                      {a.note && (
+                        <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{a.note}</p>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function ListSection({
   title, color, badgeColor, items, loading, emptyMsg, valueKey,
 }: {
@@ -609,7 +785,7 @@ function ListSection({
           <p className="px-4 py-3 text-sm text-gray-500">{emptyMsg}</p>
         ) : (
           items.map(c => {
-            const color = coloredAvatars ? avatarColor(fullName(c)) : AVATAR_ORIGINAL
+            const color = coloredAvatars ? avatarColor(fullName(c)) : avatarOriginal()
             return (
             <Link
               key={c.id}

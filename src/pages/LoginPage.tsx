@@ -15,7 +15,15 @@ export default function LoginPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (user) navigate('/dashboard', { replace: true })
+    if (user) {
+      const pendingCode = sessionStorage.getItem('pendingInviteCode')
+      if (pendingCode) {
+        sessionStorage.removeItem('pendingInviteCode')
+        navigate(`/join?code=${pendingCode}`, { replace: true })
+      } else {
+        navigate('/dashboard', { replace: true })
+      }
+    }
   }, [user, navigate])
 
   async function handleSubmit(e: React.FormEvent) {

@@ -5,7 +5,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import { fetchAllUsers } from '../../services/chatService'
 import { initials, displayName, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
 export default function NewChatPage() {
@@ -89,7 +89,7 @@ export default function NewChatPage() {
         ) : (
           filtered.map(u => {
             const name = displayName(u)
-            const color = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+            const color = coloredAvatars ? avatarColor(name) : avatarOriginal()
             return (
             <button
               key={u.uid}

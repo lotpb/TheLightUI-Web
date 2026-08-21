@@ -8,10 +8,11 @@ import { fullName, type CustomerItem } from '../../models/customer'
 import type { CatalogItem } from '../../models/catalogItem'
 import {
   fmtCurrency, generateInvoiceNumber, lineItemTotal,
-  type Invoice, type InvoiceLineItem,
+  type Invoice, type InvoiceLineItem, type RecurringInterval,
 } from '../../models/invoice'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
+import { validateInvoiceForm } from '../../validation/invoiceFormSchema'
 
 function dateToInput(d: Date): string {
   const y = d.getFullYear()
@@ -35,10 +36,12 @@ const emptyLine = (): InvoiceLineItem => ({ description: '', qty: 1, rate: 0 })
 export default function InvoiceFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit  = Boolean(id)
-  usePageTitle(isEdit ? 'Edit Invoice' : 'New Invoice')
 
   const [searchParams] = useSearchParams()
   const prefillCustomerId = searchParams.get('customerId') ?? ''
+  const fromQuoteId       = searchParams.get('fromQuote') ?? ''
+
+  usePageTitle(isEdit ? 'Edit Invoice' : fromQuoteId ? 'Invoice from Quote' : 'New Invoice')
   const navigate = useNavigate()
   const toast    = useToast()
   const companyId = useAuthStore(s => s.companyId)
@@ -66,6 +69,8 @@ export default function InvoiceFormPage() {
   const [lineItems,       setLineItems]       = useState<InvoiceLineItem[]>([emptyLine()])
   const [taxRate,         setTaxRate]         = useState(0)
   const [notes,           setNotes]           = useState('')
+  const [recurring,       setRecurring]       = useState<RecurringInterval | null>(null)
+  const [nextRecurDate,   setNextRecurDate]   = useState(dateToInput(dueDefault()))
   const [saving,          setSaving]          = useState(false)
   const [loading,         setLoading]         = useState(isEdit)
 
@@ -107,6 +112,8 @@ export default function InvoiceFormPage() {
       setLineItems(inv.lineItems.length ? inv.lineItems : [emptyLine()])
       setTaxRate(inv.taxRate)
       setNotes(inv.notes)
+      setRecurring(inv.recurring ?? null)
+      if (inv.nextRecurDate) setNextRecurDate(dateToInput(inv.nextRecurDate))
       setCustQuery(inv.customerName)
       setLoading(false)
     })
@@ -118,6 +125,24 @@ export default function InvoiceFormPage() {
     const c = customers.find(c => c.id === prefillCustomerId)
     if (c) selectCustomer(c)
   }, [prefillCustomerId, customers, isEdit])
+
+  // Pre-fill from quote (Convert to Invoice)
+  useEffect(() => {
+    if (isEdit || !fromQuoteId || customers.length === 0) return
+    const c = customers.find(c => c.id === fromQuoteId)
+    if (!c) return
+    selectCustomer(c)
+    // Build a line item from the customer's work data
+    const description = [c.job, c.product].filter(Boolean).join(' — ') || 'Services'
+    const qty  = c.quantity > 0 ? c.quantity : 1
+    const rate = c.amount > 0 ? Math.round((c.amount / qty) * 100) / 100 : 0
+    if (description || rate > 0) {
+      setLineItems([{ description, qty, rate }])
+    }
+    // Pull notes saved on the quote
+    const quoteNotes = localStorage.getItem(`thelight.quote.notes.${fromQuoteId}`)
+    if (quoteNotes) setNotes(quoteNotes)
+  }, [fromQuoteId, customers, isEdit])
 
   function selectCustomer(c: CustomerItem) {
     setCustomerId(c.id)
@@ -176,15 +201,17 @@ export default function InvoiceFormPage() {
   const total    = subtotal + taxAmt
 
   async function handleSave(status: Invoice['status']) {
-    if (!customerId && !customerName.trim()) {
-      toast('Please select or enter a customer', 'error')
+    const finalCustomerName = customerName.trim() || customerQuery.trim()
+    const validationError = validateInvoiceForm({ customerId, customerName: finalCustomerName, lineItems })
+    if (validationError) {
+      toast(validationError, 'error')
       return
     }
     setSaving(true)
     const data: Omit<Invoice, 'id' | 'createdAt' | 'updatedAt'> = {
       companyId: companyId ?? '',
       customerId,
-      customerName: customerName.trim() || customerQuery.trim(),
+      customerName: finalCustomerName,
       customerPhone,
       customerEmail,
       customerAddress,
@@ -195,6 +222,8 @@ export default function InvoiceFormPage() {
       lineItems,
       notes,
       taxRate,
+      recurring,
+      nextRecurDate: recurring ? inputToDate(nextRecurDate) : null,
     }
     try {
       if (isEdit && id) {
@@ -225,7 +254,7 @@ export default function InvoiceFormPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">{isEdit ? 'Edit Invoice' : 'New Invoice'}</h1>
+          <h1 className="text-2xl font-bold text-white">{isEdit ? 'Edit Invoice' : fromQuoteId ? 'Invoice from Quote' : 'New Invoice'}</h1>
           <p className="text-sm text-gray-400 mt-0.5">{invoiceNumber}</p>
         </div>
         <button onClick={() => navigate(-1)} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
@@ -457,6 +486,54 @@ export default function InvoiceFormPage() {
             className="input-field w-full resize-none text-sm"
           />
         </div>
+      </div>
+
+      {/* Recurring */}
+      <div className="card overflow-hidden">
+        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+          <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Recurring Invoice</p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-xs text-gray-500">{recurring ? 'On' : 'Off'}</span>
+            <div
+              onClick={() => setRecurring(r => r ? null : 'monthly')}
+              className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${recurring ? 'bg-indigo-600' : 'bg-gray-700'}`}
+            >
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${recurring ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            </div>
+          </label>
+        </div>
+        {recurring ? (
+          <div className="p-4 flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="label-text">Repeat every</label>
+              <select
+                value={recurring}
+                onChange={e => setRecurring(e.target.value as RecurringInterval)}
+                className="input-field text-sm mt-1"
+              >
+                <option value="monthly">Month</option>
+                <option value="quarterly">Quarter (3 months)</option>
+                <option value="yearly">Year</option>
+              </select>
+            </div>
+            <div>
+              <label className="label-text">First occurrence</label>
+              <input
+                type="date"
+                value={nextRecurDate}
+                onChange={e => setNextRecurDate(e.target.value)}
+                className="input-field text-sm mt-1"
+              />
+            </div>
+            <p className="text-xs text-gray-500 w-full -mt-2">
+              A new copy of this invoice will be auto-generated and marked Sent on each scheduled date.
+            </p>
+          </div>
+        ) : (
+          <p className="px-4 py-3 text-sm text-gray-500">
+            Enable to auto-generate this invoice on a recurring schedule.
+          </p>
+        )}
       </div>
 
       {/* Save buttons */}

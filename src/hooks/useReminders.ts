@@ -1,13 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { subscribeToFollowUps } from '../services/customerService'
+import { subscribeToFollowUps, subscribeToCustomers } from '../services/customerService'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToServicePlans } from '../services/servicePlanService'
+import { subscribeToInvoices } from '../services/invoiceService'
 import { fullName, type CustomerItem } from '../models/customer'
 import type { Todo } from '../models/todo'
 import type { ServicePlan } from '../models/servicePlan'
+import type { Invoice } from '../models/invoice'
 import { useAuthStore } from '../stores/authStore'
+import { registerPush, listenForegroundMessages } from '../services/pushNotificationService'
+import { useToast } from '../components/Toast'
 
 export type NotifType = 'followup' | 'task' | 'serviceplan' | 'appointment'
+
+export interface RecentActivity {
+  id: string
+  label: string
+  sub: string
+  linkTo: string
+  createdAt: Date
+  kind: 'lead' | 'customer' | 'invoice'
+}
 
 export interface Notification {
   id: string
@@ -38,10 +51,13 @@ export function useReminders() {
   const companyId = useAuthStore(s => s.companyId)
   const user      = useAuthStore(s => s.user)
   const isReady   = useAuthStore(s => s.isReady)
+  const toast     = useToast()
 
   const [followUps,    setFollowUps]    = useState<CustomerItem[]>([])
   const [todos,        setTodos]        = useState<Todo[]>([])
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([])
+  const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
+  const [allInvoices,  setAllInvoices]  = useState<Invoice[]>([])
 
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default',
@@ -68,6 +84,17 @@ export function useReminders() {
       plans => setServicePlans(plans.filter(p => p.isActive)),
       () => {},
     )
+    return unsub
+  }, [companyId, isReady])
+
+  useEffect(() => {
+    const unsub = subscribeToCustomers(setAllCustomers, () => {})
+    return unsub
+  }, [companyId])
+
+  useEffect(() => {
+    if (!isReady) return
+    const unsub = subscribeToInvoices(setAllInvoices, () => {})
     return unsub
   }, [companyId, isReady])
 
@@ -118,6 +145,56 @@ export function useReminders() {
     })
   }
 
+  // Appointments — leads with an upcoming startDate
+  for (const c of allCustomers) {
+    if (c.category.toLowerCase() !== 'lead') continue
+    const d = c.startDate
+    if (!d || isNaN(d.getTime()) || d.getFullYear() < 2000) continue
+    const urgency = urgencyFor(d)
+    if (!urgency) continue
+    notifications.push({
+      id:       `appt-${c.id}`,
+      type:     'appointment',
+      title:    fullName(c) || 'Lead',
+      subtitle: c.salesman ? `with ${c.salesman}` : c.phone || '',
+      dueDate:  d,
+      linkTo:   `/records/${c.id}`,
+      urgency,
+    })
+  }
+
+  // Recent activity — records and invoices created in the last 24 hours
+  const yesterday24 = new Date(Date.now() - 24 * 60 * 60 * 1000)
+  const recentActivity: RecentActivity[] = []
+
+  for (const c of allCustomers) {
+    if (c.creationDate && c.creationDate >= yesterday24) {
+      recentActivity.push({
+        id:        `new-${c.id}`,
+        label:     fullName(c) || 'New record',
+        sub:       `New ${c.category.toLowerCase()} added`,
+        linkTo:    `/records/${c.id}`,
+        createdAt: c.creationDate,
+        kind:      c.category.toLowerCase() === 'customer' ? 'customer' : 'lead',
+      })
+    }
+  }
+
+  for (const inv of allInvoices) {
+    if (inv.createdAt && inv.createdAt >= yesterday24) {
+      recentActivity.push({
+        id:        `inv-${inv.id}`,
+        label:     `Invoice ${inv.invoiceNumber}`,
+        sub:       `${inv.customerName} · ${inv.status}`,
+        linkTo:    `/invoices/${inv.id}`,
+        createdAt: inv.createdAt,
+        kind:      'invoice',
+      })
+    }
+  }
+
+  recentActivity.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+
   // Sort: overdue → today → tomorrow → soon, then by date
   const URGENCY_ORDER: Record<Notification['urgency'], number> = {
     overdue: 0, today: 1, tomorrow: 2, soon: 3,
@@ -151,13 +228,36 @@ export function useReminders() {
     return () => clearInterval(id)
   }, [followUps, permission])
 
+  // Once permission is granted (now or previously), keep this device's FCM
+  // token registered — covers token rotation and first run after this feature
+  // shipped for users who'd already granted permission.
+  useEffect(() => {
+    if (permission !== 'granted' || !user) return
+    registerPush(user.uid).catch(() => {})
+  }, [permission, user?.uid])
+
+  // Foreground pushes (e.g. new chat messages) don't show a native notification,
+  // so surface them as a toast instead.
+  useEffect(() => {
+    let unsub: (() => void) | undefined
+    listenForegroundMessages(payload => {
+      const title = payload.notification?.title ?? 'New notification'
+      const body  = payload.notification?.body
+      toast(body ? `${title} — ${body}` : title, 'info')
+    }).then(fn => { unsub = fn })
+    return () => unsub?.()
+  }, [toast])
+
   async function requestPermission() {
     if (typeof Notification === 'undefined') return
     const result = await Notification.requestPermission()
     setPermission(result)
+    if (result === 'granted' && user) {
+      registerPush(user.uid).catch(() => {})
+    }
   }
 
   const urgentCount = notifications.filter(n => n.urgency === 'overdue' || n.urgency === 'today').length
 
-  return { notifications, urgentCount, permission, requestPermission }
+  return { notifications, urgentCount, recentActivity, permission, requestPermission }
 }

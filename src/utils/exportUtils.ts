@@ -49,6 +49,20 @@ interface CustomerJSONRecord {
   adNo?: string
   profession?: string
   manager?: string
+  paymentTerms?: string
+  taxId?: string
+  accountNumber?: string
+  payType?: string
+  commissionRate?: string
+  userRole?: string
+  lastLogin?: string
+  leadStatus?: string
+  lastContactDate?: string
+  contactAttempts?: number
+  companyName?: string
+  leadSource?: string
+  employeeStatus?: string
+  paymentStatus?: string
   creationDate: string
   startDate: string
   completionDate: string
@@ -150,6 +164,21 @@ export async function importCustomersJSON(
     lastUpdateDate: parseISO(r.lastUpdateDate),
     followUpDate:   null,
     tags:           [],
+    paymentTerms:   r.paymentTerms   ?? '',
+    taxId:          r.taxId          ?? '',
+    accountNumber:  r.accountNumber  ?? '',
+    payType:         r.payType         ?? '',
+    commissionRate:  r.commissionRate  ?? '',
+    userRole:        r.userRole        ?? '',
+    lastLogin:       r.lastLogin       ?? '',
+    leadStatus:      r.leadStatus      ?? '',
+    lastContactDate: r.lastContactDate ?? '',
+    contactAttempts: r.contactAttempts ?? 0,
+    companyName:     r.companyName     ?? '',
+    leadSource:      r.leadSource      ?? '',
+    employeeStatus:  r.employeeStatus  ?? '',
+    paymentStatus:   r.paymentStatus   ?? '',
+    customFields:    {},
   }))
 }
 
@@ -308,7 +337,7 @@ export function printCustomer(customer: CustomerItem, onError?: (msg: string) =>
   ${row('Rate', customer.rate)}
   ${row('Amount', customer.amount > 0 ? `$${customer.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '')}
   ${row('Called', customer.callback)}
-  ${row('Ad Source', customer.adNo)}
+  ${row('Lead Source', customer.leadSource)}
 </table>
 
 <p class="section-title">Schedule</p>

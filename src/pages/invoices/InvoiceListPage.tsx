@@ -180,6 +180,9 @@ export default function InvoiceListPage() {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <p className="text-sm font-bold text-white">{fmtCurrency(total)}</p>
+                  {inv.recurring && (
+                    <span title={`Recurring ${inv.recurring}`} className="text-violet-400 text-sm">↻</span>
+                  )}
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusClasses(status)}`}>
                     {statusLabel(status)}
                   </span>

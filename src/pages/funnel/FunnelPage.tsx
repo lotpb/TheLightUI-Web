@@ -86,7 +86,7 @@ export default function FunnelPage() {
   const called    = useMemo(() => leads.filter(c => c.callback.toLowerCase() === 'yes'), [leads])
   const customers = useMemo(() => inPeriod.filter(isCustomer), [inPeriod])
   const withJob   = useMemo(() => customers.filter(c => c.startDate && c.startDate.getTime() > 86_400_000), [customers])
-  const completed = useMemo(() => customers.filter(c => c.completionDate && c.completionDate.getTime() > 86_400_000 && c.completionDate > c.startDate), [customers])
+  const completed = useMemo(() => customers.filter(c => c.completionDate && c.completionDate.getTime() > 86_400_000 && c.startDate && c.completionDate > c.startDate), [customers])
 
   const revenue     = useMemo(() => customers.reduce((s, c) => s + c.amount, 0), [customers])
   const avgDeal     = customers.length > 0 ? revenue / customers.length : 0
@@ -140,11 +140,11 @@ export default function FunnelPage() {
       .sort((a, b) => b.revenue - a.revenue)
   }, [inPeriod, reps, repFilter])
 
-  // By lead source (adNo)
+  // By lead source
   const bySource = useMemo(() => {
     const src = new Map<string, { leads: number; customers: number }>()
     for (const c of inPeriod) {
-      const key = c.adNo?.trim() || '(none)'
+      const key = c.leadSource?.trim() || '(none)'
       const cur = src.get(key) ?? { leads: 0, customers: 0 }
       if (isLead(c))     cur.leads++
       if (isCustomer(c)) cur.customers++

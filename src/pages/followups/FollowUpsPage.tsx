@@ -105,7 +105,8 @@ function today0() {
 }
 
 function fmtDate(d: Date) {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${mo[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`
 }
 
 function daysDiff(a: Date, b: Date) {

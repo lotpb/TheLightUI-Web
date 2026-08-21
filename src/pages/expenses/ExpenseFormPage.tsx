@@ -7,6 +7,7 @@ import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
+import { validateExpenseForm } from '../../validation/expenseFormSchema'
 
 function toInputDate(d: Date): string {
   if (!d || isNaN(d.getTime())) return ''
@@ -76,10 +77,8 @@ export default function ExpenseFormPage() {
     ev.preventDefault()
     if (!user || !isReady) return
     const amtNum = parseFloat(amount)
-    const fe: { title?: string; amount?: string } = {}
-    if (!title.trim()) fe.title = 'Title is required.'
-    if (isNaN(amtNum) || amtNum <= 0) fe.amount = 'Enter a valid amount.'
-    if (fe.title || fe.amount) { setFieldErrors(fe); return }
+    const fe = validateExpenseForm({ title, amount: amtNum })
+    if (Object.keys(fe).length > 0) { setFieldErrors(fe); return }
 
     setSaving(true)
     setError(null)

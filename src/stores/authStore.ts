@@ -8,9 +8,10 @@ import {
   type User,
 } from 'firebase/auth'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
+import { doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
 import { auth } from '../firebase/config'
 import { db } from '../firebase/config'
+import { unregisterPush } from '../services/pushNotificationService'
 
 interface AuthState {
   user: User | null
@@ -67,7 +68,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     userDocUnsub = null
     stopHeartbeat()
     const { user } = useAuthStore.getState()
-    if (user) markOffline(user.uid)
+    if (user) {
+      markOffline(user.uid)
+      await unregisterPush(user.uid).catch(() => {})
+    }
     await fbSignOut(auth)
     set({ companyId: null, role: null, isReady: false })
   },
@@ -176,6 +180,21 @@ onAuthStateChanged(auth, async (user) => {
     }
 
     if (generation !== authGeneration) return
+
+    // If claims don't carry a role, read it eagerly from Firestore so the UI
+    // has the correct role before the first render (avoids the race where the
+    // onSnapshot listener fires too late and role-gated UI is hidden).
+    if (!role) {
+      try {
+        const userSnap = await getDoc(doc(db, 'users', user.uid))
+        if (userSnap.exists()) {
+          const fsRole = userSnap.data()['role']
+          if (typeof fsRole === 'string' && fsRole) role = fsRole
+        }
+      } catch { /* ignore — listener will sync later */ }
+    }
+
+    if (generation !== authGeneration) return
     useAuthStore.setState({ companyId: companyId ?? null, role: role ?? null, isReady: true })
 
     // Watch claimRefreshSignals/{uid} so that any server-side claims update
@@ -210,9 +229,11 @@ onAuthStateChanged(auth, async (user) => {
       () => {}
     )
 
-    // Sync companyId and mark user online.
+    // Sync companyId, email and mark user online.
     if (companyId) {
-      setDoc(doc(db, 'users', user.uid), { companyId, isOnline: true, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {})
+      const emailUpdate: Record<string, unknown> = { companyId, isOnline: true, lastSeen: serverTimestamp() }
+      if (user.email) emailUpdate['email'] = user.email
+      setDoc(doc(db, 'users', user.uid), emailUpdate, { merge: true }).catch(() => {})
       startHeartbeat(user.uid)
     }
   } catch (err) {

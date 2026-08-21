@@ -1,5 +1,6 @@
 node_modules
 dist
+.vite
 functions/lib
 .env.local
 .env.*.local

@@ -1,15 +1,19 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, initialized, isReady } = useAuthStore()
+  const location = useLocation()
 
   // Waiting for Firebase auth state
   if (!initialized) {
     return <Spinner />
   }
 
-  if (!user) return <Navigate to="/login" replace />
+  if (!user) {
+    const from = location.pathname + location.search + location.hash
+    return <Navigate to="/login" state={{ from }} replace />
+  }
 
   // Waiting for companyId to be resolved (setupAccount may be in-flight)
   if (!isReady) {

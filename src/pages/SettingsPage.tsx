@@ -14,6 +14,10 @@ import {
 } from '../services/customerService'
 import { getAllExpensesOnce, importExpensesFromJSON } from '../services/expenseService'
 import { getAllTodosOnce, importTodosFromJSON } from '../services/todoService'
+import {
+  subscribeToCustomFieldDefs, createCustomFieldDef, updateCustomFieldDef, deleteCustomFieldDef,
+} from '../services/customFieldService'
+import { CUSTOM_FIELD_TYPE_LABELS, type CustomFieldDef, type CustomFieldType } from '../models/customField'
 
 type ListKey = 'salesman' | 'job' | 'product' | 'advertiser' | 'contractor'
 
@@ -194,7 +198,65 @@ export default function SettingsPage() {
     }
   }
 
-useEffect(() => { fetch() }, [fetch])
+  // Custom field definitions
+  const [customFields, setCustomFields] = useState<CustomFieldDef[]>([])
+  const [newFieldLabel, setNewFieldLabel] = useState('')
+  const [newFieldType, setNewFieldType] = useState<CustomFieldType>('text')
+  const [newFieldOptions, setNewFieldOptions] = useState('')
+  const [creatingField, setCreatingField] = useState(false)
+  const [editingFieldId, setEditingFieldId] = useState<string | null>(null)
+  const [editFieldLabel, setEditFieldLabel] = useState('')
+  const [editFieldOptions, setEditFieldOptions] = useState('')
+
+  useEffect(() => subscribeToCustomFieldDefs(setCustomFields, () => {}), [])
+
+  async function handleAddCustomField() {
+    const label = newFieldLabel.trim()
+    if (!label) return
+    setCreatingField(true)
+    try {
+      await createCustomFieldDef(
+        {
+          label,
+          type: newFieldType,
+          options: newFieldOptions.split(',').map(o => o.trim()).filter(Boolean),
+        },
+        customFields.map(f => f.key),
+      )
+      setNewFieldLabel('')
+      setNewFieldType('text')
+      setNewFieldOptions('')
+      toast(`Field "${label}" added.`, 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to add field.', 'error')
+    } finally {
+      setCreatingField(false)
+    }
+  }
+
+  function startEditField(f: CustomFieldDef) {
+    setEditingFieldId(f.id)
+    setEditFieldLabel(f.label)
+    setEditFieldOptions(f.options.join(', '))
+  }
+
+  async function saveEditField() {
+    if (!editingFieldId) return
+    const label = editFieldLabel.trim()
+    if (!label) return
+    await updateCustomFieldDef(editingFieldId, {
+      label,
+      options: editFieldOptions.split(',').map(o => o.trim()).filter(Boolean),
+    })
+    setEditingFieldId(null)
+  }
+
+  async function handleDeleteCustomField(f: CustomFieldDef) {
+    await deleteCustomFieldDef(f.id)
+    toast(`Field "${f.label}" removed. Existing values are kept on records but hidden.`, 'info')
+  }
+
+  useEffect(() => { fetch() }, [fetch])
   useEffect(() => { if (lists) { setLocal(lists); setLocalLabels(l => ({ ...l, ...lists.labels })) } }, [lists])
 
   function commitLabel(key: ListKey) {
@@ -408,6 +470,111 @@ return (
               className="hidden"
               onChange={handleImportFile}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Custom Fields */}
+      <div className="card overflow-hidden mb-6">
+        <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Custom Fields</p>
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-gray-500">
+            Add extra fields to Customer, Lead, Vendor & Employee records — no code changes needed.
+          </p>
+
+          {customFields.length === 0 ? (
+            <p className="text-sm text-gray-500 italic">No custom fields yet.</p>
+          ) : (
+            <ul className="divide-y divide-gray-700/30 -mx-4">
+              {customFields.map(f => (
+                <li key={f.id} className="px-4 py-2.5">
+                  {editingFieldId === f.id ? (
+                    <div className="space-y-2">
+                      <input
+                        autoFocus
+                        value={editFieldLabel}
+                        onChange={e => setEditFieldLabel(e.target.value)}
+                        className="input-field text-sm w-full py-1.5"
+                      />
+                      {f.type === 'select' && (
+                        <input
+                          value={editFieldOptions}
+                          onChange={e => setEditFieldOptions(e.target.value)}
+                          placeholder="Options, comma separated"
+                          className="input-field text-sm w-full py-1.5"
+                        />
+                      )}
+                      <div className="flex gap-2">
+                        <button onClick={saveEditField} className="btn-primary text-xs px-3 py-1">Save</button>
+                        <button onClick={() => setEditingFieldId(null)} className="btn-secondary text-xs px-3 py-1">Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-200">{f.label}</span>
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">
+                            {CUSTOM_FIELD_TYPE_LABELS[f.type]}
+                          </span>
+                        </div>
+                        {f.type === 'select' && f.options.length > 0 && (
+                          <p className="text-xs text-gray-600 mt-0.5 truncate">{f.options.join(', ')}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => startEditField(f)} className="text-gray-500 hover:text-gray-200 p-1.5 rounded hover:bg-gray-800 transition-colors">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                          </svg>
+                        </button>
+                        <button onClick={() => handleDeleteCustomField(f)} className="text-gray-500 hover:text-red-400 p-1.5 rounded hover:bg-gray-800 transition-colors">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Add new field */}
+          <div className="border-t border-gray-700/40 pt-3 space-y-2">
+            <div className="flex gap-2 flex-wrap">
+              <input
+                value={newFieldLabel}
+                onChange={e => setNewFieldLabel(e.target.value)}
+                placeholder="Field name, e.g. Warranty Length"
+                className="input-field flex-1 text-sm py-1.5 min-w-[160px]"
+              />
+              <select
+                value={newFieldType}
+                onChange={e => setNewFieldType(e.target.value as CustomFieldType)}
+                className="input-field text-sm py-1.5"
+              >
+                {Object.entries(CUSTOM_FIELD_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            {newFieldType === 'select' && (
+              <input
+                value={newFieldOptions}
+                onChange={e => setNewFieldOptions(e.target.value)}
+                placeholder="Options, comma separated — e.g. 1 Year, 2 Years, 5 Years"
+                className="input-field text-sm w-full py-1.5"
+              />
+            )}
+            <button
+              onClick={handleAddCustomField}
+              disabled={!newFieldLabel.trim() || creatingField}
+              className="btn-primary text-sm px-4 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {creatingField ? 'Adding…' : '+ Add Field'}
+            </button>
           </div>
         </div>
       </div>

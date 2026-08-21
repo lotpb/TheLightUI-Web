@@ -60,7 +60,7 @@ export async function fetchSnapshot(): Promise<SnapshotData> {
   const allStartToday = apptSnap.docs.map(customerFromDoc)
   const appointmentsToday = allStartToday.filter(c => categoryMatches(c.category, 'Lead'))
   const jobsStartingToday = allStartToday.filter(
-    c => categoryMatches(c.category, 'Customer') && c.completionDate > c.startDate,
+    c => categoryMatches(c.category, 'Customer') && !!c.completionDate && !!c.startDate && c.completionDate > c.startDate,
   )
 
   const salesToday = customersToday.filter(c => c.amount > 0)

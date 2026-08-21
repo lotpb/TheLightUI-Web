@@ -2,6 +2,38 @@
 // The activate handler deletes every cache whose name is not CACHE.
 const CACHE = 'thelight-v3'
 
+// ── Firebase Cloud Messaging (background push) ──────────────────────────────
+// This app registers its own sw.js (instead of the default firebase-messaging-sw.js),
+// so background push handling is wired up here via the compat SDK. Config values
+// are Firebase's public web config, not secrets — safe to embed in a static file.
+importScripts('https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js')
+importScripts('https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging-compat.js')
+
+firebase.initializeApp({
+  apiKey: 'AIzaSyAfreL3f4UiXpvItb7U-tQhThSJn5OYoMY',
+  authDomain: 'thelightui.firebaseapp.com',
+  projectId: 'thelightui',
+  storageBucket: 'thelightui.appspot.com',
+  messagingSenderId: '753463338762',
+  appId: '1:753463338762:web:69305f862e084a4ae4fcf3',
+})
+
+// Instantiating messaging() registers this worker's 'push' listener, which
+// displays a native notification from the FCM payload's `notification` field.
+firebase.messaging()
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close()
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+      for (const client of clientList) {
+        if ('focus' in client) return client.focus()
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('/')
+    })
+  )
+})
+
 // Precache the offline fallback page so it's available without a network hit.
 self.addEventListener('install', e => {
   e.waitUntil(

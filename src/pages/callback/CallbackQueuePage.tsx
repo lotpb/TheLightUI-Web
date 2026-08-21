@@ -6,7 +6,7 @@ import { fullName, formatCurrency, type CustomerItem } from '../../models/custom
 import { useAuthStore } from '../../stores/authStore'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePrefStore } from '../../stores/prefStore'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 
 type SortKey = 'date' | 'name' | 'salesman' | 'amount'
 type CategoryFilter = 'all' | 'lead' | 'customer'
@@ -215,7 +215,7 @@ function CallbackRow({
 }) {
   const name     = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
-  const color    = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+  const color    = coloredAvatars ? avatarColor(name) : avatarOriginal()
 
   const now = new Date(); now.setHours(0, 0, 0, 0)
   const followUpOverdue = c.followUpDate && c.followUpDate < now
@@ -255,7 +255,7 @@ function CallbackRow({
           {c.salesman && c.category.toLowerCase() !== 'vendor' && (
             <span className="text-xs text-gray-500 truncate">{smLabel}: {c.salesman}</span>
           )}
-          {c.adNo && <span className="text-xs text-gray-600">Ad: {c.adNo}</span>}
+          {c.leadSource && <span className="text-xs text-gray-600">Source: {c.leadSource}</span>}
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
           <span className="text-xs text-gray-600">Added {fmtDate(c.creationDate)}</span>

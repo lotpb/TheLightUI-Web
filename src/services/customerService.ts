@@ -17,7 +17,7 @@ const COLLECTION = 'Customers'
 const REALTIME_LIMIT = 2_000
 
 export function subscribeToCustomers(
-  onData: (items: CustomerItem[]) => void,
+  onData: (items: CustomerItem[], hitCap: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -32,7 +32,8 @@ export function subscribeToCustomers(
   return onSnapshot(
     query(collection(db, COLLECTION), where('companyId', '==', companyId), limit(REALTIME_LIMIT)),
     (snap) => {
-      if (snap.size === REALTIME_LIMIT) {
+      const hitCap = snap.size === REALTIME_LIMIT
+      if (hitCap) {
         console.warn(
           `[subscribeToCustomers] hit ${REALTIME_LIMIT}-document cap for company ${companyId}. ` +
           'Records beyond this limit are not visible. Implement server-side aggregation and ' +
@@ -48,7 +49,7 @@ export function subscribeToCustomers(
         }
       }
       items.sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )
@@ -89,8 +90,24 @@ export async function deleteCustomer(id: string): Promise<void> {
   await deleteDoc(doc(db, COLLECTION, id))
 }
 
-export async function deactivateCustomer(id: string): Promise<void> {
-  await updateDoc(doc(db, COLLECTION, id), { active: '0' })
+export async function deactivateCustomer(id: string, extraFields: Record<string, unknown> = {}): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { active: '0', ...extraFields })
+}
+
+// Merge two records: apply partial field updates to the primary, deactivate the secondary.
+// The caller is responsible for computing which fields to copy over.
+export async function mergeCustomers(
+  primaryId: string,
+  secondaryId: string,
+  primaryUpdates: Record<string, unknown>,
+): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
+  const batch = writeBatch(db)
+  if (Object.keys(primaryUpdates).length > 0) {
+    batch.update(doc(db, COLLECTION, primaryId), primaryUpdates)
+  }
+  batch.update(doc(db, COLLECTION, secondaryId), { active: '0' })
+  await batch.commit()
 }
 
 export async function bulkDeactivate(ids: string[]): Promise<void> {
@@ -249,6 +266,20 @@ export interface CustomerJSONRecord {
   driverLicense?: string
   profession?: string
   manager?: string
+  paymentTerms?: string
+  taxId?: string
+  accountNumber?: string
+  payType?: string
+  commissionRate?: string
+  userRole?: string
+  lastLogin?: string
+  employeeStatus?: string
+  leadStatus?: string
+  lastContactDate?: string
+  contactAttempts?: number
+  companyName?: string
+  leadSource?: string
+  paymentStatus?: string
 }
 
 function safeDate(s: string | undefined): Date {
@@ -277,8 +308,8 @@ export function exportCustomersToJSON(items: CustomerItem[]): string {
     contractor: c.contractor,
     photo: c.photo,
     lastUpdateDate: c.lastUpdateDate.toISOString(),
-    startDate: c.startDate.toISOString(),
-    completionDate: c.completionDate.toISOString(),
+    startDate: c.startDate?.toISOString() ?? '',
+    completionDate: c.completionDate?.toISOString() ?? '',
     quantity: c.quantity,
     salesman: c.salesman,
     job: c.job,
@@ -378,6 +409,21 @@ export async function importCustomersFromJSON(
         manager: r.manager ?? '',
         followUpDate: null,
         tags: [],
+        paymentTerms: r.paymentTerms ?? '',
+        taxId: r.taxId ?? '',
+        accountNumber: r.accountNumber ?? '',
+        payType: r.payType ?? '',
+        commissionRate: r.commissionRate ?? '',
+        userRole: r.userRole ?? '',
+        lastLogin: r.lastLogin ?? '',
+        employeeStatus: r.employeeStatus ?? '',
+        leadStatus: r.leadStatus ?? '',
+        lastContactDate: r.lastContactDate ?? '',
+        contactAttempts: r.contactAttempts ?? 0,
+        companyName: r.companyName ?? '',
+        leadSource: r.leadSource ?? '',
+        paymentStatus: r.paymentStatus ?? '',
+        customFields: {},
       }
       const data = { ...customerToFirestore(item, userId), companyId }
       const ref = r.id

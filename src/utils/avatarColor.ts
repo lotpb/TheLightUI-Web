@@ -1,4 +1,5 @@
-const PALETTE = [
+// Dark mode — translucent with pastel text
+const PALETTE_DARK = [
   { bg: 'rgba(99,102,241,0.30)',  text: '#a5b4fc' }, // indigo
   { bg: 'rgba(16,185,129,0.30)', text: '#6ee7b7' },  // emerald
   { bg: 'rgba(245,158,11,0.30)', text: '#fcd34d' },  // amber
@@ -11,13 +12,36 @@ const PALETTE = [
   { bg: 'rgba(234,179,8,0.30)',  text: '#fde047' },  // yellow
 ]
 
+// Light mode — solid colors with white text so initials are legible
+const PALETTE_LIGHT = [
+  { bg: '#4f46e5', text: '#ffffff' }, // indigo
+  { bg: '#059669', text: '#ffffff' }, // emerald
+  { bg: '#d97706', text: '#ffffff' }, // amber
+  { bg: '#dc2626', text: '#ffffff' }, // red
+  { bg: '#db2777', text: '#ffffff' }, // pink
+  { bg: '#0284c7', text: '#ffffff' }, // sky
+  { bg: '#7c3aed', text: '#ffffff' }, // purple
+  { bg: '#0d9488', text: '#ffffff' }, // teal
+  { bg: '#ea580c', text: '#ffffff' }, // orange
+  { bg: '#ca8a04', text: '#ffffff' }, // yellow
+]
+
 export const AVATAR_ORIGINAL = { bg: 'rgba(67,56,202,0.30)', text: '#a5b4fc' }
+export const AVATAR_ORIGINAL_LIGHT = { bg: '#4338ca', text: '#ffffff' }
 
 export function avatarColor(name: string): { bg: string; text: string } {
-  if (!name) return PALETTE[0]
+  const lightMode = document.documentElement.classList.contains('light-mode')
+  const palette = lightMode ? PALETTE_LIGHT : PALETTE_DARK
+  if (!name) return palette[0]
   let hash = 0
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash)
   }
-  return PALETTE[Math.abs(hash) % PALETTE.length]
+  return palette[Math.abs(hash) % palette.length]
+}
+
+export function avatarOriginal(): { bg: string; text: string } {
+  return document.documentElement.classList.contains('light-mode')
+    ? AVATAR_ORIGINAL_LIGHT
+    : AVATAR_ORIGINAL
 }

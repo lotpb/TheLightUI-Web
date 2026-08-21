@@ -4,7 +4,7 @@ import { subscribeToCustomers } from '../../services/customerService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { useAuthStore } from '../../stores/authStore'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { avatarColor, AVATAR_ORIGINAL } from '../../utils/avatarColor'
+import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
 type JobStage = 'pending' | 'scheduled' | 'active' | 'complete'
@@ -26,10 +26,12 @@ const STAGE_CONFIG: {
 const DAY_MS = 86_400_000
 
 function getStage(c: CustomerItem, now: Date): JobStage {
-  const hasSchedule = c.completionDate.getTime() > c.startDate.getTime() + DAY_MS
+  const start = c.startDate?.getTime() ?? 0
+  const end   = c.completionDate?.getTime() ?? 0
+  const hasSchedule = end > start + DAY_MS
   if (!hasSchedule) return 'pending'
-  if (c.startDate > now) return 'scheduled'
-  if (c.completionDate > now) return 'active'
+  if ((c.startDate ?? new Date(0)) > now) return 'scheduled'
+  if ((c.completionDate ?? new Date(0)) > now) return 'active'
   return 'complete'
 }
 
@@ -65,9 +67,9 @@ export default function JobsPage() {
       if (!categoryMatches(c.category, 'Customer') || !c.isActive) continue
       buckets[getStage(c, now)].push(c)
     }
-    buckets.scheduled.sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
-    buckets.active.sort((a, b) => a.completionDate.getTime() - b.completionDate.getTime())
-    buckets.complete.sort((a, b) => b.completionDate.getTime() - a.completionDate.getTime())
+    buckets.scheduled.sort((a, b) => (a.startDate?.getTime() ?? 0) - (b.startDate?.getTime() ?? 0))
+    buckets.active.sort((a, b) => (a.completionDate?.getTime() ?? 0) - (b.completionDate?.getTime() ?? 0))
+    buckets.complete.sort((a, b) => (b.completionDate?.getTime() ?? 0) - (a.completionDate?.getTime() ?? 0))
     buckets.pending.sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
     return buckets
   }, [all, now])
@@ -202,10 +204,10 @@ function JobCard({
 }) {
   const name    = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
-  const color   = coloredAvatars ? avatarColor(name) : AVATAR_ORIGINAL
+  const color   = coloredAvatars ? avatarColor(name) : avatarOriginal()
 
   const now = new Date()
-  const daysUntilComplete = stage === 'active'
+  const daysUntilComplete = stage === 'active' && c.completionDate
     ? Math.ceil((c.completionDate.getTime() - now.getTime()) / 86_400_000)
     : null
   const isOverdue = daysUntilComplete !== null && daysUntilComplete < 0
@@ -259,17 +261,17 @@ function JobCard({
       {stage !== 'pending' && (
         <div className="text-xs text-gray-500 space-y-0.5">
           {stage === 'scheduled' && (
-            <p>Starts {fmtDate(c.startDate)}</p>
+            <p>Starts {c.startDate ? fmtDate(c.startDate) : ''}</p>
           )}
           {stage === 'active' && (
             <p className={isOverdue ? 'text-red-400 font-semibold' : ''}>
               {isOverdue
                 ? `${Math.abs(daysUntilComplete!)}d overdue`
-                : `Due ${fmtDate(c.completionDate)}`}
+                : `Due ${c.completionDate ? fmtDate(c.completionDate) : ''}`}
             </p>
           )}
           {stage === 'complete' && (
-            <p className="text-green-500/70">Completed {fmtDate(c.completionDate)}</p>
+            <p className="text-green-500/70">Completed {c.completionDate ? fmtDate(c.completionDate) : ''}</p>
           )}
         </div>
       )}
