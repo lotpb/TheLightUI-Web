@@ -94,6 +94,7 @@ export default function SettingsPage() {
     }
   }
 
+
   // Data management state
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [transferring, setTransferring] = useState(false)

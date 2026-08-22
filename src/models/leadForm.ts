@@ -1,5 +1,6 @@
 export interface LeadFormSettings {
   companyId: string
+  businessName: string
   title: string
   subtitle: string
   thankYouMessage: string
@@ -29,6 +30,7 @@ export interface LeadSubmission {
 }
 
 export const DEFAULT_FORM_SETTINGS: Omit<LeadFormSettings, 'companyId' | 'updatedAt'> = {
+  businessName: '',
   title: 'Contact Us',
   subtitle: "Fill out the form below and we'll get back to you shortly.",
   thankYouMessage: "Thank you! We'll be in touch soon.",

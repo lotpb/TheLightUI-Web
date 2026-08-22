@@ -33,8 +33,12 @@ import type { Sequence, SequenceEnrollment } from '../../models/sequence'
 import { subscribeToInvoices } from '../../services/invoiceService'
 import { subscribeToServicePlans } from '../../services/servicePlanService'
 import { generatePortalLink } from '../../services/customerPortalService'
+import { effectiveStatus, statusClasses, statusLabel, invoiceTotal, fmtCurrency } from '../../models/invoice'
 import type { Invoice } from '../../models/invoice'
 import type { ServicePlan } from '../../models/servicePlan'
+import { subscribeToServiceRequests } from '../../services/serviceRequestService'
+import { STATUS_LABELS as REQUEST_STATUS_LABELS, STATUS_COLORS as REQUEST_STATUS_COLORS, type ServiceRequest } from '../../models/serviceRequest'
+import { subscribeToTimeEntries, type TimeEntry } from '../../services/timeTrackingService'
 import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '../../firebase/config'
 
@@ -566,6 +570,7 @@ export default function CustomerDetailPage() {
           customer={customer}
           onUpdate={comments => setCustomer({ ...customer, comments })}
         />
+        <RelatedRecordsSection customerId={id!} invoices={allInvoices.filter(inv => inv.customerId === id)} />
         <ActivityLogSection customerId={id!} />
         <EmailThreadSection customerId={id!} />
         <SequencesSection customer={customer} />
@@ -1012,6 +1017,104 @@ function EmailThreadSection({ customerId }: { customerId: string }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ── Related Records (Customer 360) ─────────────────────────────────────────────
+// Pulls records from other modules that reference this customer's id, so the
+// full relationship — billing, service history, time on site — is visible in
+// one place instead of requiring a separate search in each module.
+
+function RelatedRecordsSection({ customerId, invoices }: { customerId: string; invoices: Invoice[] }) {
+  const [requests, setRequests] = useState<ServiceRequest[]>([])
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
+
+  useEffect(() => subscribeToServiceRequests(setRequests, () => {}), [])
+  useEffect(() => subscribeToTimeEntries(setTimeEntries, () => {}), [])
+
+  const myRequests = requests.filter(r => r.customerId === customerId)
+  const myTimeEntries = timeEntries.filter(t => t.customerId === customerId)
+
+  if (invoices.length === 0 && myRequests.length === 0 && myTimeEntries.length === 0) return null
+
+  function fmtDate(d: Date): string {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  function fmtDuration(mins: number | null): string {
+    if (mins == null) return 'In progress'
+    const h = Math.floor(mins / 60), m = mins % 60
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Related Records</p>
+      </div>
+
+      {invoices.length > 0 && (
+        <div className="px-4 py-3 border-b border-gray-700/30">
+          <p className="text-xs font-semibold text-gray-500 mb-2">Invoices ({invoices.length})</p>
+          <div className="space-y-1.5">
+            {invoices.slice(0, 5).map(inv => {
+              const status = effectiveStatus(inv)
+              return (
+                <Link
+                  key={inv.id}
+                  to={`/invoices/${inv.id}`}
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                >
+                  <span className="text-sm text-gray-300 truncate">{inv.invoiceNumber || 'Draft'}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusClasses(status)}`}>
+                      {statusLabel(status)}
+                    </span>
+                    <span className="text-sm text-gray-400">{fmtCurrency(invoiceTotal(inv))}</span>
+                  </span>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {myRequests.length > 0 && (
+        <div className="px-4 py-3 border-b border-gray-700/30">
+          <p className="text-xs font-semibold text-gray-500 mb-2">Service Requests ({myRequests.length})</p>
+          <div className="space-y-1.5">
+            {myRequests.slice(0, 5).map(r => (
+              <div key={r.id} className="flex items-center justify-between gap-2 py-1">
+                <span className="text-sm text-gray-300 truncate">{r.description || 'No description'}</span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${REQUEST_STATUS_COLORS[r.status]}`}>
+                    {REQUEST_STATUS_LABELS[r.status]}
+                  </span>
+                  <span className="text-xs text-gray-500">{fmtDate(r.createdAt)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {myTimeEntries.length > 0 && (
+        <div className="px-4 py-3">
+          <p className="text-xs font-semibold text-gray-500 mb-2">Time on Site ({myTimeEntries.length})</p>
+          <div className="space-y-1.5">
+            {myTimeEntries.slice(0, 5).map(t => (
+              <div key={t.id} className="flex items-center justify-between gap-2 py-1">
+                <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-gray-500">{fmtDuration(t.durationMinutes)}</span>
+                  <span className="text-xs text-gray-500">{fmtDate(t.clockIn)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

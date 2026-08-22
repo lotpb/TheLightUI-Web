@@ -9,6 +9,15 @@
       ]
     },
     {
+      "collectionGroup": "Invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "issueDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "Expenses",
       "queryScope": "COLLECTION",
       "fields": [

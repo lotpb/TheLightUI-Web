@@ -4,7 +4,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import { createInvoice, getInvoice, updateInvoice } from '../../services/invoiceService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { subscribeToCatalog } from '../../services/catalogService'
-import { fullName, type CustomerItem } from '../../models/customer'
+import { categoryMatches, fullName, type CustomerItem } from '../../models/customer'
 import type { CatalogItem } from '../../models/catalogItem'
 import {
   fmtCurrency, generateInvoiceNumber, lineItemTotal,
@@ -156,9 +156,16 @@ export default function InvoiceFormPage() {
 
   const custSuggestions = useMemo(() => {
     if (!showCustList) return []
+    const billable = customers.filter(c =>
+      categoryMatches(c.category, 'Customer') || categoryMatches(c.category, 'Lead'),
+    )
     const q = customerQuery.trim().toLowerCase()
-    if (!q) return customers.slice(0, 8)
-    return customers.filter(c =>
+    if (!q) {
+      return [...billable]
+        .sort((a, b) => fullName(a).localeCompare(fullName(b)))
+        .slice(0, 8)
+    }
+    return billable.filter(c =>
       fullName(c).toLowerCase().includes(q) ||
       c.phone.includes(q) ||
       c.email.toLowerCase().includes(q),

@@ -109,7 +109,7 @@ const router = createBrowserRouter(
       <Route path="/i/:token"      element={<PublicInvoicePage />} />
       <Route path="/portal/:token" element={<CustomerPortalPage />} />
       <Route path="/join"    element={<JoinPage />} />
-      <Route path="/" element={<Protected><Navigate to="/dashboard" replace /></Protected>} />
+      <Route path="/" element={<Protected><Navigate to="/menu" replace /></Protected>} />
 
       <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
       <Route path="/pipeline"  element={<Protected><PipelinePage /></Protected>} />

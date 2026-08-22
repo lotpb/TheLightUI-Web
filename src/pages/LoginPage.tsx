@@ -21,7 +21,7 @@ export default function LoginPage() {
         sessionStorage.removeItem('pendingInviteCode')
         navigate(`/join?code=${pendingCode}`, { replace: true })
       } else {
-        navigate('/dashboard', { replace: true })
+        navigate('/menu', { replace: true })
       }
     }
   }, [user, navigate])

@@ -17,6 +17,7 @@ interface AuthState {
   user: User | null
   companyId: string | null
   role: string | null
+  firstName: string | null
   loading: boolean
   error: string | null
   initialized: boolean  // true once auth state is known (logged in or out)
@@ -32,6 +33,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   companyId: null,
   role: null,
+  firstName: null,
   loading: false,
   error: null,
   initialized: false,
@@ -73,7 +75,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       await unregisterPush(user.uid).catch(() => {})
     }
     await fbSignOut(auth)
-    set({ companyId: null, role: null, isReady: false })
+    set({ companyId: null, role: null, firstName: null, isReady: false })
   },
 
   resetPassword: async (email) => {
@@ -144,7 +146,7 @@ onAuthStateChanged(auth, async (user) => {
 
   if (!user) {
     if (generation === authGeneration) {
-      useAuthStore.setState({ user: null, companyId: null, role: null, initialized: true, isReady: false })
+      useAuthStore.setState({ user: null, companyId: null, role: null, firstName: null, initialized: true, isReady: false })
     }
     return
   }
@@ -218,12 +220,16 @@ onAuthStateChanged(auth, async (user) => {
         const d = snap.data() as Record<string, unknown>
         const fsRole      = typeof d['role']      === 'string' ? d['role']      : null
         const fsCompanyId = typeof d['companyId'] === 'string' ? d['companyId'] : null
+        const fsFirstName = typeof d['firstName'] === 'string' ? d['firstName'] : null
         const state = useAuthStore.getState()
         if (fsRole && fsRole !== state.role) {
           useAuthStore.setState({ role: fsRole })
         }
         if (fsCompanyId && fsCompanyId !== state.companyId) {
           useAuthStore.setState({ companyId: fsCompanyId, isReady: true })
+        }
+        if (fsFirstName !== state.firstName) {
+          useAuthStore.setState({ firstName: fsFirstName })
         }
       },
       () => {}

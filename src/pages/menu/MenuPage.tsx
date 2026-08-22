@@ -6,10 +6,11 @@ import { NAV_GROUPS, type NavGroup, type NavItem } from '../../config/navigation
 export default function MenuPage() {
   usePageTitle('Menu')
   const user = useAuthStore(s => s.user)
+  const storedFirstName = useAuthStore(s => s.firstName)
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
-  const firstName = user?.displayName?.split(' ')[0] || 'there'
+  const firstName = storedFirstName || user?.displayName?.split(' ')[0] || 'there'
   const dateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric',
   })

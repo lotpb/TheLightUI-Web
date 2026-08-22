@@ -12,6 +12,7 @@ const SUBS_COL  = 'leadSubmissions'
 function toSettings(companyId: string, d: Record<string, unknown>): LeadFormSettings {
   return {
     companyId,
+    businessName:     String(d['businessName']      ?? ''),
     title:            String(d['title']            ?? 'Contact Us'),
     subtitle:         String(d['subtitle']          ?? ''),
     thankYouMessage:  String(d['thankYouMessage']   ?? "Thank you! We'll be in touch soon."),

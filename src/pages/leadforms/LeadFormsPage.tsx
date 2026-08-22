@@ -37,7 +37,7 @@ export default function LeadFormsPage() {
   useEffect(() => {
     if (!companyId) return
     getLeadFormSettings(companyId).then(s => {
-      if (s) setSettings({ title: s.title, subtitle: s.subtitle, thankYouMessage: s.thankYouMessage, showPhone: s.showPhone, showAddress: s.showAddress, showMessage: s.showMessage, enabled: s.enabled })
+      if (s) setSettings({ businessName: s.businessName, title: s.title, subtitle: s.subtitle, thankYouMessage: s.thankYouMessage, showPhone: s.showPhone, showAddress: s.showAddress, showMessage: s.showMessage, enabled: s.enabled })
     })
   }, [companyId])
 
@@ -198,6 +198,16 @@ export default function LeadFormsPage() {
           <div className="card p-4 space-y-4">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Form Text</p>
 
+            <div>
+              <label className="block text-xs text-gray-500 mb-1.5">Business Name</label>
+              <input
+                value={settings.businessName}
+                onChange={e => setSettings(s => ({ ...s, businessName: e.target.value }))}
+                className="input-field w-full text-sm"
+                placeholder="Acme Roofing Co."
+              />
+              <p className="text-xs text-gray-600 mt-1">Shown at the top of the form so visitors know whose form it is.</p>
+            </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1.5">Heading</label>
               <input

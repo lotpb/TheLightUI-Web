@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { getDoc, doc } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { usePageTitle } from '../hooks/usePageTitle'
-import { fetchSnapshot, type SnapshotData } from '../services/snapshotService'
+import { fetchSnapshot, type SnapshotData, type SaleEntry } from '../services/snapshotService'
 import { formatCurrency, fullName } from '../models/customer'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
@@ -218,10 +218,10 @@ export default function DashboardPage() {
     const salesSect = snap.salesToday.length ? section(
       'Sales Today', formatCurrency(salesTotal2),
       buildTable(
-        ['Name', 'Phone', 'Salesman', 'Job', 'Product', 'Contractor', 'Amount'],
-        snap.salesToday.map(c => [
-          fullName(c), c.phone, c.salesman, c.job, c.product, c.contractor,
-          c.amount > 0 ? formatCurrency(c.amount) : '',
+        ['Invoice #', 'Name', 'Phone', 'Amount'],
+        snap.salesToday.map(s => [
+          s.invoiceNumber, s.customerName, s.customerPhone,
+          s.amount > 0 ? formatCurrency(s.amount) : '',
         ]),
       )
     ) : ''
@@ -434,11 +434,7 @@ export default function DashboardPage() {
       />
 
       {/* Sales */}
-      <ListSection
-        title="Sales Today" color="text-green-400" badgeColor="bg-green-600"
-        items={data?.salesToday} loading={loading} emptyMsg="No sales today"
-        valueKey="amount"
-      />
+      <SalesTodayCard items={data?.salesToday} loading={loading} />
 
       {/* Jobs */}
       <ListSection
@@ -752,7 +748,7 @@ function ActivityTimelineCard({
 }
 
 function ListSection({
-  title, color, badgeColor, items, loading, emptyMsg, valueKey,
+  title, color, badgeColor, items, loading, emptyMsg,
 }: {
   title: string
   color: string
@@ -760,7 +756,6 @@ function ListSection({
   items?: CustomerItem[]
   loading: boolean
   emptyMsg: string
-  valueKey?: 'amount'
 }) {
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   return (
@@ -769,9 +764,7 @@ function ListSection({
         <p className={`section-header mb-0 ${color}`}>{title}</p>
         {items && items.length > 0 && (
           <span className={`text-xs font-semibold text-white px-2 py-0.5 rounded-full ${badgeColor}`}>
-            {valueKey === 'amount'
-              ? formatCurrency(items.reduce((s, c) => s + c.amount, 0))
-              : items.length}
+            {items.length}
           </span>
         )}
       </div>
@@ -805,6 +798,56 @@ function ListSection({
                 <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(c.amount)}</span>
               )}
             </Link>
+            )
+          })
+        )}
+      </div>
+    </section>
+  )
+}
+
+function SalesTodayCard({ items, loading }: { items?: SaleEntry[]; loading: boolean }) {
+  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
+  const total = items?.reduce((s, e) => s + e.amount, 0) ?? 0
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-2">
+        <p className="section-header mb-0 text-green-400">Sales Today</p>
+        {items && items.length > 0 && (
+          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-green-600">
+            {formatCurrency(total)}
+          </span>
+        )}
+      </div>
+      <div className="card divide-y divide-gray-700/50">
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : !items || items.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No sales today</p>
+        ) : (
+          items.map(entry => {
+            const color = coloredAvatars ? avatarColor(entry.customerName) : avatarOriginal()
+            const initial = entry.customerName.trim()[0]?.toUpperCase() || '?'
+            return (
+              <Link
+                key={entry.id}
+                to={`/invoices/${entry.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
+                  <span className="text-xs font-semibold" style={{ color: color.text }}>{initial}</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-100 truncate">{entry.customerName || '—'}</p>
+                  {entry.invoiceNumber && <p className="text-xs text-gray-400">{entry.invoiceNumber}</p>}
+                </div>
+                {entry.amount > 0 && (
+                  <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(entry.amount)}</span>
+                )}
+              </Link>
             )
           })
         )}

@@ -1,13 +1,45 @@
 import {
-  collection, doc, addDoc, updateDoc, deleteDoc, getDoc,
+  collection, doc, addDoc, updateDoc, deleteDoc, getDoc, getDocs,
   onSnapshot, query, where, Timestamp, serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
-import { generateInvoiceNumber, type Invoice, type InvoiceLineItem, type RecurringInterval } from '../models/invoice'
+import { generateInvoiceNumber, invoiceTotal, type Invoice, type InvoiceLineItem, type RecurringInterval } from '../models/invoice'
 
 const COL = 'Invoices'
+const CUSTOMERS_COL = 'Customers'
+
+// customer.amount tracks total paid invoices for that customer — recomputed
+// from source (rather than incremented) so it can't drift after edits/deletes.
+async function recomputeCustomerPaidTotal(customerId: string): Promise<void> {
+  if (!customerId) return
+  const companyId = getCompanyId()
+  if (!companyId) return
+  const snap = await getDocs(query(
+    collection(db, COL),
+    where('companyId', '==', companyId),
+    where('customerId', '==', customerId),
+    where('status', '==', 'paid'),
+  ))
+  let total = 0
+  for (const d of snap.docs) {
+    try { total += invoiceTotal(docToInvoice(d.id, d.data() as Record<string, unknown>)) } catch { }
+  }
+  await updateDoc(doc(db, CUSTOMERS_COL, customerId), { amount: total }).catch(() => {})
+}
+
+// A paid invoice means the lead converted — bump their category so they show
+// up as a Customer everywhere else in the app (pipeline, reports, etc.).
+async function promoteLeadToCustomer(customerId: string): Promise<void> {
+  if (!customerId) return
+  const snap = await getDoc(doc(db, CUSTOMERS_COL, customerId))
+  if (!snap.exists()) return
+  const category = String(snap.data().category ?? '')
+  if (category.toLowerCase() === 'lead') {
+    await updateDoc(doc(db, CUSTOMERS_COL, customerId), { category: 'Customer' }).catch(() => {})
+  }
+}
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -105,6 +137,10 @@ export async function createInvoice(
     createdAt:  serverTimestamp(),
     updatedAt:  serverTimestamp(),
   })
+  if (inv.status === 'paid') {
+    await recomputeCustomerPaidTotal(inv.customerId)
+    await promoteLeadToCustomer(inv.customerId)
+  }
   return ref.id
 }
 
@@ -112,6 +148,13 @@ export async function updateInvoice(
   id: string,
   fields: Partial<Omit<Invoice, 'id' | 'companyId' | 'createdAt'>>,
 ): Promise<void> {
+  const affectsPaidTotal =
+    fields.status !== undefined || fields.lineItems !== undefined ||
+    fields.taxRate !== undefined || fields.customerId !== undefined
+  const before = affectsPaidTotal ? await getDoc(doc(db, COL, id)) : null
+  const oldCustomerId = before?.exists() ? String(before.data().customerId ?? '') : ''
+  const oldStatus = before?.exists() ? String(before.data().status ?? '') : ''
+
   const updates: Record<string, unknown> = { updatedAt: serverTimestamp() }
   if (fields.customerId      !== undefined) updates.customerId      = fields.customerId
   if (fields.customerName    !== undefined) updates.customerName    = fields.customerName
@@ -130,6 +173,15 @@ export async function updateInvoice(
   if (fields.lastGeneratedAt  !== undefined) updates.lastGeneratedAt  = fields.lastGeneratedAt  ? Timestamp.fromDate(fields.lastGeneratedAt)  : null
   if (fields.paymentLink      !== undefined) updates.paymentLink      = fields.paymentLink ?? null
   await updateDoc(doc(db, COL, id), updates)
+
+  if (affectsPaidTotal) {
+    const newCustomerId = fields.customerId ?? oldCustomerId
+    if (newCustomerId) await recomputeCustomerPaidTotal(newCustomerId)
+    if (oldCustomerId && oldCustomerId !== newCustomerId) await recomputeCustomerPaidTotal(oldCustomerId)
+
+    const newStatus = fields.status ?? oldStatus
+    if (newStatus === 'paid' && newCustomerId) await promoteLeadToCustomer(newCustomerId)
+  }
 }
 
 function advanceByInterval(from: Date, interval: RecurringInterval): Date {
@@ -177,5 +229,8 @@ export async function generateNextInvoice(template: Invoice): Promise<string> {
 }
 
 export async function deleteInvoice(id: string): Promise<void> {
+  const snap = await getDoc(doc(db, COL, id))
+  const customerId = snap.exists() ? String(snap.data().customerId ?? '') : ''
   await deleteDoc(doc(db, COL, id))
+  if (customerId) await recomputeCustomerPaidTotal(customerId)
 }
