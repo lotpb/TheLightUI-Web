@@ -26,16 +26,20 @@ function downloadFile(content: string, filename: string, mimeType: string) {
 // picker in the same handler already consumed the click's user-activation
 // (multi-file exports can only show one native dialog per click).
 export async function saveJSONFile(filename: string, content: string): Promise<void> {
-  const picker = (window as unknown as {
+  // Calling showSaveFilePicker through a detached reference (rather than as
+  // window.showSaveFilePicker(...)) throws "Illegal invocation" in Chrome —
+  // it needs `this` bound to window. That threw, was swallowed as a
+  // non-AbortError, and silently fell back to auto-download every time.
+  const win = window as unknown as {
     showSaveFilePicker?: (options: {
       suggestedName: string
       types: { description: string; accept: Record<string, string[]> }[]
     }) => Promise<FileSystemFileHandle>
-  }).showSaveFilePicker
+  }
 
-  if (typeof picker === 'function') {
+  if (typeof win.showSaveFilePicker === 'function') {
     try {
-      const handle = await picker({
+      const handle = await win.showSaveFilePicker({
         suggestedName: filename,
         types: [{ description: 'JSON file', accept: { 'application/json': ['.json'] } }],
       })
