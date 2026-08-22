@@ -3,7 +3,7 @@ import { usePageTitle } from '../hooks/usePageTitle'
 import { Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePickerStore } from '../stores/pickerStore'
-import { useAuthStore } from '../stores/authStore'
+import { useAuthStore, setNotificationPref } from '../stores/authStore'
 import { usePrefStore } from '../stores/prefStore'
 import { savePickerLists, type PickerLists, type PickerLabels } from '../services/pickerService'
 import { useToast } from '../components/Toast'
@@ -33,7 +33,7 @@ const PREF_KEY = 'thelight.showInactive'
 
 export default function SettingsPage() {
   const { lists, labels: storedLabels, fetch } = usePickerStore()
-  const { companyId, role } = useAuthStore()
+  const { companyId, role, notifyNewLeads, notifyChatMessages } = useAuthStore()
   const { coloredAvatars, setColoredAvatars } = usePrefStore()
   const toast = useToast()
 
@@ -436,6 +436,51 @@ return (
             >
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                 coloredAvatars ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Notifications */}
+      <div className="card overflow-hidden mb-6">
+        <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Notifications</p>
+        </div>
+        <div className="p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-200">New lead alerts</p>
+              <p className="text-xs text-gray-500 mt-0.5">Get a push notification when a new lead is created</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNotificationPref('notifyNewLeads', !notifyNewLeads)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                notifyNewLeads ? 'bg-indigo-600' : 'bg-gray-600'
+              }`}
+              aria-label="Toggle new lead alerts"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                notifyNewLeads ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+          <div className="border-t border-gray-700/40 pt-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-200">New message alerts</p>
+              <p className="text-xs text-gray-500 mt-0.5">Get a push notification for new chat messages</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNotificationPref('notifyChatMessages', !notifyChatMessages)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                notifyChatMessages ? 'bg-indigo-600' : 'bg-gray-600'
+              }`}
+              aria-label="Toggle new message alerts"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                notifyChatMessages ? 'translate-x-6' : 'translate-x-1'
               }`} />
             </button>
           </div>

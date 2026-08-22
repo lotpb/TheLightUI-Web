@@ -688,7 +688,9 @@ export const onNewChatMessage = functions.firestore
     // Fetch recipient's FCM tokens
     const recipientDoc = await db.collection('users').doc(toId).get()
     if (!recipientDoc.exists) return null
-    const fcmTokens: string[] = recipientDoc.data()?.fcmTokens ?? []
+    const recipient = recipientDoc.data() ?? {}
+    if (recipient.notifyChatMessages === false) return null  // opted out
+    const fcmTokens: string[] = recipient.fcmTokens ?? []
     if (fcmTokens.length === 0) return null
 
     // Sender display name for the notification title
@@ -717,6 +719,59 @@ export const onNewChatMessage = functions.firestore
       await db.collection('users').doc(toId).update({
         fcmTokens: FieldValue.arrayRemove(...stale),
       })
+    }
+
+    return null
+  })
+
+// ── New lead notification ────────────────────────────────────────────────────────
+// Notifies team members in the same company when a new lead record is created.
+// Respects each user's notifyNewLeads toggle (Settings page); absent = opted in.
+export const onLeadCreated = functions.firestore
+  .document('Customers/{id}')
+  .onCreate(async (snap) => {
+    const lead = snap.data()
+    const companyId = lead.companyId as string | undefined
+    const category = typeof lead.category === 'string' ? lead.category.toLowerCase() : ''
+    if (!companyId || category !== 'lead') return null
+
+    const usersSnap = await db.collection('users').where('companyId', '==', companyId).get()
+    if (usersSnap.empty) return null
+
+    const name = [lead.first, lead.lastname].filter(Boolean).join(' ') || 'New lead'
+    const bodyParts = [lead.city, lead.phone].filter(Boolean)
+    const bodyText = bodyParts.length > 0 ? bodyParts.join(' · ') : 'Tap to view details'
+
+    const perUserTokens: { uid: string; tokens: string[] }[] = []
+    for (const userDoc of usersSnap.docs) {
+      const u = userDoc.data()
+      if (u.notifyNewLeads === false) continue
+      const tokens: string[] = u.fcmTokens ?? []
+      if (tokens.length > 0) perUserTokens.push({ uid: userDoc.id, tokens })
+    }
+    const allTokens = perUserTokens.flatMap(u => u.tokens)
+    if (allTokens.length === 0) return null
+
+    const payload: MulticastMessage = {
+      tokens: allTokens,
+      notification: { title: `New lead: ${name}`, body: bodyText },
+      apns: { payload: { aps: { sound: 'default' } } },
+      data: { leadId: snap.id, type: 'new_lead' },
+    }
+    const result = await messaging.sendEachForMulticast(payload)
+
+    // Remove invalid tokens, mapping multicast response indices back to their owning user
+    let cursor = 0
+    for (const { uid, tokens } of perUserTokens) {
+      const stale = tokens.filter((_, i) => {
+        const code = result.responses[cursor + i]?.error?.code ?? ''
+        return code === 'messaging/invalid-registration-token' ||
+               code === 'messaging/registration-token-not-registered'
+      })
+      cursor += tokens.length
+      if (stale.length > 0) {
+        await db.collection('users').doc(uid).update({ fcmTokens: FieldValue.arrayRemove(...stale) })
+      }
     }
 
     return null

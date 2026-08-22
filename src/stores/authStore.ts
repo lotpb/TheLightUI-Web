@@ -18,6 +18,8 @@ interface AuthState {
   companyId: string | null
   role: string | null
   firstName: string | null
+  notifyNewLeads: boolean
+  notifyChatMessages: boolean
   loading: boolean
   error: string | null
   initialized: boolean  // true once auth state is known (logged in or out)
@@ -34,6 +36,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   companyId: null,
   role: null,
   firstName: null,
+  notifyNewLeads: true,
+  notifyChatMessages: true,
   loading: false,
   error: null,
   initialized: false,
@@ -96,6 +100,19 @@ export const useAuthStore = create<AuthState>((set) => ({
 // Non-hook helper — lets services read companyId without React context
 export function getCompanyId(): string {
   return useAuthStore.getState().companyId ?? ''
+}
+
+// Persists a notification toggle to the user's Firestore doc so the Cloud
+// Functions that send push notifications (onLeadCreated, onNewChatMessage)
+// can honor it. Updates local state immediately for a responsive UI.
+export async function setNotificationPref(
+  key: 'notifyNewLeads' | 'notifyChatMessages',
+  value: boolean,
+): Promise<void> {
+  const { user } = useAuthStore.getState()
+  if (!user) return
+  useAuthStore.setState({ [key]: value } as Partial<AuthState>)
+  await setDoc(doc(db, 'users', user.uid), { [key]: value }, { merge: true })
 }
 
 // Cleanup handles
@@ -221,6 +238,9 @@ onAuthStateChanged(auth, async (user) => {
         const fsRole      = typeof d['role']      === 'string' ? d['role']      : null
         const fsCompanyId = typeof d['companyId'] === 'string' ? d['companyId'] : null
         const fsFirstName = typeof d['firstName'] === 'string' ? d['firstName'] : null
+        // Absence means opted in — these fields are only written when a user turns a toggle off.
+        const fsNotifyNewLeads      = d['notifyNewLeads']      !== false
+        const fsNotifyChatMessages  = d['notifyChatMessages']  !== false
         const state = useAuthStore.getState()
         if (fsRole && fsRole !== state.role) {
           useAuthStore.setState({ role: fsRole })
@@ -230,6 +250,9 @@ onAuthStateChanged(auth, async (user) => {
         }
         if (fsFirstName !== state.firstName) {
           useAuthStore.setState({ firstName: fsFirstName })
+        }
+        if (fsNotifyNewLeads !== state.notifyNewLeads || fsNotifyChatMessages !== state.notifyChatMessages) {
+          useAuthStore.setState({ notifyNewLeads: fsNotifyNewLeads, notifyChatMessages: fsNotifyChatMessages })
         }
       },
       () => {}
