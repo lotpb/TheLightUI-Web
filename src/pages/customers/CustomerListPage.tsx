@@ -186,9 +186,9 @@ export default function CustomerListPage() {
     }
   }
 
-  function handleBulkExport() {
+  async function handleBulkExport() {
     const toExport = filtered.filter(c => selectedIds.has(c.id))
-    exportCustomersJSON(toExport)
+    await exportCustomersJSON(toExport)
   }
 
   async function handleBulkEmail(subject: string, body: string) {
@@ -411,9 +411,9 @@ export default function CustomerListPage() {
   }
 
   // Export all records for current category (not just filtered)
-  function handleExport() {
+  async function handleExport() {
     const toExport = all.filter(c => categoryMatches(c.category, cat))
-    exportCustomersJSON(toExport)
+    await exportCustomersJSON(toExport)
   }
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {

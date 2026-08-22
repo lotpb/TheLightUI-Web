@@ -13,8 +13,45 @@ function downloadFile(content: string, filename: string, mimeType: string) {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  document.body.appendChild(a)
   a.click()
+  document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Lets the user choose where a JSON export is saved, via the browser's
+// native "Save As" dialog, on browsers that support the File System Access
+// API (Chrome/Edge). Falls back to the normal auto-download — used on
+// Safari/Firefox, and also when a picker call fails because an earlier
+// picker in the same handler already consumed the click's user-activation
+// (multi-file exports can only show one native dialog per click).
+export async function saveJSONFile(filename: string, content: string): Promise<void> {
+  const picker = (window as unknown as {
+    showSaveFilePicker?: (options: {
+      suggestedName: string
+      types: { description: string; accept: Record<string, string[]> }[]
+    }) => Promise<FileSystemFileHandle>
+  }).showSaveFilePicker
+
+  if (typeof picker === 'function') {
+    try {
+      const handle = await picker({
+        suggestedName: filename,
+        types: [{ description: 'JSON file', accept: { 'application/json': ['.json'] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(content)
+      await writable.close()
+      return
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return // user cancelled the save dialog — don't fall back to auto-download
+      }
+      // any other failure (unsupported context, lost activation, etc.) falls through
+    }
+  }
+
+  downloadFile(content, filename, 'application/json')
 }
 
 // ── JSON Export / Import ───────────────────────────────────────────────────────
@@ -82,7 +119,7 @@ function parseISO(s: unknown): Date {
   return new Date()
 }
 
-export function exportCustomersJSON(customers: CustomerItem[]) {
+export async function exportCustomersJSON(customers: CustomerItem[]) {
   const records: CustomerJSONRecord[] = customers.map(c => ({
     id: c.id,
     first: c.first,
@@ -117,9 +154,11 @@ export function exportCustomersJSON(customers: CustomerItem[]) {
     lastUpdateDate: safeISO(c.lastUpdateDate),
   }))
 
-  const payload = JSON.stringify({ records }, null, 2)
+  // Bare array (not wrapped in { records }) so this matches what the iOS
+  // app writes/reads, and what importCustomersJSON below also accepts.
+  const payload = JSON.stringify(records, null, 2)
   const date = new Date().toISOString().slice(0, 10)
-  downloadFile(payload, `thelight-export-${date}.json`, 'application/json')
+  await saveJSONFile(`thelight-export-${date}.json`, payload)
 }
 
 export async function importCustomersJSON(

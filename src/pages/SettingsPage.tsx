@@ -14,6 +14,7 @@ import {
 } from '../services/customerService'
 import { getAllExpensesOnce, importExpensesFromJSON } from '../services/expenseService'
 import { getAllTodosOnce, importTodosFromJSON } from '../services/todoService'
+import { saveJSONFile } from '../utils/exportUtils'
 import {
   subscribeToCustomFieldDefs, createCustomFieldDef, updateCustomFieldDef, deleteCustomFieldDef,
 } from '../services/customFieldService'
@@ -99,14 +100,12 @@ export default function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [transferring, setTransferring] = useState(false)
 
-  function downloadJSON(filename: string, content: string) {
-    const blob = new Blob([content], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
+  // saveJSONFile shows a native "Save As" dialog on browsers that support
+  // it (only the first call per click keeps the user-activation needed to
+  // show one, so the 2nd/3rd files below fall back to auto-download — which
+  // still needs staggering so the browser doesn't drop or throttle them).
+  function delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms))
   }
 
   async function handleExport() {
@@ -119,7 +118,8 @@ export default function SettingsPage() {
       ])
 
       // CustomerBackup.json — all records (leads, vendors, employees)
-      downloadJSON('CustomerBackup.json', exportCustomersToJSON(customers))
+      await saveJSONFile('CustomerBackup.json', exportCustomersToJSON(customers))
+      await delay(300)
 
       // ExpenseBackup.json
       const expenseRecords = expenses.map(e => ({
@@ -132,7 +132,8 @@ export default function SettingsPage() {
         isReimbursable: e.isReimbursable,
         lastUpdate: e.lastUpdate.toISOString(),
       }))
-      downloadJSON('ExpenseBackup.json', JSON.stringify(expenseRecords, null, 2))
+      await saveJSONFile('ExpenseBackup.json', JSON.stringify(expenseRecords, null, 2))
+      await delay(300)
 
       // ToDoListBackup.json
       const todoRecords = todos.map(t => ({
@@ -145,7 +146,7 @@ export default function SettingsPage() {
         createdAt: t.createdAt.toISOString(),
         position: t.position,
       }))
-      downloadJSON('ToDoListBackup.json', JSON.stringify(todoRecords, null, 2))
+      await saveJSONFile('ToDoListBackup.json', JSON.stringify(todoRecords, null, 2))
 
       toast(
         `Exported ${customers.length} records, ${expenses.length} expenses, ${todos.length} todos.`,
