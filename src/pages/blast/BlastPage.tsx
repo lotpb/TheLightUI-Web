@@ -20,6 +20,33 @@ function applyTemplate(tpl: string, c: CustomerItem): string {
 
 function csvEscape(s: string) { return `"${s.replace(/"/g, '""')}"` }
 
+const BLAST_EXAMPLES: Array<{ name: string; channel: Channel | 'both'; subject: string; body: string }> = [
+  {
+    name: 'Follow-up after visit',
+    channel: 'both',
+    subject: 'Great meeting you, {first}!',
+    body: 'Hi {first}, thanks for taking the time to meet with us. Let us know if you have any questions — happy to help however we can!',
+  },
+  {
+    name: 'Current promotion',
+    channel: 'email',
+    subject: 'A little something for you, {first}',
+    body: 'Hi {first},\n\nWe wanted to let you know about our current promotion — reach out and mention this email to take advantage.',
+  },
+  {
+    name: 'Missed call',
+    channel: 'sms',
+    subject: '',
+    body: 'Hi {first}, sorry we missed you! Give us a call back when you get a chance.',
+  },
+  {
+    name: 'We miss you',
+    channel: 'both',
+    subject: 'We miss you, {first}!',
+    body: "Hi {first}, it's been a while since we've connected. Let us know if there's anything we can help with!",
+  },
+]
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BlastPage() {
@@ -129,6 +156,16 @@ export default function BlastPage() {
   }
 
   const preview = matched[0] ? applyTemplate(body, matched[0]) : body
+
+  const examples = useMemo(
+    () => BLAST_EXAMPLES.filter(ex => ex.channel === 'both' || ex.channel === channel),
+    [channel],
+  )
+
+  function applyExample(ex: typeof BLAST_EXAMPLES[number]) {
+    if (channel === 'email') setSubject(ex.subject)
+    setBody(ex.body)
+  }
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
@@ -265,6 +302,22 @@ export default function BlastPage() {
         </div>
 
         <div className="p-4 space-y-3">
+          {/* Starter examples */}
+          {!body && (
+            <div className="flex flex-wrap gap-1.5 items-center">
+              <span className="text-xs text-gray-600">Start from an example:</span>
+              {examples.map(ex => (
+                <button
+                  key={ex.name}
+                  onClick={() => applyExample(ex)}
+                  className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:border-indigo-500 hover:text-indigo-300 transition-colors"
+                >
+                  {ex.name}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Merge tag chips */}
           <div className="flex gap-1.5 flex-wrap items-center">
             <span className="text-xs text-gray-600">Merge tags:</span>

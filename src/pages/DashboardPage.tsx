@@ -1,12 +1,14 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getDoc, doc } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { usePageTitle } from '../hooks/usePageTitle'
 import { fetchSnapshot, type SnapshotData, type SaleEntry } from '../services/snapshotService'
-import { formatCurrency, fullName } from '../models/customer'
+import { formatCurrency, fullName, categoryMatches } from '../models/customer'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
+import { usePickerStore } from '../stores/pickerStore'
+import { useChatStore } from '../stores/chatStore'
 import StatCard from '../components/StatCard'
 
 // Lazy-load recharts via SnapshotChart so the 115 KB recharts chunk is deferred
@@ -15,15 +17,20 @@ const SnapshotChart = lazy(() => import('../components/SnapshotChart'))
 import { esc } from '../utils/exportUtils'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToExpensesToday } from '../services/expenseService'
-import { subscribeToFollowUps } from '../services/customerService'
+import { subscribeToFollowUps, subscribeToCustomers } from '../services/customerService'
 import { subscribeToAllActivities } from '../services/activityService'
+import { getGoals } from '../services/goalService'
 import { ACTIVITY_TYPES, type Activity } from '../models/activity'
+import { type GoalDoc, type GoalValues, type PeriodRange, emptyGoalValues, currentPeriodRange } from '../models/goal'
+import { type Stage, STAGE_CONFIG, endOfToday, getStage } from '../models/pipeline'
+import { type JobStage, JOB_STAGE_CONFIG, getJobStage } from '../models/jobPipeline'
 import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
 
-const ACTIVITY_PREVIEW = 8
+const ACTIVITY_PREVIEW = 20
+const UPCOMING_WINDOW_DAYS = 7
 
 function fmtCompact(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
@@ -53,11 +60,19 @@ export default function DashboardPage() {
   const [expensesToday, setExpensesToday] = useState<Expense[]>([])
   const [expensesLoading, setExpensesLoading] = useState(true)
   const [followUps, setFollowUps] = useState<CustomerItem[]>([])
+  const [followUpsLoading, setFollowUpsLoading] = useState(true)
+  const [followUpsError, setFollowUpsError] = useState<string | null>(null)
   const [activities, setActivities] = useState<Activity[]>([])
   const [activityNameMap, setActivityNameMap] = useState<Map<string, string>>(new Map())
   const [activitiesLoading, setActivitiesLoading] = useState(true)
+  const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
+  const [allCustomersLoading, setAllCustomersLoading] = useState(true)
+  const [goals, setGoals] = useState<GoalDoc | null>(null)
+  const [chartOpen, setChartOpen] = useState(false)
   const user = useAuthStore(s => s.user)
   const companyId = useAuthStore(s => s.companyId)
+  const unreadChats = useChatStore(s => s.unreadCount)
+  const salesmanLabel = usePickerStore(s => s.labels.salesman ?? 'Salesman')
 
   async function load() {
     setLoading(true)
@@ -93,10 +108,24 @@ export default function DashboardPage() {
   }, [user, companyId])
 
   useEffect(() => {
-    if (!user) return
-    const unsub = subscribeToFollowUps(setFollowUps, () => {})
+    if (!user) { setFollowUpsLoading(false); return }
+    const unsub = subscribeToFollowUps(
+      items => { setFollowUps(items); setFollowUpsLoading(false); setFollowUpsError(null) },
+      err   => { setFollowUpsLoading(false); setFollowUpsError(err.message) },
+    )
     return unsub
   }, [user, companyId])
+
+  useEffect(() => {
+    if (!user) { setAllCustomersLoading(false); return }
+    const unsub = subscribeToCustomers(
+      items => { setAllCustomers(items); setAllCustomersLoading(false) },
+      ()    => setAllCustomersLoading(false),
+    )
+    return unsub
+  }, [user, companyId])
+
+  useEffect(() => { getGoals().then(setGoals) }, [])
 
   useEffect(() => {
     if (!user) { setActivitiesLoading(false); return }
@@ -128,6 +157,67 @@ export default function DashboardPage() {
 
   const salesTotal = data?.salesToday.reduce((s, c) => s + c.amount, 0) ?? 0
   const chartEntries = data ? CHART_ENTRIES(data) : null
+
+  const monthRange = useMemo(() => currentPeriodRange('month'), [])
+
+  const monthActuals = useMemo<GoalValues>(() => {
+    const inPeriod = allCustomers.filter(c =>
+      c.creationDate.getTime() >= monthRange.start.getTime() &&
+      c.creationDate.getTime() <= monthRange.end.getTime()
+    )
+    return {
+      revenue:   inPeriod.reduce((s, c) => s + (categoryMatches(c.category, 'Customer') ? c.amount : 0), 0),
+      leads:     inPeriod.filter(c => categoryMatches(c.category, 'Lead')).length,
+      customers: inPeriod.filter(c => categoryMatches(c.category, 'Customer')).length,
+    }
+  }, [allCustomers, monthRange])
+
+  const stageCounts = useMemo(() => {
+    const counts: Record<Stage, number> = { new: 0, contacted: 0, appointment: 0, won: 0, lost: 0 }
+    for (const c of allCustomers) {
+      const stage = getStage(c)
+      if (stage) counts[stage]++
+    }
+    return counts
+  }, [allCustomers])
+
+  const jobStageCounts = useMemo(() => {
+    const now = new Date()
+    const counts: Record<JobStage, number> = { pending: 0, scheduled: 0, active: 0, complete: 0 }
+    for (const c of allCustomers) {
+      if (!categoryMatches(c.category, 'Customer') || !c.isActive) continue
+      counts[getJobStage(c, now)]++
+    }
+    return counts
+  }, [allCustomers])
+
+  const topPerformer = useMemo(() => {
+    const inPeriod = allCustomers.filter(c =>
+      categoryMatches(c.category, 'Customer') &&
+      c.creationDate.getTime() >= monthRange.start.getTime() &&
+      c.creationDate.getTime() <= monthRange.end.getTime()
+    )
+    const map = new Map<string, { revenue: number; customers: number }>()
+    for (const c of inPeriod) {
+      const name = c.salesman.trim() || 'Unassigned'
+      const row  = map.get(name) ?? { revenue: 0, customers: 0 }
+      row.revenue += c.amount
+      row.customers++
+      map.set(name, row)
+    }
+    const ranked = [...map.entries()]
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => b.revenue - a.revenue)
+    return ranked[0] ?? null
+  }, [allCustomers, monthRange])
+
+  const upcomingAppointments = useMemo(() => {
+    const startBound = endOfToday()
+    const endBound = new Date(startBound.getTime() + UPCOMING_WINDOW_DAYS * 86_400_000)
+    return allCustomers
+      .filter(c => c.isActive && c.startDate && c.startDate > startBound && c.startDate <= endBound)
+      .sort((a, b) => a.startDate!.getTime() - b.startDate!.getTime())
+  }, [allCustomers])
 
   function handlePrint() {
     if (!data) return
@@ -172,11 +262,12 @@ export default function DashboardPage() {
     )
 
     const overallTable = buildTable(
-      ['', 'Active Leads', 'Active Customers', 'Active Tasks', 'Total Sales'],
+      ['', 'Active Leads', 'Active Customers', 'Active Tasks', 'Open Follow-ups', 'Total Sales'],
       [['Overall',
         String(snap.activeLeadCount),
         String(snap.activeCustomerCount),
         String(todos.length),
+        String(followUps.length),
         formatCurrency(snap.totalCustomerSales),
       ]]
     )
@@ -270,6 +361,78 @@ export default function DashboardPage() {
       )
     ) : ''
 
+    const goalTarget = goals?.month ?? emptyGoalValues()
+    const goalHasTargets = goalTarget.revenue > 0 || goalTarget.leads > 0 || goalTarget.customers > 0
+    const goalRows: { label: string; actual: number; target: number; format: (n: number) => string }[] = [
+      { label: 'Revenue',   actual: monthActuals.revenue,   target: goalTarget.revenue,   format: formatCurrency },
+      { label: 'Leads',     actual: monthActuals.leads,     target: goalTarget.leads,     format: n => n.toLocaleString() },
+      { label: 'Customers', actual: monthActuals.customers, target: goalTarget.customers, format: n => n.toLocaleString() },
+    ]
+    const goalsSect = goalHasTargets ? section(
+      `Goals — ${monthRange.short}`, '',
+      buildTable(
+        ['Metric', 'Actual', 'Target', '% of Goal'],
+        goalRows.map(r => [
+          r.label,
+          r.format(r.actual),
+          r.format(r.target),
+          r.target > 0 ? `${Math.min(100, Math.round((r.actual / r.target) * 100))}%` : '—',
+        ]),
+      )
+    ) : ''
+
+    const pipelineTotal = STAGE_CONFIG.reduce((s, cfg) => s + stageCounts[cfg.id], 0)
+    const pipelineSect = pipelineTotal > 0 ? section(
+      'Pipeline', String(pipelineTotal),
+      buildTable(
+        ['Stage', 'Count'],
+        STAGE_CONFIG.map(cfg => [cfg.label, String(stageCounts[cfg.id])]),
+      )
+    ) : ''
+
+    const jobPipelineTotal = JOB_STAGE_CONFIG.reduce((s, cfg) => s + jobStageCounts[cfg.id], 0)
+    const jobPipelineSect = jobPipelineTotal > 0 ? section(
+      'Jobs Pipeline', String(jobPipelineTotal),
+      buildTable(
+        ['Stage', 'Count'],
+        JOB_STAGE_CONFIG.map(cfg => [cfg.label, String(jobStageCounts[cfg.id])]),
+      )
+    ) : ''
+
+    const topPerformerSect = topPerformer ? section(
+      `Top ${salesmanLabel} This Month`, formatCurrency(topPerformer.revenue),
+      buildTable(
+        ['Name', 'Sales', 'Revenue'],
+        [[topPerformer.name, String(topPerformer.customers), formatCurrency(topPerformer.revenue)]],
+      )
+    ) : ''
+
+    const upcomingSect = upcomingAppointments.length ? section(
+      'Upcoming Appointments', String(upcomingAppointments.length),
+      buildTable(
+        ['Name', 'Phone', 'Appt Date'],
+        upcomingAppointments.map(c => [
+          fullName(c), c.phone, c.startDate ? fmtDate(c.startDate) : '',
+        ]),
+      )
+    ) : ''
+
+    const activitySect = activities.length ? section(
+      'Recent Activity', String(activities.length),
+      buildTable(
+        ['Customer', 'Type', 'User', 'When'],
+        activities.map(a => {
+          const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
+          return [
+            activityNameMap.get(a.customerId) ?? '—',
+            meta.label,
+            a.userName,
+            fmtDate(a.createdAt),
+          ]
+        }),
+      )
+    ) : ''
+
     const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -308,6 +471,9 @@ export default function DashboardPage() {
     ${overallTable}
   </div>
 
+  ${goalsSect}
+  ${pipelineSect}
+  ${jobPipelineSect}
   ${leadsSect}
   ${apptsSect}
   ${customersSect}
@@ -316,6 +482,9 @@ export default function DashboardPage() {
   ${expensesSect}
   ${tasksSect}
   ${followUpsSect}
+  ${topPerformerSect}
+  ${upcomingSect}
+  ${activitySect}
 </body>
 </html>`
 
@@ -328,7 +497,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -388,29 +557,63 @@ export default function DashboardPage() {
       {/* All-time totals */}
       <section>
         <p className="section-header">Overall</p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-5 gap-2">
           <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)}          color="text-indigo-400" loading={loading} />
           <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)}       color="text-indigo-300" loading={loading} />
           <StatCard title="Active Tasks"     value={String(todos.length)}                         color="text-violet-400" loading={todosLoading} to="/todo" />
           <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)} color="text-green-400"  loading={loading} />
+          <StatCard title="Unread Chats"     value={String(unreadChats)}                          color="text-sky-400"    loading={false} to="/chat" />
         </div>
       </section>
+
+      {/* Goals / Pipeline / Jobs Pipeline */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <GoalsCard goals={goals} actuals={monthActuals} range={monthRange} loading={allCustomersLoading} />
+        <PipelineSummaryCard counts={stageCounts} loading={allCustomersLoading} />
+        <JobsPipelineSummaryCard counts={jobStageCounts} loading={allCustomersLoading} />
+      </div>
 
       {/* Bar chart — hidden when loading or all values are zero */}
       {!loading && chartEntries && chartEntries.some(e => e.count > 0) && (
         <section className="card p-4">
-          <p className="text-xs font-semibold text-gray-400 mb-3">Today at a Glance</p>
-          <Suspense fallback={<div className="h-[140px] rounded-lg bg-gray-800 animate-pulse" />}>
-            <SnapshotChart entries={chartEntries} />
-          </Suspense>
+          <button
+            onClick={() => setChartOpen(v => !v)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <p className="text-xs font-semibold text-gray-400">Today at a Glance</p>
+            <svg
+              className={`w-4 h-4 text-gray-500 transition-transform ${chartOpen ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+            </svg>
+          </button>
+          {chartOpen && (
+            <div className="mt-3">
+              <Suspense fallback={<div className="h-[140px] rounded-lg bg-gray-800 animate-pulse" />}>
+                <SnapshotChart entries={chartEntries} />
+              </Suspense>
+            </div>
+          )}
         </section>
       )}
 
-      {/* Tasks */}
-      <TasksCard todos={todos} loading={todosLoading} />
+      {/* Tasks / Follow-ups / Recent Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <TasksCard todos={todos} loading={todosLoading} />
+        <FollowUpsCard items={followUps} loading={followUpsLoading} error={followUpsError} />
+        <ActivityTimelineCard
+          activities={activities}
+          nameMap={activityNameMap}
+          loading={activitiesLoading}
+        />
+      </div>
 
-      {/* Follow-ups */}
-      {followUps.length > 0 && <FollowUpsCard items={followUps} />}
+      {/* Top performer / Upcoming appointments */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <TopPerformerCard performer={topPerformer} label={salesmanLabel} loading={allCustomersLoading} />
+        <UpcomingAppointmentsCard items={upcomingAppointments} loading={allCustomersLoading} />
+      </div>
 
       {/* Expenses Today */}
       <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} />
@@ -418,19 +621,19 @@ export default function DashboardPage() {
       {/* Leads today */}
       <ListSection
         title="Leads Today" color="text-indigo-400" badgeColor="bg-indigo-600"
-        items={data?.leadsToday} loading={loading} emptyMsg="No leads today"
+        items={data?.leadsToday} loading={loading} emptyMsg="No leads today" viewAllTo="/leads"
       />
 
       {/* Appointments */}
       <ListSection
         title="Appointments Today" color="text-orange-400" badgeColor="bg-orange-600"
-        items={data?.appointmentsToday} loading={loading} emptyMsg="No appointments today"
+        items={data?.appointmentsToday} loading={loading} emptyMsg="No appointments today" viewAllTo="/calendar"
       />
 
       {/* Customers */}
       <ListSection
         title="Customers Today" color="text-indigo-300" badgeColor="bg-indigo-500"
-        items={data?.customersToday} loading={loading} emptyMsg="No customers today"
+        items={data?.customersToday} loading={loading} emptyMsg="No customers today" viewAllTo="/customers"
       />
 
       {/* Sales */}
@@ -439,14 +642,7 @@ export default function DashboardPage() {
       {/* Jobs */}
       <ListSection
         title="Jobs in Progress" color="text-teal-400" badgeColor="bg-teal-600"
-        items={data?.jobsStartingToday} loading={loading} emptyMsg="No jobs starting today"
-      />
-
-      {/* Recent Activity */}
-      <ActivityTimelineCard
-        activities={activities}
-        nameMap={activityNameMap}
-        loading={activitiesLoading}
+        items={data?.jobsStartingToday} loading={loading} emptyMsg="No jobs starting today" viewAllTo="/jobs"
       />
     </div>
   )
@@ -469,7 +665,7 @@ const MAX_TASKS = 5
 function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
   const preview = todos.slice(0, MAX_TASKS)
   return (
-    <section>
+    <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <p className="section-header mb-0 text-violet-400">Tasks</p>
@@ -483,7 +679,7 @@ function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
           View all →
         </Link>
       </div>
-      <div className="card divide-y divide-gray-700/50">
+      <div className="card divide-y divide-gray-700/50 flex-1">
         {loading ? (
           <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
             <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
@@ -592,7 +788,7 @@ function ExpensesTodayCard({ expenses, loading }: { expenses: Expense[]; loading
   )
 }
 
-function FollowUpsCard({ items }: { items: CustomerItem[] }) {
+function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loading: boolean; error: string | null }) {
   const now = new Date(); now.setHours(0, 0, 0, 0)
   const overdueOrToday = items.filter(c => c.followUpDate && c.followUpDate <= new Date())
   const upcoming       = items.filter(c => c.followUpDate && c.followUpDate > new Date())
@@ -612,7 +808,7 @@ function FollowUpsCard({ items }: { items: CustomerItem[] }) {
   const preview = items.slice(0, 5)
 
   return (
-    <section>
+    <section className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-2">
         <p className="section-header mb-0 text-rose-400">Follow-ups</p>
         {overdueOrToday.length > 0 && (
@@ -626,28 +822,41 @@ function FollowUpsCard({ items }: { items: CustomerItem[] }) {
           </span>
         )}
       </div>
-      <div className="card divide-y divide-gray-700/50">
-        {preview.map(c => {
-          const label = followUpLabel(c.followUpDate!)
-          return (
-            <Link
-              key={c.id}
-              to={`/records/${c.id}`}
-              className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
-            >
-              <span className="text-base shrink-0">🔔</span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
-                {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
-              </div>
-              <span className={`text-xs font-semibold shrink-0 ${label.color}`}>{label.text}</span>
-            </Link>
-          )
-        })}
-        {items.length > 5 && (
-          <Link to="/leads" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
-            +{items.length - 5} more
-          </Link>
+      <div className="card divide-y divide-gray-700/50 flex-1">
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : error ? (
+          <p className="px-4 py-3 text-sm text-red-400">{error}</p>
+        ) : items.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No follow-ups due</p>
+        ) : (
+          <>
+            {preview.map(c => {
+              const label = followUpLabel(c.followUpDate!)
+              return (
+                <Link
+                  key={c.id}
+                  to={`/records/${c.id}`}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+                >
+                  <span className="text-base shrink-0">🔔</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
+                    {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+                  </div>
+                  <span className={`text-xs font-semibold shrink-0 ${label.color}`}>{label.text}</span>
+                </Link>
+              )
+            })}
+            {items.length > 5 && (
+              <Link to="/leads" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{items.length - 5} more
+              </Link>
+            )}
+          </>
         )}
       </div>
     </section>
@@ -676,7 +885,7 @@ function ActivityTimelineCard({
   loading: boolean
 }) {
   return (
-    <section>
+    <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <p className="section-header mb-0 text-sky-400">Recent Activity</p>
@@ -690,7 +899,7 @@ function ActivityTimelineCard({
           View all →
         </Link>
       </div>
-      <div className="card px-4 py-3">
+      <div className="card px-4 py-3 flex-1">
         {loading ? (
           <div className="space-y-4">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -706,7 +915,7 @@ function ActivityTimelineCard({
         ) : activities.length === 0 ? (
           <p className="text-sm text-gray-500 py-1">No activity logged yet</p>
         ) : (
-          <div className="relative">
+          <div className="relative max-h-[420px] overflow-y-auto">
             <div className="absolute left-3.5 top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
             <div className="space-y-0">
               {activities.map((a, idx) => {
@@ -719,18 +928,19 @@ function ActivityTimelineCard({
                       <span className="text-xs leading-none">{meta.icon}</span>
                     </div>
                     <div className="flex-1 min-w-0 pt-0.5">
-                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                      <div className="flex items-baseline gap-1.5">
                         <Link
                           to={`/records/${a.customerId}`}
-                          className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors truncate"
+                          className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors truncate min-w-0"
                         >
                           {customerName}
                         </Link>
-                        <span className="text-xs text-gray-600">·</span>
-                        <span className="text-xs text-gray-500">{meta.label}</span>
-                        <span className="text-xs text-gray-600">·</span>
-                        <span className="text-xs text-gray-600">{a.userName}</span>
                         <span className="text-xs text-gray-700 ml-auto shrink-0">{timeAgo(a.createdAt)}</span>
+                      </div>
+                      <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                        <span className="text-xs text-gray-500 shrink-0">{meta.label}</span>
+                        <span className="text-xs text-gray-600 shrink-0">·</span>
+                        <span className="text-xs text-gray-400 truncate" title={a.userName}>{a.userName}</span>
                       </div>
                       {a.note && (
                         <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{a.note}</p>
@@ -748,7 +958,7 @@ function ActivityTimelineCard({
 }
 
 function ListSection({
-  title, color, badgeColor, items, loading, emptyMsg,
+  title, color, badgeColor, items, loading, emptyMsg, viewAllTo,
 }: {
   title: string
   color: string
@@ -756,8 +966,10 @@ function ListSection({
   items?: CustomerItem[]
   loading: boolean
   emptyMsg: string
+  viewAllTo: string
 }) {
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
+  const preview = items ? items.slice(0, MAX_TASKS) : []
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
@@ -777,29 +989,36 @@ function ListSection({
         ) : !items || items.length === 0 ? (
           <p className="px-4 py-3 text-sm text-gray-500">{emptyMsg}</p>
         ) : (
-          items.map(c => {
-            const color = coloredAvatars ? avatarColor(fullName(c)) : avatarOriginal()
-            return (
-            <Link
-              key={c.id}
-              to={`/records/${c.id}`}
-              className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
-            >
-              <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
-                <span className="text-xs font-semibold" style={{ color: color.text }}>
-                  {[c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
-                </span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
-                {c.city && <p className="text-xs text-gray-400">{c.city}{c.state ? `, ${c.state}` : ''}</p>}
-              </div>
-              {c.amount > 0 && (
-                <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(c.amount)}</span>
-              )}
-            </Link>
-            )
-          })
+          <>
+            {preview.map(c => {
+              const color = coloredAvatars ? avatarColor(fullName(c)) : avatarOriginal()
+              return (
+              <Link
+                key={c.id}
+                to={`/records/${c.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
+                  <span className="text-xs font-semibold" style={{ color: color.text }}>
+                    {[c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
+                  {c.city && <p className="text-xs text-gray-400">{c.city}{c.state ? `, ${c.state}` : ''}</p>}
+                </div>
+                {c.amount > 0 && (
+                  <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(c.amount)}</span>
+                )}
+              </Link>
+              )
+            })}
+            {items.length > MAX_TASKS && (
+              <Link to={viewAllTo} className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{items.length - MAX_TASKS} more
+              </Link>
+            )}
+          </>
         )}
       </div>
     </section>
@@ -809,6 +1028,7 @@ function ListSection({
 function SalesTodayCard({ items, loading }: { items?: SaleEntry[]; loading: boolean }) {
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const total = items?.reduce((s, e) => s + e.amount, 0) ?? 0
+  const preview = items ? items.slice(0, MAX_TASKS) : []
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
@@ -828,28 +1048,263 @@ function SalesTodayCard({ items, loading }: { items?: SaleEntry[]; loading: bool
         ) : !items || items.length === 0 ? (
           <p className="px-4 py-3 text-sm text-gray-500">No sales today</p>
         ) : (
-          items.map(entry => {
-            const color = coloredAvatars ? avatarColor(entry.customerName) : avatarOriginal()
-            const initial = entry.customerName.trim()[0]?.toUpperCase() || '?'
-            return (
-              <Link
-                key={entry.id}
-                to={`/invoices/${entry.id}`}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
-              >
-                <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
-                  <span className="text-xs font-semibold" style={{ color: color.text }}>{initial}</span>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-100 truncate">{entry.customerName || '—'}</p>
-                  {entry.invoiceNumber && <p className="text-xs text-gray-400">{entry.invoiceNumber}</p>}
-                </div>
-                {entry.amount > 0 && (
-                  <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(entry.amount)}</span>
-                )}
+          <>
+            {preview.map(entry => {
+              const color = coloredAvatars ? avatarColor(entry.customerName) : avatarOriginal()
+              const initial = entry.customerName.trim()[0]?.toUpperCase() || '?'
+              return (
+                <Link
+                  key={entry.id}
+                  to={`/invoices/${entry.id}`}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
+                    <span className="text-xs font-semibold" style={{ color: color.text }}>{initial}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-100 truncate">{entry.customerName || '—'}</p>
+                    {entry.invoiceNumber && <p className="text-xs text-gray-400">{entry.invoiceNumber}</p>}
+                  </div>
+                  {entry.amount > 0 && (
+                    <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(entry.amount)}</span>
+                  )}
+                </Link>
+              )
+            })}
+            {items.length > MAX_TASKS && (
+              <Link to="/invoices" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{items.length - MAX_TASKS} more
               </Link>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function GoalsCard({
+  goals, actuals, range, loading,
+}: {
+  goals: GoalDoc | null
+  actuals: GoalValues
+  range: PeriodRange
+  loading: boolean
+}) {
+  const target = goals?.month ?? emptyGoalValues()
+  const hasTargets = target.revenue > 0 || target.leads > 0 || target.customers > 0
+  const rows: { label: string; actual: number; target: number; barClass: string; format: (n: number) => string }[] = [
+    { label: 'Revenue',   actual: actuals.revenue,   target: target.revenue,   barClass: 'bg-green-500',  format: formatCurrency },
+    { label: 'Leads',     actual: actuals.leads,     target: target.leads,     barClass: 'bg-indigo-500', format: n => n.toLocaleString() },
+    { label: 'Customers', actual: actuals.customers, target: target.customers, barClass: 'bg-violet-500', format: n => n.toLocaleString() },
+  ]
+  return (
+    <section className="h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-header mb-0 text-emerald-400">Goals · {range.short}</p>
+        <Link to="/goals" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card p-4 space-y-3 flex-1">
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : !hasTargets ? (
+          <p className="text-sm text-gray-500">No goals set for this month</p>
+        ) : (
+          rows.map(r => {
+            const pct = r.target > 0 ? Math.min(100, Math.round((r.actual / r.target) * 100)) : 0
+            return (
+              <div key={r.label}>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-xs text-gray-400">{r.label}</span>
+                  <span className="text-xs text-gray-300">
+                    {r.format(r.actual)} <span className="text-gray-600">/ {r.format(r.target)}</span>
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+                  <div className={`h-full ${r.barClass}`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
             )
           })
+        )}
+      </div>
+    </section>
+  )
+}
+
+function PipelineSummaryCard({ counts, loading }: { counts: Record<Stage, number>; loading: boolean }) {
+  const total = STAGE_CONFIG.reduce((s, cfg) => s + counts[cfg.id], 0)
+  return (
+    <section className="h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-header mb-0 text-blue-400">Pipeline</p>
+        <Link to="/pipeline" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card p-4 flex-1 flex flex-col justify-start">
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : total === 0 ? (
+          <p className="text-sm text-gray-500">No active leads or customers</p>
+        ) : (
+          <>
+            <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+              {STAGE_CONFIG.map(cfg => {
+                const count = counts[cfg.id]
+                if (count === 0) return null
+                return <div key={cfg.id} className={cfg.barClass} style={{ width: `${(count / total) * 100}%` }} />
+              })}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
+              {STAGE_CONFIG.map(cfg => (
+                <div key={cfg.id} className="flex items-center gap-1.5 text-xs">
+                  <span className={`w-2 h-2 rounded-full ${cfg.barClass}`} />
+                  <span className="text-gray-400">{cfg.label}</span>
+                  <span className={`font-semibold ${cfg.colorClass}`}>{counts[cfg.id]}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function JobsPipelineSummaryCard({ counts, loading }: { counts: Record<JobStage, number>; loading: boolean }) {
+  const total = JOB_STAGE_CONFIG.reduce((s, cfg) => s + counts[cfg.id], 0)
+  return (
+    <section className="h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-header mb-0 text-teal-400">Jobs Pipeline</p>
+        <Link to="/jobs" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card p-4 flex-1 flex flex-col justify-start">
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : total === 0 ? (
+          <p className="text-sm text-gray-500">No customer jobs on file</p>
+        ) : (
+          <>
+            <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+              {JOB_STAGE_CONFIG.map(cfg => {
+                const count = counts[cfg.id]
+                if (count === 0) return null
+                return <div key={cfg.id} className={cfg.barClass} style={{ width: `${(count / total) * 100}%` }} />
+              })}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
+              {JOB_STAGE_CONFIG.map(cfg => (
+                <div key={cfg.id} className="flex items-center gap-1.5 text-xs">
+                  <span className={`w-2 h-2 rounded-full ${cfg.barClass}`} />
+                  <span className="text-gray-400">{cfg.label}</span>
+                  <span className={`font-semibold ${cfg.colorClass}`}>{counts[cfg.id]}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function TopPerformerCard({
+  performer, label, loading,
+}: {
+  performer: { name: string; revenue: number; customers: number } | null
+  label: string
+  loading: boolean
+}) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-header mb-0 text-yellow-400">Top {label} This Month</p>
+        <Link to="/leaderboard" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card p-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : !performer ? (
+          <p className="text-sm text-gray-500">No sales recorded this month</p>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-2xl shrink-0">🥇</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-gray-100 truncate">{performer.name}</p>
+              <p className="text-xs text-gray-400">{performer.customers} sale{performer.customers === 1 ? '' : 's'}</p>
+            </div>
+            <span className="text-base font-bold text-green-400 shrink-0">{formatCurrency(performer.revenue)}</span>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; loading: boolean }) {
+  const preview = items.slice(0, MAX_TASKS)
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-2">
+        <p className="section-header mb-0 text-orange-400">Upcoming Appointments</p>
+        {items.length > 0 && (
+          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-orange-600">
+            {items.length}
+          </span>
+        )}
+      </div>
+      <div className="card divide-y divide-gray-700/50">
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : items.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No appointments in the next {UPCOMING_WINDOW_DAYS} days</p>
+        ) : (
+          <>
+            {preview.map(c => (
+              <Link
+                key={c.id}
+                to={`/records/${c.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
+              >
+                <span className="text-base shrink-0">📅</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
+                  {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+                </div>
+                <span className="text-xs font-semibold text-orange-400 shrink-0">
+                  {c.startDate!.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+              </Link>
+            ))}
+            {items.length > MAX_TASKS && (
+              <Link to="/calendar" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{items.length - MAX_TASKS} more
+              </Link>
+            )}
+          </>
         )}
       </div>
     </section>

@@ -64,6 +64,7 @@ export default function SettingsPage() {
   const [localLabels, setLocalLabels] = useState<PickerLabels>(() => storedLabels)
   const [editingLabel, setEditingLabel] = useState<ListKey | null>(null)
   const [labelDraft, setLabelDraft] = useState('')
+  const [dropdownListsOpen, setDropdownListsOpen] = useState(false)
   usePageTitle('Settings')
   const [saving, setSaving] = useState(false)
   const [inputs, setInputs] = useState<Record<ListKey, string>>({
@@ -626,71 +627,90 @@ return (
         </div>
       </div>
 
-      <p className="text-sm text-gray-400 mb-6">
-        Manage the dropdown lists used throughout the app. Changes sync to all devices.
-      </p>
+      <div className="card overflow-hidden mb-6">
+        <button
+          type="button"
+          onClick={() => setDropdownListsOpen(o => !o)}
+          className="w-full px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between gap-2"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Manage Dropdown Lists</p>
+          <svg
+            className={`w-4 h-4 text-gray-500 transition-transform shrink-0 ${dropdownListsOpen ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+        {dropdownListsOpen && (
+          <div className="p-4">
+            <p className="text-sm text-gray-400 mb-5">
+              Manage the dropdown lists used throughout the app (Salesman, Job Type, Product, Lead Source, Contractor). Changes sync to all devices.
+            </p>
 
-      <div className="space-y-5">
-        {SECTION_KEYS.map(({ key, placeholder }) => (
-          <div key={key} className="card overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between gap-2">
-              {editingLabel === key ? (
-                <input
-                  autoFocus
-                  type="text"
-                  value={labelDraft}
-                  onChange={e => setLabelDraft(e.target.value)}
-                  onBlur={() => commitLabel(key)}
-                  onKeyDown={e => { if (e.key === 'Enter') commitLabel(key); if (e.key === 'Escape') setEditingLabel(null) }}
-                  className="text-xs font-semibold uppercase tracking-wider bg-transparent border-b border-indigo-500 outline-none text-gray-200 w-40"
-                />
-              ) : (
-                <>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{localLabels[key as keyof PickerLabels]}</p>
-                  <button
-                    type="button"
-                    onClick={() => { setEditingLabel(key); setLabelDraft(localLabels[key as keyof PickerLabels]) }}
-                    className="text-gray-600 hover:text-gray-300 transition-colors shrink-0"
-                    title="Rename"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
-                    </svg>
-                  </button>
-                </>
-              )}
+            <div className="space-y-5">
+              {SECTION_KEYS.map(({ key, placeholder }) => (
+                <div key={key} className="card overflow-hidden">
+                  <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between gap-2">
+                    {editingLabel === key ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={labelDraft}
+                        onChange={e => setLabelDraft(e.target.value)}
+                        onBlur={() => commitLabel(key)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitLabel(key); if (e.key === 'Escape') setEditingLabel(null) }}
+                        className="text-xs font-semibold uppercase tracking-wider bg-transparent border-b border-indigo-500 outline-none text-gray-200 w-40"
+                      />
+                    ) : (
+                      <>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{localLabels[key as keyof PickerLabels]}</p>
+                        <button
+                          type="button"
+                          onClick={() => { setEditingLabel(key); setLabelDraft(localLabels[key as keyof PickerLabels]) }}
+                          className="text-gray-600 hover:text-gray-300 transition-colors shrink-0"
+                          title="Rename"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex gap-2 p-3 border-b border-gray-700/30">
+                    <input
+                      type="text"
+                      value={inputs[key]}
+                      onChange={e => setInputs(prev => ({ ...prev, [key]: e.target.value }))}
+                      onKeyDown={e => handleKeyDown(e, key)}
+                      placeholder={placeholder}
+                      className="input-field flex-1 text-sm py-1.5"
+                    />
+                    <button onClick={() => addItem(key)} className="btn-primary px-3 py-1.5 text-sm">Add</button>
+                  </div>
+                  {local[key].length === 0 ? (
+                    <p className="px-4 py-3 text-sm text-gray-500 italic">No items yet.</p>
+                  ) : (
+                    <ul className="divide-y divide-gray-700/30">
+                      {local[key].map(item => (
+                        <li key={item} className="flex items-center justify-between px-4 py-2.5">
+                          <span className="text-sm text-gray-200">{item}</span>
+                          <button
+                            onClick={() => removeItem(key, item)}
+                            className="text-gray-500 hover:text-red-400 transition-colors text-sm ml-2"
+                            aria-label={`Remove ${item}`}
+                          >
+                            ✕
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
             </div>
-            <div className="flex gap-2 p-3 border-b border-gray-700/30">
-              <input
-                type="text"
-                value={inputs[key]}
-                onChange={e => setInputs(prev => ({ ...prev, [key]: e.target.value }))}
-                onKeyDown={e => handleKeyDown(e, key)}
-                placeholder={placeholder}
-                className="input-field flex-1 text-sm py-1.5"
-              />
-              <button onClick={() => addItem(key)} className="btn-primary px-3 py-1.5 text-sm">Add</button>
-            </div>
-            {local[key].length === 0 ? (
-              <p className="px-4 py-3 text-sm text-gray-500 italic">No items yet.</p>
-            ) : (
-              <ul className="divide-y divide-gray-700/30">
-                {local[key].map(item => (
-                  <li key={item} className="flex items-center justify-between px-4 py-2.5">
-                    <span className="text-sm text-gray-200">{item}</span>
-                    <button
-                      onClick={() => removeItem(key, item)}
-                      className="text-gray-500 hover:text-red-400 transition-colors text-sm ml-2"
-                      aria-label={`Remove ${item}`}
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
-        ))}
+        )}
       </div>
 
       <div className="mt-6 card p-4">

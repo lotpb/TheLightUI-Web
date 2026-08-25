@@ -1,50 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { doc, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../firebase/config'
-import { subscribeToCustomers } from '../../services/customerService'
-import { subscribeToLeadScores, requestLeadScoring, type LeadScore } from '../../services/leadScoreService'
-import { categoryMatches, fullName, formatCurrency, type CustomerItem } from '../../models/customer'
-import { useAuthStore } from '../../stores/authStore'
+import { requestLeadScoring, type LeadScore } from '../../services/leadScoreService'
+import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
+import { type Stage, STAGE_CONFIG, endOfToday, getStage } from '../../models/pipeline'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useSharedCustomers } from '../../hooks/useSharedCustomers'
+import { useSharedLeadScores } from '../../hooks/useSharedLeadScores'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
+import PipelineJobsTabs from '../../components/PipelineJobsTabs'
 
 // ─── Types & config ──────────────────────────────────────────────────────────
 
-type Stage = 'new' | 'contacted' | 'appointment' | 'won' | 'lost'
-
-const STAGE_CONFIG: {
-  id: Stage
-  label: string
-  colorClass: string
-  barClass: string
-  badgeClass: string
-  dropHint: string
-}[] = [
-  { id: 'new',         label: 'New Lead',    colorClass: 'text-indigo-400', barClass: 'bg-indigo-500', badgeClass: 'bg-indigo-600', dropHint: 'Move to New'         },
-  { id: 'contacted',   label: 'Contacted',   colorClass: 'text-blue-400',   barClass: 'bg-blue-500',   badgeClass: 'bg-blue-600',   dropHint: 'Mark as Contacted'  },
-  { id: 'appointment', label: 'Appointment', colorClass: 'text-orange-400', barClass: 'bg-orange-500', badgeClass: 'bg-orange-600', dropHint: 'Set Appointment'    },
-  { id: 'won',         label: 'Customer',    colorClass: 'text-green-400',  barClass: 'bg-green-500',  badgeClass: 'bg-green-600',  dropHint: 'Convert to Customer'},
-  { id: 'lost',        label: 'Inactive',    colorClass: 'text-gray-400',   barClass: 'bg-gray-600',   badgeClass: 'bg-gray-700',   dropHint: 'Mark Inactive'      },
-]
-
 const MAX_PER_COL = 30
 const COLLECTION  = 'Customers'
+const DAY_MS = 86_400_000
+const STALE_DAYS = 7
 
-// ─── Stage derivation ─────────────────────────────────────────────────────────
-
-function endOfToday(): Date {
-  const d = new Date(); d.setHours(23, 59, 59, 999); return d
+function directionsUrl(c: CustomerItem): string {
+  const address = [c.street, c.city, c.state].filter(Boolean).join(', ')
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
 }
 
-function getStage(c: CustomerItem): Stage | null {
-  if (categoryMatches(c.category, 'Vendor') || categoryMatches(c.category, 'Employee')) return null
-  if (!c.isActive) return 'lost'
-  if (categoryMatches(c.category, 'Customer')) return 'won'
-  if (c.startDate && c.startDate > endOfToday()) return 'appointment'
-  if (c.callback.toLowerCase() === 'yes') return 'contacted'
-  return 'new'
+// "New" and "contacted" leads with no update in a while are going cold —
+// flag them so they don't just quietly sit in the board unnoticed.
+function isStale(c: CustomerItem, stage: Stage): boolean {
+  if (stage !== 'new' && stage !== 'contacted') return false
+  return Date.now() - c.lastUpdateDate.getTime() > STALE_DAYS * DAY_MS
+}
+function daysSince(d: Date): number {
+  return Math.floor((Date.now() - d.getTime()) / DAY_MS)
 }
 
 // ─── Firestore patches ───────────────────────────────────────────────────────
@@ -108,17 +95,27 @@ function ApptModal({ onConfirm, onCancel }: { onConfirm: (d: Date) => void; onCa
 
 export default function PipelinePage() {
   usePageTitle('Pipeline')
-  const companyId      = useAuthStore(s => s.companyId)
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
 
-  const [all,     setAll]     = useState<CustomerItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const { items: all, loading } = useSharedCustomers()
+
+  const [search, setSearch] = useState('')
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return all
+    return all.filter(c =>
+      fullName(c).toLowerCase().includes(q) ||
+      c.salesman.toLowerCase().includes(q) ||
+      c.city.toLowerCase().includes(q)
+    )
+  }, [all, search])
 
   // Lead scores
-  const [scores,   setScores]   = useState<Record<string, LeadScore>>({})
   const [scoring,  setScoring]  = useState(false)
   const [scoreErr, setScoreErr] = useState<string | null>(null)
-  const [scoredAt, setScoredAt] = useState<Date | null>(null)
+  const leadScoreDoc = useSharedLeadScores()
+  const scores   = leadScoreDoc?.scores ?? {}
+  const scoredAt = leadScoreDoc?.scoredAt ?? null
 
   // Drag state
   const [draggingId,    setDraggingId]    = useState<string | null>(null)
@@ -127,26 +124,6 @@ export default function PipelinePage() {
 
   // Appointment date modal
   const [pendingAppt, setPendingAppt] = useState<{ id: string } | null>(null)
-
-  useEffect(() => {
-    setLoading(true)
-    const unsub = subscribeToCustomers(
-      items => { setAll(items); setLoading(false) },
-      ()    => setLoading(false),
-    )
-    return unsub
-  }, [companyId])
-
-  useEffect(() => {
-    const unsub = subscribeToLeadScores(
-      doc => {
-        setScores(doc?.scores ?? {})
-        setScoredAt(doc?.scoredAt ?? null)
-      },
-      () => {},
-    )
-    return unsub
-  }, [companyId])
 
   async function handleScoreLeads() {
     setScoring(true)
@@ -162,7 +139,7 @@ export default function PipelinePage() {
 
   const columns = useMemo(() => {
     const buckets: Record<Stage, CustomerItem[]> = { new: [], contacted: [], appointment: [], won: [], lost: [] }
-    for (const c of all) {
+    for (const c of filtered) {
       const stage = getStage(c)
       if (stage) buckets[stage].push(c)
     }
@@ -171,9 +148,13 @@ export default function PipelinePage() {
       buckets[stage].sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
     }
     return buckets
-  }, [all])
+  }, [filtered])
 
   const wonAmount = useMemo(() => columns.won.reduce((s, c) => s + c.amount, 0), [columns.won])
+  const staleCount = useMemo(
+    () => columns.new.filter(c => isStale(c, 'new')).length + columns.contacted.filter(c => isStale(c, 'contacted')).length,
+    [columns],
+  )
 
   // Drag handlers
   function onDragStart(id: string) {
@@ -213,6 +194,8 @@ export default function PipelinePage() {
 
   return (
     <div className="px-4 py-6 flex flex-col h-full">
+      <PipelineJobsTabs />
+
       {/* Header */}
       <div className="flex items-start justify-between mb-4 shrink-0 flex-wrap gap-3">
         <div>
@@ -249,6 +232,24 @@ export default function PipelinePage() {
           <Link to="/leads" className="btn-secondary text-sm px-3 py-1.5">View List</Link>
         </div>
       </div>
+
+      {/* Search */}
+      <input
+        type="search"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Search by name, salesman, or city…"
+        className="input-field w-full text-sm py-2 mb-3 shrink-0"
+      />
+
+      {/* Summary strip */}
+      {!loading && staleCount > 0 && (
+        <div className="flex gap-3 mb-4 flex-wrap shrink-0">
+          <div className="bg-amber-900/30 border border-amber-700/40 rounded-xl px-4 py-2 flex items-center gap-3">
+            <span className="text-xs text-amber-400 font-medium">{staleCount} going cold (7d+ no update)</span>
+          </div>
+        </div>
+      )}
 
       {/* Board */}
       {loading ? (
@@ -388,6 +389,7 @@ function PipelineCard({
   const apptLabel = c.startDate && c.startDate > eot
     ? c.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : null
+  const stale = isStale(c, stage)
 
   return (
     <div
@@ -428,7 +430,7 @@ function PipelineCard({
           </div>
         </div>
 
-        {(c.salesman || apptLabel || (c.city && stage !== 'won')) && (
+        {(c.salesman || apptLabel || stale) && (
           <div className="flex flex-wrap gap-1">
             {c.salesman && (
               <span className="text-xs bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full">{c.salesman}</span>
@@ -436,11 +438,29 @@ function PipelineCard({
             {apptLabel && (
               <span className="text-xs bg-orange-900/40 text-orange-300 px-1.5 py-0.5 rounded-full">📅 {apptLabel}</span>
             )}
-            {c.city && stage !== 'won' && (
-              <span className="text-xs bg-gray-700/60 text-gray-400 px-1.5 py-0.5 rounded-full">
-                {c.city}{c.state ? `, ${c.state}` : ''}
+            {stale && (
+              <span className="text-xs bg-amber-900/40 text-amber-300 px-1.5 py-0.5 rounded-full">
+                🕓 {daysSince(c.lastUpdateDate)}d cold
               </span>
             )}
+          </div>
+        )}
+
+        {(c.city || c.street) && stage !== 'won' && (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-gray-500 truncate">{[c.city, c.state].filter(Boolean).join(', ')}</p>
+            <a
+              href={directionsUrl(c)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              title="Get directions"
+              className="text-indigo-400 hover:text-indigo-300 shrink-0"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 1.447-.894L9 7m0 13l6-3m-6-10l6 3m0 0l5.447-2.724A1 1 0 0 1 21 5.618v10.764a1 1 0 0 1-.553.894L15 20m0-13v13" />
+              </svg>
+            </a>
           </div>
         )}
       </Link>

@@ -17,6 +17,8 @@ import { tagColor } from '../../utils/tagColor'
 import { scoreLead } from '../../utils/leadScore'
 import { calculateHealthScoreLight } from '../../utils/customerHealth'
 import CSVImportModal from '../../components/CSVImportModal'
+import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
+import type { SavedView } from '../../models/savedView'
 
 const PAGE_SIZE = 50
 
@@ -96,6 +98,14 @@ export default function CustomerListPage() {
   const [filterDateTo, setFilterDateTo]     = useState('')
   const [filterAmtMin, setFilterAmtMin]     = useState('')
   const [filterAmtMax, setFilterAmtMax]     = useState('')
+
+  // Saved views
+  const [savedViews, setSavedViews] = useState<SavedView[]>([])
+  const [viewsOpen, setViewsOpen]   = useState(false)
+  const [savingView, setSavingView] = useState(false)
+  const [newViewName, setNewViewName] = useState('')
+  const viewsRef = useRef<HTMLDivElement>(null)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   useSearchShortcut(searchInputRef, () => setSearch(''))
@@ -122,6 +132,52 @@ export default function CustomerListPage() {
     setFilterDateTo('')
     setFilterAmtMin('')
     setFilterAmtMax('')
+  }
+
+  useEffect(() => subscribeToSavedViews(cat, setSavedViews, () => {}), [cat])
+
+  function applySavedView(view: SavedView) {
+    const f = view.filters
+    setSearch(f.search)
+    setShowInactive(f.showInactive)
+    localStorage.setItem('thelight.showInactive', String(f.showInactive))
+    setTagFilter(f.tagFilter)
+    setSortField(f.sortField as SortField)
+    setSortDir(f.sortDir as SortDir)
+    setFilterSalesman(f.filterSalesman)
+    setFilterState(f.filterState)
+    setFilterLeadSource(f.filterLeadSource)
+    setFilterProduct(f.filterProduct)
+    setFilterCallback(f.filterCallback)
+    setFilterDateFrom(f.filterDateFrom)
+    setFilterDateTo(f.filterDateTo)
+    setFilterAmtMin(f.filterAmtMin)
+    setFilterAmtMax(f.filterAmtMax)
+    setViewsOpen(false)
+  }
+
+  async function handleSaveView() {
+    const name = newViewName.trim()
+    if (!name) return
+    setSavingView(true)
+    try {
+      await createSavedView(cat, name, {
+        search, showInactive, tagFilter,
+        sortField, sortDir,
+        filterSalesman, filterState, filterLeadSource, filterProduct,
+        filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+      })
+      setNewViewName('')
+      toast(`Saved view "${name}"`, 'success')
+    } catch {
+      toast('Failed to save view', 'error')
+    } finally {
+      setSavingView(false)
+    }
+  }
+
+  async function handleDeleteView(view: SavedView) {
+    await deleteSavedView(view.id)
   }
 
   // Clear selection when category or filter changes
@@ -216,9 +272,11 @@ export default function CustomerListPage() {
   const closeMenu     = useCallback(() => setMenuOpen(false), [])
   const closeSortOpen = useCallback(() => setSortOpen(false), [])
   const closeTag      = useCallback(() => setTagOpen(false), [])
+  const closeViews    = useCallback(() => setViewsOpen(false), [])
   useClickOutside(menuRef, closeMenu, menuOpen)
   useClickOutside(sortRef, closeSortOpen, sortOpen)
   useClickOutside(tagRef, closeTag, tagOpen)
+  useClickOutside(viewsRef, closeViews, viewsOpen)
 
   function handleSortSelect(field: SortField) {
     if (field === sortField) {
@@ -570,6 +628,69 @@ export default function CustomerListPage() {
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
+        {/* Saved views */}
+        <div ref={viewsRef} className="relative">
+          <button
+            onClick={() => setViewsOpen(v => !v)}
+            className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+              viewsOpen ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12c1.5-4.5 5.25-7.5 9.75-7.5s8.25 3 9.75 7.5c-1.5 4.5-5.25 7.5-9.75 7.5S3.75 16.5 2.25 12Z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+            Views
+            {savedViews.length > 0 && (
+              <span className="bg-gray-700 text-gray-300 text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
+                {savedViews.length}
+              </span>
+            )}
+          </button>
+          {viewsOpen && (
+            <div className="absolute right-0 mt-1 w-64 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
+              {savedViews.length === 0 ? (
+                <p className="px-4 py-3 text-sm text-gray-500">No saved views for {CATEGORY_LABELS[cat]} yet.</p>
+              ) : (
+                <div className="max-h-64 overflow-y-auto divide-y divide-gray-700/50">
+                  {savedViews.map(view => (
+                    <div key={view.id} className="flex items-center group">
+                      <button
+                        onClick={() => applySavedView(view)}
+                        className="flex-1 text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors truncate"
+                      >
+                        {view.name}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteView(view)}
+                        title="Delete view"
+                        className="px-2.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="p-2 border-t border-gray-700/50 flex gap-1.5">
+                <input
+                  value={newViewName}
+                  onChange={e => setNewViewName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveView() }}
+                  placeholder="Save current filters as…"
+                  className="input-field flex-1 text-xs py-1.5"
+                />
+                <button
+                  onClick={handleSaveView}
+                  disabled={!newViewName.trim() || savingView}
+                  className="btn-primary text-xs px-2.5 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         {/* Advanced filters toggle */}
         <button
           onClick={() => setFilterOpen(v => !v)}

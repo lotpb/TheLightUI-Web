@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { customerFromDoc, customerToFirestore, type CustomerItem } from '../models/customer'
-import { getCompanyId } from '../stores/authStore'
+import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 
 const COLLECTION = 'Customers'
 
@@ -71,7 +71,11 @@ export async function createCustomer(
   userId?: string,
 ): Promise<string> {
   const companyId = getCompanyId()
-  const data = { ...customerToFirestore(customer as CustomerItem, userId), companyId }
+  const data = {
+    ...customerToFirestore(customer as CustomerItem, userId),
+    companyId,
+    createdByName: getCurrentUserLabel().name,
+  }
   const ref = await addDoc(collection(db, COLLECTION), data)
   return ref.id
 }
@@ -82,7 +86,11 @@ export async function updateCustomer(
   userId?: string,
 ): Promise<void> {
   const companyId = getCompanyId()
-  const data = { ...customerToFirestore(customer, userId), companyId }
+  const data = {
+    ...customerToFirestore(customer, userId),
+    companyId,
+    lastEditedByName: getCurrentUserLabel().name,
+  }
   await updateDoc(doc(db, COLLECTION, id), data)
 }
 

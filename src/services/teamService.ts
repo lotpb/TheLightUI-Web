@@ -32,6 +32,19 @@ function s(d: Record<string, unknown>, k: string): string {
   return typeof d[k] === 'string' ? (d[k] as string) : ''
 }
 
+function roleRank(r: string | null): number {
+  switch (r) { case 'owner': return 0; case 'admin': return 1; case 'salesman': return 2; case 'viewer': return 3; default: return 4 }
+}
+
+export function compareMembers(
+  a: { role: string | null; firstName: string; email: string },
+  b: { role: string | null; firstName: string; email: string },
+): number {
+  const ro = roleRank(a.role) - roleRank(b.role)
+  if (ro !== 0) return ro
+  return (a.firstName || a.email).localeCompare(b.firstName || b.email)
+}
+
 export function subscribeToTeam(
   onData: (members: TeamMember[]) => void,
   onError: (err: Error) => void,
@@ -56,22 +69,14 @@ export function subscribeToTeam(
           lastSeen:        toDate(r['lastSeen']),
         }
       })
-      members.sort((a, b) => {
-        // owner → admin → salesman → viewer → rest
-        const roleOrder = (r: string | null) => {
-          switch (r) { case 'owner': return 0; case 'admin': return 1; case 'salesman': return 2; case 'viewer': return 3; default: return 4 }
-        }
-        const ro = roleOrder(a.role) - roleOrder(b.role)
-        if (ro !== 0) return ro
-        return (a.firstName || a.email).localeCompare(b.firstName || b.email)
-      })
+      members.sort(compareMembers)
       onData(members)
     },
     onError,
   )
 }
 
-export function memberDisplayName(m: TeamMember): string {
+export function memberDisplayName(m: { firstName: string; lastName: string; email: string }): string {
   const full = `${m.firstName} ${m.lastName}`.trim()
   return full || m.email.split('@')[0]
 }
@@ -107,5 +112,109 @@ export async function removeTeamMember(uid: string): Promise<void> {
   } catch {
     // CF not deployed — remove companyId from user doc so they no longer appear in team
     await setDoc(doc(db, COL, uid), { companyId: '' }, { merge: true })
+  }
+}
+
+// ── Cross-company team listing (super-admin only) ───────────────────────────────
+// This allowlist is a UI hint only — the real gate is enforced server-side in the
+// adminListAllTeams Cloud Function against the caller's verified ID-token email.
+export const SUPER_ADMIN_EMAILS = ['eunitedws@gmail.com', 'eunitedws@icloud.com'] as const
+
+export function isSuperAdminEmail(email: string | null | undefined): boolean {
+  return !!email && (SUPER_ADMIN_EMAILS as readonly string[]).includes(email.toLowerCase())
+}
+
+export interface AllTeamsMember {
+  uid: string
+  email: string
+  firstName: string
+  lastName: string
+  displayName: string
+  profileImageUrl: string
+  role: string | null
+  isOwner: boolean
+  isOnline: boolean
+  createdAt: Date | null
+  lastSeen: Date | null
+}
+
+export interface CompanyTeamGroup {
+  kind: 'company' | 'orphan' | 'unassigned'
+  companyId: string
+  name: string
+  plan: string
+  ownerUid: string
+  ownerEmail: string
+  ownerMissing: boolean
+  createdAt: Date | null
+  memberCount: number
+  members: AllTeamsMember[]
+}
+
+export interface AllTeamsResult {
+  generatedAt: Date | null
+  truncated: boolean
+  totalCompanies: number
+  totalMembers: number
+  groups: CompanyTeamGroup[]
+}
+
+function coerceMember(r: Record<string, unknown>): AllTeamsMember {
+  return {
+    uid:             s(r, 'uid'),
+    email:           s(r, 'email'),
+    firstName:       s(r, 'firstName'),
+    lastName:        s(r, 'lastName'),
+    displayName:     s(r, 'displayName'),
+    profileImageUrl: s(r, 'profileImageUrl'),
+    role:            typeof r['role'] === 'string' ? r['role'] as string : null,
+    isOwner:         typeof r['isOwner'] === 'boolean' ? r['isOwner'] : false,
+    isOnline:        typeof r['isOnline'] === 'boolean' ? r['isOnline'] : false,
+    createdAt:       toDate(r['createdAt']),
+    lastSeen:        toDate(r['lastSeen']),
+  }
+}
+
+function coerceGroup(r: Record<string, unknown>): CompanyTeamGroup {
+  const kind = r['kind']
+  const members = Array.isArray(r['members']) ? (r['members'] as Record<string, unknown>[]).map(coerceMember) : []
+  members.sort((a, b) => Number(b.isOwner) - Number(a.isOwner) || compareMembers(a, b))
+  return {
+    kind: kind === 'orphan' || kind === 'unassigned' ? kind : 'company',
+    companyId:    s(r, 'companyId'),
+    name:         s(r, 'name'),
+    plan:         s(r, 'plan'),
+    ownerUid:     s(r, 'ownerUid'),
+    ownerEmail:   s(r, 'ownerEmail'),
+    ownerMissing: typeof r['ownerMissing'] === 'boolean' ? r['ownerMissing'] : false,
+    createdAt:    toDate(r['createdAt']),
+    memberCount:  typeof r['memberCount'] === 'number' ? r['memberCount'] : members.length,
+    members,
+  }
+}
+
+export async function fetchAllCompaniesTeam(): Promise<AllTeamsResult> {
+  const fns = getFunctions()
+  const fn = httpsCallable<Record<string, never>, Record<string, unknown>>(fns, 'adminListAllTeams')
+  const result = await fn({})
+  const r = result.data
+  const totals = (r['totals'] ?? {}) as Record<string, unknown>
+  const groups = Array.isArray(r['groups']) ? (r['groups'] as Record<string, unknown>[]).map(coerceGroup) : []
+  return {
+    generatedAt:    toDate(r['generatedAt']),
+    truncated:      typeof r['truncated'] === 'boolean' ? r['truncated'] : false,
+    totalCompanies: typeof totals['companies'] === 'number' ? totals['companies'] as number : groups.length,
+    totalMembers:   typeof totals['members'] === 'number' ? totals['members'] as number : 0,
+    groups,
+  }
+}
+
+export function callableErrorMessage(e: unknown): string {
+  const code = (e as { code?: string } | null)?.code
+  switch (code) {
+    case 'functions/permission-denied': return 'You are not authorized to view all companies.'
+    case 'functions/unauthenticated':   return 'Please sign in again.'
+    case 'functions/resource-exhausted': return 'Too many requests — try again in a minute.'
+    default: return 'Could not load companies. Check that adminListAllTeams is deployed.'
   }
 }

@@ -6,6 +6,7 @@ import {
   updatePassword,
   reauthenticateWithCredential,
   EmailAuthProvider,
+  sendEmailVerification,
 } from 'firebase/auth'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
@@ -31,6 +32,9 @@ export default function ProfilePage() {
   const [newPw,     setNewPw]     = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [pwSaving,  setPwSaving]  = useState(false)
+
+  const [sendingVerify, setSendingVerify] = useState(false)
+  const [verifySent, setVerifySent] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -123,6 +127,20 @@ export default function ProfilePage() {
     }
   }
 
+  async function handleSendVerification() {
+    if (!user) return
+    setSendingVerify(true)
+    try {
+      await sendEmailVerification(user)
+      setVerifySent(true)
+      toast('Verification email sent.', 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to send verification email.', 'error')
+    } finally {
+      setSendingVerify(false)
+    }
+  }
+
   const initials = [firstName[0], lastName[0]].filter(Boolean).join('').toUpperCase()
 
   return (
@@ -195,6 +213,19 @@ export default function ProfilePage() {
               value={user?.email ?? ''}
               readOnly
             />
+            {user && !user.emailVerified && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-amber-400">Email not verified.</span>
+                <button
+                  type="button"
+                  onClick={handleSendVerification}
+                  disabled={sendingVerify || verifySent}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {sendingVerify ? 'Sending…' : verifySent ? 'Verification email sent — check your inbox' : 'Send verification email'}
+                </button>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

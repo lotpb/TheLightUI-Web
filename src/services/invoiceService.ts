@@ -4,7 +4,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { getCompanyId } from '../stores/authStore'
+import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { generateInvoiceNumber, invoiceTotal, type Invoice, type InvoiceLineItem, type RecurringInterval } from '../models/invoice'
 
 const COL = 'Invoices'
@@ -136,6 +136,7 @@ export async function createInvoice(
     generatedFrom:  inv.generatedFrom  ?? null,
     createdAt:  serverTimestamp(),
     updatedAt:  serverTimestamp(),
+    createdByName: getCurrentUserLabel().name,
   })
   if (inv.status === 'paid') {
     await recomputeCustomerPaidTotal(inv.customerId)
@@ -155,7 +156,7 @@ export async function updateInvoice(
   const oldCustomerId = before?.exists() ? String(before.data().customerId ?? '') : ''
   const oldStatus = before?.exists() ? String(before.data().status ?? '') : ''
 
-  const updates: Record<string, unknown> = { updatedAt: serverTimestamp() }
+  const updates: Record<string, unknown> = { updatedAt: serverTimestamp(), lastEditedByName: getCurrentUserLabel().name }
   if (fields.customerId      !== undefined) updates.customerId      = fields.customerId
   if (fields.customerName    !== undefined) updates.customerName    = fields.customerName
   if (fields.customerPhone   !== undefined) updates.customerPhone   = fields.customerPhone

@@ -125,11 +125,19 @@ html.light-mode {
 /* text-white maps to --color-white (dark navy in light mode) which is correct
    for text on card/page backgrounds, but elements with a solid colored
    background (indigo buttons, red badges, active nav) still need true white. */
+html.light-mode .bg-indigo-700,
 html.light-mode .bg-indigo-600,
 html.light-mode .bg-indigo-500,
 html.light-mode .bg-red-500,
 html.light-mode .bg-red-600,
 html.light-mode .bg-violet-600,
+html.light-mode .bg-amber-600,
+html.light-mode .bg-green-600,
+html.light-mode .bg-orange-400,
+html.light-mode .bg-orange-500,
+html.light-mode .bg-orange-600,
+html.light-mode .bg-sky-600,
+html.light-mode .bg-teal-600,
 html.light-mode .btn-primary {
   color: rgb(255 255 255) !important;
 }

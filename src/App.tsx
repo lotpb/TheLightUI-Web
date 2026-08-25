@@ -70,6 +70,7 @@ const ExportPage            = lazy(() => import('./pages/export/ExportPage'))
 const AutomationsPage       = lazy(() => import('./pages/automations/AutomationsPage'))
 const ServiceRequestsPage   = lazy(() => import('./pages/servicerequests/ServiceRequestsPage'))
 const EmailInboxPage        = lazy(() => import('./pages/emailinbox/EmailInboxPage'))
+const AuditLogPage          = lazy(() => import('./pages/auditlog/AuditLogPage'))
 
 function PageLoader() {
   return (
@@ -173,6 +174,7 @@ const router = createBrowserRouter(
       <Route path="/automations"                         element={<Protected><AutomationsPage /></Protected>} />
       <Route path="/service-requests"                    element={<Protected><ServiceRequestsPage /></Protected>} />
       <Route path="/email-inbox"                         element={<Protected><EmailInboxPage /></Protected>} />
+      <Route path="/audit-log"                           element={<Protected><AuditLogPage /></Protected>} />
       <Route path="/team"              element={<Protected><TeamPage /></Protected>} />
       <Route path="/leaderboard"       element={<Protected><LeaderboardPage /></Protected>} />
       <Route path="/catalog"           element={<Protected><CatalogPage /></Protected>} />

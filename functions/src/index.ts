@@ -19,6 +19,15 @@ function replyToFor(companyId: string): string {
   return `replies+${companyId}@${INBOUND_REPLY_DOMAIN}`
 }
 
+// Super-admin allowlist for cross-tenant read-only views (adminListAllTeams).
+// Compared case-insensitively against the caller's verified ID-token email.
+const SUPER_ADMIN_EMAILS = ['eunitedws@gmail.com', 'eunitedws@icloud.com'] as const
+
+function isSuperAdmin(email: unknown): boolean {
+  return typeof email === 'string'
+    && SUPER_ADMIN_EMAILS.includes(email.toLowerCase() as typeof SUPER_ADMIN_EMAILS[number])
+}
+
 async function logOutboundEmail(
   companyId: string, customerId: string, fromAddress: string, toAddress: string, subject: string, body: string,
 ): Promise<void> {
@@ -245,6 +254,139 @@ export const syncUserClaims = functions.https.onCall(async (_data, context) => {
   return { companyId, role }
 })
 
+// ── Cross-company team listing (super-admin only) ───────────────────────────────
+// Callable: read-only. Lists every company and its members, joined server-side via
+// the Admin SDK. Never exposed to Firestore security rules — gated entirely on the
+// SUPER_ADMIN_EMAILS allowlist plus a verified email, checked before any read.
+interface AdminTeamMember {
+  uid: string; email: string
+  firstName: string; lastName: string; displayName: string
+  profileImageUrl: string; role: string | null
+  isOwner: boolean; isOnline: boolean
+  createdAt: string | null; lastSeen: string | null
+}
+interface AdminTeamGroup {
+  kind: 'company' | 'orphan' | 'unassigned'
+  companyId: string; name: string; plan: string
+  ownerUid: string; ownerEmail: string; ownerMissing: boolean
+  createdAt: string | null; memberCount: number
+  members: AdminTeamMember[]
+}
+
+function isoOrNull(v: unknown): string | null {
+  if (v instanceof Timestamp) return v.toDate().toISOString()
+  if (v instanceof Date) return v.toISOString()
+  return null
+}
+
+export const adminListAllTeams = functions
+  .runWith({ memory: '256MB', timeoutSeconds: 60 })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    }
+    const { uid, token } = context.auth
+    if (!isSuperAdmin(token.email) || token.email_verified !== true) {
+      console.warn('adminListAllTeams: denied', { uid, email: token.email })
+      throw new functions.https.HttpsError('permission-denied', 'Not authorized')
+    }
+    checkSuperAdminRate(uid)
+
+    const COMPANY_CAP = 500
+    const USER_CAP    = 5000
+    const [companySnap, userSnap] = await Promise.all([
+      db.collection('companies').limit(COMPANY_CAP + 1).get(),
+      db.collection('users').limit(USER_CAP + 1).get(),
+    ])
+    const truncated = companySnap.size > COMPANY_CAP || userSnap.size > USER_CAP
+    const companyDocs = companySnap.docs.slice(0, COMPANY_CAP)
+    const userDocs    = userSnap.docs.slice(0, USER_CAP)
+
+    const groups = new Map<string, AdminTeamGroup>()
+    for (const doc of companyDocs) {
+      const d = doc.data()
+      groups.set(doc.id, {
+        kind: 'company',
+        companyId: doc.id,
+        name: typeof d.name === 'string' && d.name ? d.name : doc.id,
+        plan: typeof d.plan === 'string' ? d.plan : '',
+        ownerUid: typeof d.ownerUid === 'string' ? d.ownerUid : '',
+        ownerEmail: typeof d.ownerEmail === 'string' ? d.ownerEmail : '',
+        ownerMissing: false,
+        createdAt: isoOrNull(d.createdAt),
+        memberCount: 0,
+        members: [],
+      })
+    }
+
+    const UNASSIGNED_KEY = ' unassigned'
+
+    for (const doc of userDocs) {
+      const d = doc.data()
+      const companyId = typeof d.companyId === 'string' && d.companyId ? d.companyId : ''
+      const role = typeof d.role === 'string' ? d.role : null
+
+      let group = companyId ? groups.get(companyId) : groups.get(UNASSIGNED_KEY)
+      if (!group) {
+        if (!companyId) {
+          group = {
+            kind: 'unassigned', companyId: '', name: 'No company assigned', plan: '',
+            ownerUid: '', ownerEmail: '', ownerMissing: false,
+            createdAt: null, memberCount: 0, members: [],
+          }
+          groups.set(UNASSIGNED_KEY, group)
+        } else {
+          group = {
+            kind: 'orphan', companyId, name: 'Unknown company', plan: '',
+            ownerUid: '', ownerEmail: '', ownerMissing: false,
+            createdAt: null, memberCount: 0, members: [],
+          }
+          groups.set(companyId, group)
+        }
+      }
+
+      const isOwner = doc.id === group.ownerUid || role === 'owner'
+      group.members.push({
+        uid: doc.id,
+        email: typeof d.email === 'string' ? d.email : '',
+        firstName: typeof d.firstName === 'string' ? d.firstName : '',
+        lastName: typeof d.lastName === 'string' ? d.lastName : '',
+        displayName: typeof d.displayName === 'string' ? d.displayName : '',
+        profileImageUrl: (typeof d.profileImageUrl === 'string' && d.profileImageUrl)
+          || (typeof d.photoURL === 'string' ? d.photoURL : ''),
+        role,
+        isOwner,
+        isOnline: typeof d.isOnline === 'boolean' ? d.isOnline : false,
+        createdAt: isoOrNull(d.createdAt),
+        lastSeen: isoOrNull(d.lastSeen),
+      })
+      group.memberCount += 1
+      if (doc.id === group.ownerUid) group.ownerMissing = false
+    }
+
+    for (const group of groups.values()) {
+      if (group.kind === 'company' && group.ownerUid && !group.members.some(m => m.uid === group.ownerUid)) {
+        group.ownerMissing = true
+      }
+    }
+
+    const ordered = [...groups.values()].sort((a, b) => {
+      const rank = (g: AdminTeamGroup) => g.kind === 'company' ? 0 : g.kind === 'orphan' ? 1 : 2
+      const r = rank(a) - rank(b)
+      if (r !== 0) return r
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.companyId.localeCompare(b.companyId)
+    })
+
+    console.log('adminListAllTeams: served', { uid, companies: ordered.length, members: userDocs.length })
+
+    return {
+      generatedAt: new Date().toISOString(),
+      truncated,
+      totals: { companies: ordered.length, members: userDocs.length },
+      groups: ordered,
+    }
+  })
+
 // ── Shared rate limiter ─────────────────────────────────────────────────────────
 // Per-instance sliding-window. Good enough to block naive bulk callers without
 // requiring an external store. Key is caller IP or uid depending on context.
@@ -265,6 +407,8 @@ function makeRateLimiter(windowMs: number, limit: number) {
 const checkVerifyRate = makeRateLimiter(60_000, 5)
 // 10 invite attempts / uid / 60 s
 const checkInviteRate = makeRateLimiter(60_000, 10)
+// 6 cross-tenant listings / uid / 60 s
+const checkSuperAdminRate = makeRateLimiter(60_000, 6)
 
 // ── HTML escaping ────────────────────────────────────────────────────────────────
 // Firebase Auth displayName and Firestore customer fields are user-controlled
@@ -1117,6 +1261,7 @@ async function runAutomationsFor(
 
     if (Object.keys(updates).length > 0) {
       updates['lastUpdate'] = Timestamp.now()
+      updates['lastEditedByName'] = `Automation: ${rule.name}`
       await db.collection(collectionName).doc(entityId).update(updates)
     }
 
@@ -1157,6 +1302,106 @@ export const onInvoiceAutomation = functions
   .onUpdate(async (change, context) => {
     const id = context.params.id as string
     await runAutomationsFor('invoice', 'Invoices', id, change.before.data() ?? {}, change.after.data() ?? {})
+    return null
+  })
+
+// ── Audit Log ────────────────────────────────────────────────────────────────────
+// Records who changed what on Customers/Invoices: creation, field-level updates
+// (diffed before vs after), and deletion. Attribution comes from createdByName /
+// lastEditedByName, which client writes stamp with the signed-in user's name and
+// the automation engine stamps with "Automation: <rule name>".
+
+const AUDIT_IGNORE_FIELDS = new Set([
+  'lastUpdate', 'updatedAt', 'createdAt', 'lastEditedByName', 'createdByName',
+  'lastReminderSentAt', 'companyId',
+])
+
+function auditValueLabel(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (v instanceof Timestamp) return v.toDate().toLocaleDateString('en-US')
+  if (typeof v === 'object') return JSON.stringify(v).slice(0, 80)
+  return String(v).slice(0, 120)
+}
+
+async function auditDiff(
+  entityType: 'customer' | 'invoice',
+  entityId: string,
+  entityLabel: (d: Record<string, unknown>) => string,
+  beforeExists: boolean, before: Record<string, unknown>,
+  afterExists: boolean, after: Record<string, unknown>,
+): Promise<void> {
+  if (!beforeExists && afterExists) {
+    const companyId = String(after['companyId'] ?? '')
+    if (!companyId) return
+    const changedBy = String(after['createdByName'] ?? after['lastEditedByName'] ?? 'Unknown')
+    await db.collection('auditLog').add({
+      companyId, entityType, entityId,
+      entityLabel: entityLabel(after),
+      action: 'created', changedBy, changes: [],
+      createdAt: FieldValue.serverTimestamp(),
+    })
+    return
+  }
+
+  if (beforeExists && !afterExists) {
+    const companyId = String(before['companyId'] ?? '')
+    if (!companyId) return
+    await db.collection('auditLog').add({
+      companyId, entityType, entityId,
+      entityLabel: entityLabel(before),
+      action: 'deleted', changedBy: 'Unknown', changes: [],
+      createdAt: FieldValue.serverTimestamp(),
+    })
+    return
+  }
+
+  if (!beforeExists || !afterExists) return
+
+  const companyId = String(after['companyId'] ?? '')
+  if (!companyId) return
+
+  const changes: { field: string; from: string; to: string }[] = []
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+  for (const key of keys) {
+    if (AUDIT_IGNORE_FIELDS.has(key)) continue
+    const b = auditValueLabel(before[key])
+    const a = auditValueLabel(after[key])
+    if (b !== a) changes.push({ field: key, from: b, to: a })
+  }
+  if (changes.length === 0) return
+
+  const changedBy = String(after['lastEditedByName'] ?? 'Unknown')
+  await db.collection('auditLog').add({
+    companyId, entityType, entityId,
+    entityLabel: entityLabel(after),
+    action: 'updated', changedBy, changes,
+    createdAt: FieldValue.serverTimestamp(),
+  })
+}
+
+export const onCustomerAudit = functions.firestore
+  .document('Customers/{id}')
+  .onWrite(async (change, context) => {
+    const id = context.params.id as string
+    await auditDiff(
+      'customer', id,
+      d => [String(d['first'] ?? ''), String(d['lastname'] ?? '')].filter(Boolean).join(' ') || id,
+      change.before.exists, change.before.data() ?? {},
+      change.after.exists, change.after.data() ?? {},
+    )
+    return null
+  })
+
+export const onInvoiceAudit = functions.firestore
+  .document('Invoices/{id}')
+  .onWrite(async (change, context) => {
+    const id = context.params.id as string
+    await auditDiff(
+      'invoice', id,
+      d => String(d['invoiceNumber'] ?? id),
+      change.before.exists, change.before.data() ?? {},
+      change.after.exists, change.after.data() ?? {},
+    )
     return null
   })
 

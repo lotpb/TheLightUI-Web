@@ -102,6 +102,12 @@ export function getCompanyId(): string {
   return useAuthStore.getState().companyId ?? ''
 }
 
+// Non-hook helper — lets services stamp "who made this change" for audit logging
+export function getCurrentUserLabel(): { uid: string; name: string } {
+  const { user } = useAuthStore.getState()
+  return { uid: user?.uid ?? '', name: user?.displayName || user?.email || 'Unknown' }
+}
+
 // Persists a notification toggle to the user's Firestore doc so the Cloud
 // Functions that send push notifications (onLeadCreated, onNewChatMessage)
 // can honor it. Updates local state immediately for a responsive UI.

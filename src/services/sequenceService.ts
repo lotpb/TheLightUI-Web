@@ -151,3 +151,7 @@ export async function resumeEnrollment(
 export async function cancelEnrollment(id: string): Promise<void> {
   await updateDoc(doc(db, 'sequenceEnrollments', id), { status: 'cancelled' })
 }
+
+export async function deleteEnrollment(id: string): Promise<void> {
+  await deleteDoc(doc(db, 'sequenceEnrollments', id))
+}

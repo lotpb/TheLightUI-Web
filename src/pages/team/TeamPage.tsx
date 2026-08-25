@@ -5,14 +5,17 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   subscribeToTeam, setMemberRole, removeTeamMember,
   memberDisplayName, type TeamMember,
+  isSuperAdminEmail, fetchAllCompaniesTeam, callableErrorMessage,
+  type AllTeamsResult, type CompanyTeamGroup, type AllTeamsMember,
 } from '../../services/teamService'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
-function presenceLabel(isOnline: boolean, lastSeen: Date | null): string | null {
-  if (isOnline) return 'Online'
+// Always the actual last-seen time, independent of online status, so an
+// online member's last-seen value isn't hidden behind an "Online" label.
+function lastSeenText(lastSeen: Date | null): string | null {
   if (!lastSeen) return null
   const min = Math.floor((Date.now() - lastSeen.getTime()) / 60000)
   if (min < 1) return 'Just now'
@@ -20,6 +23,15 @@ function presenceLabel(isOnline: boolean, lastSeen: Date | null): string | null 
   const hr = Math.floor(min / 60)
   if (hr < 24) return `${hr}h ago`
   return lastSeen.toLocaleDateString()
+}
+
+function onlineBadge(isOnline: boolean) {
+  if (!isOnline) return null
+  return (
+    <span className="px-2 py-0.5 rounded-full text-xs font-semibold border bg-green-500/15 text-green-300 border-green-600/30">
+      Online
+    </span>
+  )
 }
 
 const ROLES = ['owner', 'admin', 'salesman', 'viewer'] as const
@@ -95,10 +107,8 @@ function MemberCard({
           {roleBadge(member.role)}
         </div>
         <p className="text-xs text-gray-400 truncate mt-0.5">{member.email}</p>
-        {presenceLabel(member.isOnline, member.lastSeen) && (
-          <p className={`text-xs mt-0.5 font-medium ${member.isOnline ? 'text-green-400' : 'text-gray-400'}`}>
-            {presenceLabel(member.isOnline, member.lastSeen)}
-          </p>
+        {onlineBadge(member.isOnline) && (
+          <div className="mt-0.5">{onlineBadge(member.isOnline)}</div>
         )}
         <Link
           to={`/employees?q=${encodeURIComponent(member.email)}`}
@@ -107,6 +117,13 @@ function MemberCard({
           View Employee Record →
         </Link>
       </div>
+
+      {/* Trailing last-seen */}
+      {lastSeenText(member.lastSeen) && (
+        <span className="text-xs font-medium text-gray-400 shrink-0">
+          {lastSeenText(member.lastSeen)}
+        </span>
+      )}
 
       {/* Actions (admin/owner only, not self, not other owners) */}
       {manage && (
@@ -153,6 +170,104 @@ function MemberCard({
   )
 }
 
+// ── All-companies group (super admin) ───────────────────────────────────────────
+
+const GROUP_KIND_BADGE: Record<CompanyTeamGroup['kind'], { label: string; classes: string } | null> = {
+  company:     null,
+  orphan:      { label: 'Orphaned',   classes: 'bg-amber-500/15 text-amber-300 border-amber-600/30' },
+  unassigned:  { label: 'No company', classes: 'bg-gray-700 text-gray-400 border-gray-600/30' },
+}
+
+function AllCompanyMemberRow({
+  member, myUid, coloredAvatars,
+}: {
+  member: AllTeamsMember
+  myUid: string | undefined
+  coloredAvatars: boolean
+}) {
+  const name = memberDisplayName(member)
+  const initials = [member.firstName[0], member.lastName[0]].filter(Boolean).join('').toUpperCase() || name[0]?.toUpperCase() || '?'
+  const color = coloredAvatars ? avatarColor(name) : avatarOriginal()
+  const badgeRole = member.isOwner ? 'owner' : member.role
+
+  return (
+    <div className={`flex items-center gap-3 py-1.5 px-2 ${member.isOwner ? 'rounded-lg ring-1 ring-yellow-500/40 bg-yellow-500/5' : ''}`}>
+      <div className="relative shrink-0">
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden text-xs font-semibold"
+          style={{ background: member.profileImageUrl ? undefined : color.bg, color: color.text }}
+        >
+          {member.profileImageUrl
+            ? <img src={member.profileImageUrl} alt={name} className="w-full h-full object-cover" />
+            : initials}
+        </div>
+        {(member.isOnline || member.lastSeen) && (
+          <span className={`absolute bottom-0 right-0 block h-2 w-2 rounded-full ring-2 ring-gray-800 ${member.isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm font-medium text-gray-100 truncate">{name}</p>
+          {member.uid === myUid && <span className="text-xs text-gray-400">(you)</span>}
+          {roleBadge(badgeRole)}
+        </div>
+        <p className="text-xs text-gray-400 truncate">{member.email}</p>
+        {onlineBadge(member.isOnline) && (
+          <div className="mt-0.5">{onlineBadge(member.isOnline)}</div>
+        )}
+      </div>
+      {lastSeenText(member.lastSeen) && (
+        <span className="text-xs font-medium text-gray-400 shrink-0">
+          {lastSeenText(member.lastSeen)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function AllCompanyGroup({
+  group, myUid, coloredAvatars,
+}: {
+  group: CompanyTeamGroup
+  myUid: string | undefined
+  coloredAvatars: boolean
+}) {
+  const kindBadge = GROUP_KIND_BADGE[group.kind]
+  return (
+    <div className="py-3">
+      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <p className="text-sm font-semibold text-gray-100 truncate">{group.name}</p>
+          {group.companyId && <span className="font-mono text-xs text-gray-400">· {group.companyId}</span>}
+          {kindBadge && (
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${kindBadge.classes}`}>{kindBadge.label}</span>
+          )}
+          {group.plan && (
+            <span className="px-2 py-0.5 rounded-full text-xs bg-gray-700 text-gray-300">{group.plan}</span>
+          )}
+        </div>
+        <span className="text-xs text-gray-500 shrink-0">
+          {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {group.ownerMissing && (
+        <p className="text-xs text-yellow-300 mb-2">Owner {group.ownerEmail || group.ownerUid} has no user record.</p>
+      )}
+
+      {group.members.length === 0 ? (
+        <p className="text-xs text-gray-500">No members</p>
+      ) : (
+        <div className="space-y-1">
+          {group.members.map(m => (
+            <AllCompanyMemberRow key={m.uid} member={m} myUid={myUid} coloredAvatars={coloredAvatars} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TeamPage() {
@@ -172,6 +287,12 @@ export default function TeamPage() {
   const [removing, setRemoving]   = useState(false)
   const [invites, setInvites]     = useState<InviteRecord[]>([])
   const [showInviteHistory, setShowInviteHistory] = useState(false)
+
+  const isSuperAdmin = isSuperAdminEmail(user?.email)
+  const [showAllCompanies, setShowAllCompanies] = useState(false)
+  const [allTeams, setAllTeams]     = useState<AllTeamsResult | null>(null)
+  const [allLoading, setAllLoading] = useState(false)
+  const [allError, setAllError]     = useState<string | null>(null)
 
   useEffect(() => {
     const unsub = subscribeToTeam(
@@ -224,6 +345,25 @@ export default function TeamPage() {
   }
 
   const isAdmin = role === 'owner' || role === 'admin'
+
+  async function loadAllTeams() {
+    if (allLoading) return
+    setAllLoading(true)
+    setAllError(null)
+    try {
+      setAllTeams(await fetchAllCompaniesTeam())
+    } catch (err) {
+      setAllError(callableErrorMessage(err))
+    } finally {
+      setAllLoading(false)
+    }
+  }
+
+  function toggleAllCompanies() {
+    const next = !showAllCompanies
+    setShowAllCompanies(next)
+    if (next && !allTeams && !allLoading) void loadAllTeams()
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
@@ -320,6 +460,66 @@ export default function TeamPage() {
               )
             })}
           </div>
+          )}
+        </div>
+      )}
+
+      {/* All Companies (super admin only) */}
+      {isSuperAdmin && (
+        <div className="card p-4">
+          <button onClick={toggleAllCompanies} className="w-full flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">All Companies (Super Admin)</p>
+            <svg
+              className={`w-4 h-4 text-gray-500 transition-transform ${showAllCompanies ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+
+          {showAllCompanies && (
+            <div className="mt-3">
+              {allLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map(i => <div key={i} className="card h-16 animate-pulse" />)}
+                </div>
+              ) : allError ? (
+                <div>
+                  <p className="text-xs text-red-400 mb-2">{allError}</p>
+                  <button onClick={() => void loadAllTeams()} className="text-xs text-indigo-400 hover:text-indigo-300">
+                    Try again
+                  </button>
+                </div>
+              ) : allTeams ? (() => {
+                const otherGroups = allTeams.groups.filter(g => g.companyId !== companyId)
+                const otherMembers = otherGroups.reduce((n, g) => n + g.memberCount, 0)
+                return otherGroups.length === 0 ? (
+                  <p className="text-xs text-gray-400">No other companies found.</p>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-gray-400">
+                        {otherGroups.length} companies · {otherMembers} members
+                        {allTeams.generatedAt && (
+                          <span className="text-gray-600"> · as of {allTeams.generatedAt.toLocaleTimeString()}</span>
+                        )}
+                      </p>
+                      <button onClick={() => void loadAllTeams()} className="text-xs text-indigo-400 hover:text-indigo-300">
+                        Refresh
+                      </button>
+                    </div>
+                    {allTeams.truncated && (
+                      <p className="text-xs text-yellow-300">Results truncated — showing the first companies/members only.</p>
+                    )}
+                    <div className="divide-y divide-gray-700/50">
+                      {otherGroups.map(g => (
+                        <AllCompanyGroup key={g.companyId || g.kind} group={g} myUid={user?.uid} coloredAvatars={coloredAvats} />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })() : null}
+            </div>
           )}
         </div>
       )}

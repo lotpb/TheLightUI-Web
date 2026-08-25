@@ -51,7 +51,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   })
 
   useEffect(() => {
-    localStorage.setItem('thelight.nav.favorites', JSON.stringify(favorites))
+    // Safari (Private Browsing, or storage evicted by ITP) throws on
+    // setItem instead of just failing quietly — guard it like the read above
+    // so a save failure doesn't propagate as an uncaught error.
+    try {
+      localStorage.setItem('thelight.nav.favorites', JSON.stringify(favorites))
+    } catch { /* ignore */ }
   }, [favorites])
 
   function toggleFavorite(to: string) {
@@ -117,11 +122,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   })
 
   useEffect(() => {
-    localStorage.setItem('thelight.nav.collapsed', collapsed ? '1' : '0')
+    try {
+      localStorage.setItem('thelight.nav.collapsed', collapsed ? '1' : '0')
+    } catch { /* ignore */ }
   }, [collapsed])
 
   useEffect(() => {
-    localStorage.setItem('thelight.nav.groups', JSON.stringify([...openGroups]))
+    try {
+      localStorage.setItem('thelight.nav.groups', JSON.stringify([...openGroups]))
+    } catch { /* ignore */ }
   }, [openGroups])
 
   function toggleGroup(id: string) {

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { subscribeToFollowUps, subscribeToCustomers } from '../services/customerService'
+import { subscribeToFollowUps } from '../services/customerService'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToServicePlans } from '../services/servicePlanService'
 import { subscribeToInvoices } from '../services/invoiceService'
+import { useSharedCustomers } from './useSharedCustomers'
 import { fullName, type CustomerItem } from '../models/customer'
 import type { Todo } from '../models/todo'
 import type { ServicePlan } from '../models/servicePlan'
@@ -56,7 +57,7 @@ export function useReminders() {
   const [followUps,    setFollowUps]    = useState<CustomerItem[]>([])
   const [todos,        setTodos]        = useState<Todo[]>([])
   const [servicePlans, setServicePlans] = useState<ServicePlan[]>([])
-  const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
+  const { items: allCustomers } = useSharedCustomers()
   const [allInvoices,  setAllInvoices]  = useState<Invoice[]>([])
 
   const [permission, setPermission] = useState<NotificationPermission>(
@@ -86,11 +87,6 @@ export function useReminders() {
     )
     return unsub
   }, [companyId, isReady])
-
-  useEffect(() => {
-    const unsub = subscribeToCustomers(setAllCustomers, () => {})
-    return unsub
-  }, [companyId])
 
   useEffect(() => {
     if (!isReady) return

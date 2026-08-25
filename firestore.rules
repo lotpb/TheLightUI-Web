@@ -249,10 +249,12 @@ service cloud.firestore {
     //   All CRUD scoped to the caller's companyId claim.
     //
     // ── Invites ───────────────────────────────────────────────────────────────
-    //   Any signed-in user can read (to redeem). Only company members can create.
-    //   Update allowed once (to mark used). No delete.
+    //   get is public (no auth) because JoinPage shows the invite's role/company
+    //   to a brand-new recruit before they've signed in or registered — the
+    //   random `code` doc ID is itself the bearer secret. Only company members
+    //   can create. Update allowed once (to mark used). No delete.
     match /invites/{code} {
-      allow get:    if isSignedIn();
+      allow get:    if true;
       allow list:   if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow create: if hasCompanyId();
@@ -466,6 +468,38 @@ service cloud.firestore {
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Audit Log ──────────────────────────────────────────────────────────────
+    //
+    //   Read-only change history for Customers/Invoices, written only by Cloud
+    //   Functions (onCustomerAudit, onInvoiceAudit) via the admin SDK.
+    //
+    match /auditLog/{entryId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create, update, delete: if false;
+    }
+
+    // ── Saved Views ────────────────────────────────────────────────────────────
+    //
+    //   Named filter/sort presets for Leads/Customers/Vendors/Employees lists.
+    //   Shared company-wide, like picker lists. All CRUD scoped to companyId.
+    //
+    match /savedViews/{viewId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }

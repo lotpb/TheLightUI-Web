@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { subscribeToTemplates, createTemplate, updateTemplate, deleteTemplate } from '../../services/templateService'
-import { PLACEHOLDERS, type MessageTemplate, type TemplateType } from '../../models/template'
+import { PLACEHOLDERS, STARTER_TEMPLATES, type MessageTemplate, type TemplateType } from '../../models/template'
 import { useToast } from '../../components/Toast'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import ConfirmModal from '../../components/ConfirmModal'
@@ -36,6 +36,11 @@ export default function TemplatesPage() {
 
   function openNew() {
     setDraft({ ...EMPTY })
+    setEditId('__new__')
+  }
+
+  function openFromExample(example: typeof STARTER_TEMPLATES[number]) {
+    setDraft({ ...example })
     setEditId('__new__')
   }
 
@@ -121,6 +126,25 @@ export default function TemplatesPage() {
             Save reusable messages with placeholders like {'{{firstName}}'} and {'{{date}}'}
           </p>
           <button onClick={openNew} className="btn-primary text-sm px-4 py-2">Create your first template</button>
+
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mt-8 mb-3">Or start from an example</p>
+          <div className="grid sm:grid-cols-2 gap-3 text-left">
+            {STARTER_TEMPLATES.map(ex => (
+              <button
+                key={ex.name}
+                onClick={() => openFromExample(ex)}
+                className="card p-3 hover:border-indigo-500 transition-colors text-left"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-white text-sm">{ex.name}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TYPE_COLORS[ex.type]}`}>
+                    {TYPE_LABELS[ex.type]}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 line-clamp-2 whitespace-pre-wrap">{ex.body}</p>
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="space-y-3">

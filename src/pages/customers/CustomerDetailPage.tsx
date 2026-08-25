@@ -22,12 +22,14 @@ import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
 import type { CustomFieldDef } from '../../models/customField'
 import { subscribeToEmailThread, markEmailRead } from '../../services/emailMessageService'
 import type { EmailMessage } from '../../models/emailMessage'
+import { subscribeToEntityAuditLog } from '../../services/auditLogService'
+import { fieldLabel, type AuditLogEntry } from '../../models/auditLog'
 import { calculateHealthScore, type CustomerHealth } from '../../utils/customerHealth'
 import { subscribeToTemplates } from '../../services/templateService'
 import { interpolate, type MessageTemplate } from '../../models/template'
 import {
   subscribeToSequences, subscribeToCustomerEnrollments,
-  enrollCustomer, pauseEnrollment, resumeEnrollment, cancelEnrollment,
+  enrollCustomer, pauseEnrollment, resumeEnrollment, cancelEnrollment, deleteEnrollment,
 } from '../../services/sequenceService'
 import type { Sequence, SequenceEnrollment } from '../../models/sequence'
 import { subscribeToInvoices } from '../../services/invoiceService'
@@ -573,6 +575,7 @@ export default function CustomerDetailPage() {
         <RelatedRecordsSection customerId={id!} invoices={allInvoices.filter(inv => inv.customerId === id)} />
         <ActivityLogSection customerId={id!} />
         <EmailThreadSection customerId={id!} />
+        <AuditHistorySection entityId={id!} />
         <SequencesSection customer={customer} />
         <DocumentsSection customerId={id!} />
       </div>
@@ -972,6 +975,58 @@ function NotesSection({
             ))}
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+function AuditHistorySection({ entityId }: { entityId: string }) {
+  const [entries, setEntries] = useState<AuditLogEntry[]>([])
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => subscribeToEntityAuditLog(entityId, setEntries, () => {}), [entityId])
+
+  if (entries.length === 0) return null
+
+  const visible = expanded ? entries : entries.slice(0, 3)
+
+  function fmtTime(d: Date): string {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
+      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">History</p>
+      </div>
+      <div className="divide-y divide-gray-700/30">
+        {visible.map(entry => (
+          <div key={entry.id} className="px-4 py-2.5">
+            <p className="text-xs text-gray-500">
+              <span className="text-gray-300 font-medium capitalize">{entry.action}</span>
+              {' by '}{entry.changedBy} · {fmtTime(entry.createdAt)}
+            </p>
+            {entry.changes.length > 0 && (
+              <ul className="mt-1 space-y-0.5">
+                {entry.changes.map((c, i) => (
+                  <li key={i} className="text-xs text-gray-500">
+                    <span className="text-gray-400">{fieldLabel(c.field)}</span>
+                    {': '}{c.from || '(empty)'} → <span className="text-gray-300">{c.to || '(empty)'}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+      {entries.length > 3 && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="w-full px-4 py-2 text-xs text-indigo-400 hover:text-indigo-300 border-t border-gray-700/30 transition-colors"
+        >
+          {expanded ? 'Show less' : `Show ${entries.length - 3} more`}
+        </button>
       )}
     </div>
   )
@@ -1909,6 +1964,7 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
   const [enrollments,  setEnrollments]  = useState<SequenceEnrollment[]>([])
   const [enrollOpen,   setEnrollOpen]   = useState(false)
   const [enrolling,    setEnrolling]    = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const enrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => subscribeToSequences(setSequences, () => {}), [])
@@ -1955,6 +2011,12 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
     catch { toast('Failed to cancel', 'error') }
   }
 
+  async function handleDeleteEnrollment(id: string) {
+    setConfirmDeleteId(null)
+    try { await deleteEnrollment(id); toast('Enrollment deleted', 'success') }
+    catch { toast('Failed to delete', 'error') }
+  }
+
   const activeEnrollments = enrollments.filter(e => e.status === 'active' || e.status === 'paused')
   const pastEnrollments   = enrollments.filter(e => e.status === 'completed' || e.status === 'cancelled')
 
@@ -1977,8 +2039,8 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
   }
 
   return (
-    <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+    <div className="card">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 rounded-t-xl flex items-center justify-between">
         <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">
           Sequences {activeEnrollments.length > 0 && (
             <span className="text-gray-600 font-normal normal-case">({activeEnrollments.length} active)</span>
@@ -1994,8 +2056,8 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
               {enrolling ? '…' : '+ Enroll'}
             </button>
             {enrollOpen && (
-              <div className="absolute right-0 top-full mt-1 w-52 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                <p className="px-3 py-2 text-xs text-gray-500 border-b border-gray-700">Choose a sequence</p>
+              <div className="absolute right-0 top-full mt-1 w-52 max-h-72 overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50">
+                <p className="px-3 py-2 text-xs text-gray-500 border-b border-gray-700 sticky top-0 bg-gray-800 rounded-t-xl">Choose a sequence</p>
                 {sequences.map(seq => (
                   <button
                     key={seq.id}
@@ -2066,6 +2128,13 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
                   >
                     Cancel
                   </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(enr.id)}
+                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    title="Delete this enrollment"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             )
@@ -2075,12 +2144,28 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
             return (
               <div key={enr.id} className="px-4 py-2.5 flex items-center justify-between gap-3 opacity-60">
                 <span className="text-sm text-gray-400">{enr.sequenceName}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+                  <button
+                    onClick={() => setConfirmDeleteId(enr.id)}
+                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    title="Delete this enrollment"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             )
           })}
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!confirmDeleteId}
+        message="Delete this enrollment? This removes it from the customer's history and cannot be undone."
+        onConfirm={() => confirmDeleteId && handleDeleteEnrollment(confirmDeleteId)}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
     </div>
   )
 }

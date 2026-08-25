@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { subscribeToSequences, createSequence, updateSequence, deleteSequence } from '../../services/sequenceService'
-import { ACTION_LABELS, type Sequence, type SequenceAction, type SequenceStep } from '../../models/sequence'
+import { ACTION_LABELS, STARTER_SEQUENCES, type Sequence, type SequenceAction, type SequenceStep } from '../../models/sequence'
 import { useToast } from '../../components/Toast'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import ConfirmModal from '../../components/ConfirmModal'
@@ -21,6 +21,7 @@ export default function SequencesPage() {
   const [draft, setDraft]         = useState({ ...EMPTY_SEQ, steps: [{ ...EMPTY_STEP }] })
   const [saving, setSaving]       = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [showExamples, setShowExamples] = useState(false)
 
   useEffect(() => {
     return subscribeToSequences(
@@ -32,6 +33,12 @@ export default function SequencesPage() {
   function openNew() {
     setDraft({ name: '', description: '', steps: [{ ...EMPTY_STEP }] })
     setEditId('__new__')
+  }
+
+  function openFromExample(example: typeof STARTER_SEQUENCES[number]) {
+    setDraft({ name: example.name, description: example.description, steps: example.steps.map(st => ({ ...st })) })
+    setEditId('__new__')
+    setShowExamples(false)
   }
 
   function openEdit(s: Sequence) {
@@ -95,8 +102,34 @@ export default function SequencesPage() {
           <h1 className="text-2xl font-bold text-white">Sequences</h1>
           <p className="text-sm text-gray-500 mt-0.5">Automated follow-up drip campaigns for leads & customers</p>
         </div>
-        <button onClick={openNew} className="btn-primary text-sm px-4 py-2">+ New Sequence</button>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={() => setShowExamples(v => !v)} className="btn-secondary text-sm px-4 py-2">
+            {showExamples ? 'Hide Examples' : 'Examples'}
+          </button>
+          <button onClick={openNew} className="btn-primary text-sm px-4 py-2">+ New Sequence</button>
+        </div>
       </div>
+
+      {showExamples && (
+        <div className="card p-4 mb-6">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Start from an example</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {STARTER_SEQUENCES.map(ex => (
+              <button
+                key={ex.name}
+                onClick={() => openFromExample(ex)}
+                className="card p-3 hover:border-indigo-500 transition-colors text-left"
+              >
+                <p className="font-medium text-white text-sm mb-0.5">{ex.name}</p>
+                <p className="text-xs text-gray-500 mb-2">{ex.description}</p>
+                <p className="text-xs text-gray-600">
+                  {plural(ex.steps.length, 'step')} · ends day {Math.max(...ex.steps.map(st => st.delayDays))}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-3">

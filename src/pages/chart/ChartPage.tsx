@@ -276,6 +276,7 @@ export default function ChartPage() {
   const productTotals  = useMemo(() => groupByField(items, 'product'), [items])
   const salesmanTotals = useMemo(() => groupByField(items, 'salesman'), [items])
   const contractorTotals = useMemo(() => groupByField(items, 'contractor'), [items])
+  const leadSourceTotals = useMemo(() => groupByField(items, 'leadSource'), [items])
 
   const activeRate = items.length > 0 ? Math.round((activeCount / items.length) * 100) : 0
 
@@ -334,6 +335,7 @@ export default function ChartPage() {
   ${buildTable('By Product', 'Product', productTotals)}
   ${buildTable('By Salesman', 'Salesman', salesmanTotals)}
   ${buildTable('By Contractor', 'Contractor', contractorTotals)}
+  ${buildTable('By Lead Source', 'Lead Source', leadSourceTotals)}
 </body>
 </html>`
 
@@ -457,6 +459,12 @@ export default function ChartPage() {
             {contractorTotals.length > 0 && (
               <ChartCard title="By Contractor" accentClass="bg-gradient-to-r from-amber-500 to-orange-500">
                 <HorizontalBarChart data={contractorTotals} accentIndex={4} />
+              </ChartCard>
+            )}
+
+            {leadSourceTotals.length > 0 && (
+              <ChartCard title="By Lead Source" accentClass="bg-gradient-to-r from-pink-500 to-rose-600">
+                <HorizontalBarChart data={leadSourceTotals} accentIndex={5} />
               </ChartCard>
             )}
           </div>
