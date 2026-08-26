@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  onSnapshot, query, where, Timestamp, serverTimestamp,
+  onSnapshot, query, where, limit, Timestamp, serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -9,6 +9,10 @@ import { generateInvoiceNumber, invoiceTotal, type Invoice, type InvoiceLineItem
 
 const COL = 'Invoices'
 const CUSTOMERS_COL = 'Customers'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT. Exported so consumers can show an accurate warning.
+export const INVOICE_REALTIME_LIMIT = 5_000
 
 // customer.amount tracks total paid invoices for that customer — recomputed
 // from source (rather than incremented) so it can't drift after edits/deletes.
@@ -82,20 +86,24 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
 }
 
 export function subscribeToInvoices(
-  onData: (items: Invoice[]) => void,
+  onData: (items: Invoice[], hitCap: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
   if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(INVOICE_REALTIME_LIMIT)),
     snap => {
+      const hitCap = snap.size === INVOICE_REALTIME_LIMIT
+      if (hitCap) {
+        console.warn(`[subscribeToInvoices] hit ${INVOICE_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const items: Invoice[] = []
       for (const d of snap.docs) {
         try { items.push(docToInvoice(d.id, d.data() as Record<string, unknown>)) } catch { }
       }
       items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )

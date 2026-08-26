@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, getDoc,
-  onSnapshot, query, where, Timestamp, serverTimestamp,
+  onSnapshot, query, where, limit, Timestamp, serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -10,6 +10,10 @@ import { generateInvoiceNumber } from '../models/invoice'
 import type { Proposal, ProposalLineItem } from '../models/proposal'
 
 const COL = 'Proposals'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT. Exported so consumers can show an accurate warning.
+export const PROPOSAL_REALTIME_LIMIT = 5_000
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -49,20 +53,24 @@ function docToProposal(id: string, data: Record<string, unknown>): Proposal {
 }
 
 export function subscribeToProposals(
-  onData: (items: Proposal[]) => void,
+  onData: (items: Proposal[], hitCap: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
   if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(PROPOSAL_REALTIME_LIMIT)),
     snap => {
+      const hitCap = snap.size === PROPOSAL_REALTIME_LIMIT
+      if (hitCap) {
+        console.warn(`[subscribeToProposals] hit ${PROPOSAL_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const items: Proposal[] = []
       for (const d of snap.docs) {
         try { items.push(docToProposal(d.id, d.data() as Record<string, unknown>)) } catch { }
       }
       items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )

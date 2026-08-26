@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { subscribeToInvoices, deleteInvoice, updateInvoice } from '../../services/invoiceService'
+import { subscribeToInvoices, deleteInvoice, updateInvoice, INVOICE_REALTIME_LIMIT } from '../../services/invoiceService'
 import {
   effectiveStatus, fmtCurrency, invoiceTotal, statusClasses, statusLabel,
   type Invoice, type InvoiceStatus,
@@ -34,11 +34,12 @@ export default function InvoiceListPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkWorking, setBulkWorking] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [hitCap, setHitCap] = useState(false)
 
   useEffect(() => {
     const unsub = subscribeToInvoices(
-      items => { setInvoices(items); setLoading(false) },
-      ()    => setLoading(false),
+      (items, cap) => { setInvoices(items); setHitCap(cap); setLoading(false) },
+      ()           => setLoading(false),
     )
     return unsub
   }, [companyId])
@@ -167,6 +168,12 @@ export default function InvoiceListPage() {
           </Link>
         </div>
       </div>
+
+      {hitCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+          ⚠ Showing the first {INVOICE_REALTIME_LIMIT.toLocaleString()} invoices only. Some records may not be visible — contact support to raise this limit.
+        </div>
+      )}
 
       {/* KPI strip */}
       {!loading && (

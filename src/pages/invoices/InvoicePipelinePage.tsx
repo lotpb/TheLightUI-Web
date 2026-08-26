@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
-import { subscribeToInvoices, updateInvoice } from '../../services/invoiceService'
+import { subscribeToInvoices, updateInvoice, INVOICE_REALTIME_LIMIT } from '../../services/invoiceService'
 import {
   effectiveStatus, fmtCurrency, invoiceTotal,
   type Invoice, type InvoiceStatus,
@@ -32,10 +32,11 @@ export default function InvoicePipelinePage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [hitCap, setHitCap] = useState(false)
 
   useEffect(() => subscribeToInvoices(
-    items => { setInvoices(items); setLoading(false) },
-    ()    => setLoading(false),
+    (items, cap) => { setInvoices(items); setHitCap(cap); setLoading(false) },
+    ()           => setLoading(false),
   ), [])
 
   const filtered = useMemo(() => {
@@ -126,6 +127,12 @@ export default function InvoicePipelinePage() {
         placeholder="Search by customer or invoice number…"
         className="input-field w-full text-sm py-2 mb-3 shrink-0"
       />
+
+      {hitCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-3 shrink-0">
+          ⚠ Showing the first {INVOICE_REALTIME_LIMIT.toLocaleString()} invoices only. Some records may not appear on this board — contact support to raise this limit.
+        </div>
+      )}
 
       {loading ? (
         <div className="flex gap-4 overflow-x-auto pb-4">
