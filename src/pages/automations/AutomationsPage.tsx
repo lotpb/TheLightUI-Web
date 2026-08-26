@@ -8,7 +8,7 @@ import {
 import {
   type AutomationRule, type AutomationTrigger, type AutomationAction,
   type AutomationEntityType, type AutomationLogEntry,
-  triggerFieldsFor, actionTypesFor, ACTION_TYPE_LABELS,
+  triggerFieldsFor, actionFieldsFor, actionTypesFor, ACTION_TYPE_LABELS, ENTITY_TYPE_LABELS,
   describeTrigger, describeAction,
 } from '../../models/automationRule'
 
@@ -107,6 +107,7 @@ export default function AutomationsPage() {
 
   const triggerFields = triggerFieldsFor(trigger.entityType)
   const selectedField  = triggerFields.find(f => f.value === trigger.field)
+  const actionFields   = actionFieldsFor(trigger.entityType)
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -128,7 +129,7 @@ export default function AutomationsPage() {
       ) : rules.length === 0 ? (
         <div className="card p-8 text-center">
           <p className="text-gray-400 font-medium">No automation rules yet</p>
-          <p className="text-sm text-gray-600 mt-1">Create one to react automatically to changes on Customers or Invoices.</p>
+          <p className="text-sm text-gray-600 mt-1">Create one to react automatically to changes on Customers, Invoices, Service Requests, Purchase Orders, or E-Signature Requests.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -143,8 +144,8 @@ export default function AutomationsPage() {
                     }`}>
                       {rule.enabled ? 'Active' : 'Paused'}
                     </span>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 capitalize">
-                      {rule.trigger.entityType}
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">
+                      {ENTITY_TYPE_LABELS[rule.trigger.entityType]}
                     </span>
                   </div>
                   <p className="text-sm text-gray-400 mt-1.5">{describeTrigger(rule.trigger)}</p>
@@ -211,7 +212,7 @@ export default function AutomationsPage() {
                   <p className="text-gray-300 truncate">
                     <span className="font-medium text-white">{entry.ruleName}</span>
                     {' → '}
-                    <span className="capitalize">{entry.entityType}</span> "{entry.entityLabel}"
+                    <span>{ENTITY_TYPE_LABELS[entry.entityType]}</span> "{entry.entityLabel}"
                   </p>
                   <p className="text-xs text-gray-500 truncate">{entry.actionsSummary}</p>
                 </div>
@@ -265,8 +266,9 @@ export default function AutomationsPage() {
                       onChange={e => setEntityType(e.target.value as AutomationEntityType)}
                       className="input-field text-sm w-full"
                     >
-                      <option value="customer">Customer / Lead</option>
-                      <option value="invoice">Invoice</option>
+                      {(Object.keys(ENTITY_TYPE_LABELS) as AutomationEntityType[]).map(et => (
+                        <option key={et} value={et}>{ENTITY_TYPE_LABELS[et]}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -356,14 +358,14 @@ export default function AutomationsPage() {
                     {action.type === 'set_field' && (
                       <div className="grid grid-cols-2 gap-2">
                         <select
-                          value={action.field ?? triggerFields[0].value}
+                          value={action.field ?? actionFields[0].value}
                           onChange={e => updateAction(i, { field: e.target.value, value: '' })}
                           className="input-field text-sm w-full"
                         >
-                          {triggerFields.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                          {actionFields.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
                         </select>
                         {(() => {
-                          const opt = triggerFields.find(f => f.value === (action.field ?? triggerFields[0].value))
+                          const opt = actionFields.find(f => f.value === (action.field ?? actionFields[0].value))
                           return opt?.options ? (
                             <select
                               value={action.value ?? ''}

@@ -60,6 +60,10 @@ export interface CustomerItem {
   leadSource: string
   paymentStatus: string
   customFields: Record<string, string>
+  // Explicit pipeline board position (custom stage id). Empty for records
+  // never dragged since the custom-stages feature shipped — effectiveStageId()
+  // in models/pipelineStage.ts falls back to the legacy derived stage for those.
+  pipelineStage: string
 }
 
 export const emptyCustomer = (): CustomerItem => ({
@@ -111,6 +115,7 @@ export const emptyCustomer = (): CustomerItem => ({
   leadSource: '',
   paymentStatus: '',
   customFields: {},
+  pipelineStage: '',
 })
 
 // Mirrors the defensive parsing in CustomerFirestore.swift
@@ -209,6 +214,7 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     leadSource: str(d, 'leadSource'),
     paymentStatus: str(d, 'paymentStatus'),
     customFields: parseCustomFields(d['customFields']),
+    pipelineStage: str(d, 'pipelineStage'),
   }
 }
 

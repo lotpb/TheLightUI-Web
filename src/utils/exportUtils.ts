@@ -222,6 +222,7 @@ export async function importCustomersJSON(
     employeeStatus:  r.employeeStatus  ?? '',
     paymentStatus:   r.paymentStatus   ?? '',
     customFields:    {},
+    pipelineStage:   '',
   }))
 }
 

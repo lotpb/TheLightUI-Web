@@ -9,6 +9,8 @@ import {
 import {
   type ServiceRequest, type ServiceRequestStatus,
   SERVICE_REQUEST_STATUSES, STATUS_LABELS, STATUS_COLORS,
+  fmtDuration, firstContactHours, resolutionHours, isFirstContactBreached, isResolutionBreached,
+  SLA_FIRST_CONTACT_TARGET_HOURS, SLA_RESOLUTION_TARGET_HOURS,
 } from '../../models/serviceRequest'
 
 type Tab = 'active' | ServiceRequestStatus
@@ -38,9 +40,25 @@ export default function ServiceRequestsPage() {
 
   const newCount = useMemo(() => requests.filter(r => r.status === 'new').length, [requests])
 
+  const slaStats = useMemo(() => {
+    const contacted = requests.filter(r => r.firstContactedAt)
+    const resolved   = requests.filter(r => r.resolvedAt)
+    const avgContact = contacted.length > 0
+      ? contacted.reduce((s, r) => s + firstContactHours(r), 0) / contacted.length
+      : null
+    const avgResolution = resolved.length > 0
+      ? resolved.reduce((s, r) => s + resolutionHours(r), 0) / resolved.length
+      : null
+    const breached = requests.filter(r =>
+      (r.status !== 'completed' && r.status !== 'dismissed') &&
+      (isFirstContactBreached(r) || isResolutionBreached(r))
+    ).length
+    return { avgContact, avgResolution, breached }
+  }, [requests])
+
   async function handleStatusChange(r: ServiceRequest, status: ServiceRequestStatus) {
     try {
-      await updateServiceRequestStatus(r.id, status)
+      await updateServiceRequestStatus(r, status)
     } catch {
       toast('Failed to update status', 'error')
     }
@@ -61,6 +79,25 @@ export default function ServiceRequestsPage() {
           Requests submitted by customers through their portal
           {newCount > 0 && <span className="text-yellow-400 font-medium"> · {newCount} new</span>}
         </p>
+      </div>
+
+      {/* SLA summary */}
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        <div className="card px-3 py-3">
+          <p className="text-xl font-bold text-white">{slaStats.avgContact !== null ? fmtDuration(slaStats.avgContact) : '—'}</p>
+          <p className="text-xs text-gray-400 mt-0.5">Avg. First Contact</p>
+          <p className="text-xs text-gray-600">target {SLA_FIRST_CONTACT_TARGET_HOURS}h</p>
+        </div>
+        <div className="card px-3 py-3">
+          <p className="text-xl font-bold text-white">{slaStats.avgResolution !== null ? fmtDuration(slaStats.avgResolution) : '—'}</p>
+          <p className="text-xs text-gray-400 mt-0.5">Avg. Resolution</p>
+          <p className="text-xs text-gray-600">target {fmtDuration(SLA_RESOLUTION_TARGET_HOURS)}</p>
+        </div>
+        <div className="card px-3 py-3">
+          <p className={`text-xl font-bold ${slaStats.breached > 0 ? 'text-red-400' : 'text-white'}`}>{slaStats.breached}</p>
+          <p className="text-xs text-gray-400 mt-0.5">SLA at Risk</p>
+          <p className="text-xs text-gray-600">open &amp; overdue</p>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -96,6 +133,11 @@ export default function ServiceRequestsPage() {
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[r.status]}`}>
                       {STATUS_LABELS[r.status]}
                     </span>
+                    {r.status !== 'completed' && r.status !== 'dismissed' && (isFirstContactBreached(r) || isResolutionBreached(r)) && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">
+                        SLA at risk
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-gray-300 mt-1.5 whitespace-pre-wrap">{r.description}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 flex-wrap">
@@ -103,6 +145,10 @@ export default function ServiceRequestsPage() {
                     {r.email && <span>✉ {r.email}</span>}
                     {r.preferredDate && <span>Preferred: {r.preferredDate}</span>}
                     <span>Submitted {fmtDate(r.createdAt)}</span>
+                    <span className={isFirstContactBreached(r) && !r.firstContactedAt ? 'text-red-400' : ''}>
+                      {r.firstContactedAt ? `Contacted in ${fmtDuration(firstContactHours(r))}` : `Waiting ${fmtDuration(firstContactHours(r))} for contact`}
+                    </span>
+                    {r.resolvedAt && <span>Resolved in {fmtDuration(resolutionHours(r))}</span>}
                     {r.customerId && (
                       <Link to={`/records/${r.customerId}`} className="text-indigo-400 hover:text-indigo-300">
                         View customer →

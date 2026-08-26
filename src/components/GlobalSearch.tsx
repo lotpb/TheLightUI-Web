@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { subscribeToCustomers } from '../services/customerService'
 import { subscribeToInvoices } from '../services/invoiceService'
+import { subscribeToProposals } from '../services/proposalService'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToExpenses } from '../services/expenseService'
 import { fullName, type CustomerItem, type CustomerCategory, CATEGORY_LABELS } from '../models/customer'
 import { fmtCurrency, type Invoice } from '../models/invoice'
+import type { Proposal } from '../models/proposal'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import { useAuthStore } from '../stores/authStore'
@@ -32,6 +34,7 @@ export default function GlobalSearch({ onClose }: Props) {
 
   const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
   const [allInvoices,  setAllInvoices]  = useState<Invoice[]>([])
+  const [allProposals, setAllProposals] = useState<Proposal[]>([])
   const [allTodos,     setAllTodos]     = useState<Todo[]>([])
   const [allExpenses,  setAllExpenses]  = useState<Expense[]>([])
   const [query, setQuery] = useState('')
@@ -42,7 +45,8 @@ export default function GlobalSearch({ onClose }: Props) {
     const u2 = subscribeToInvoices(setAllInvoices,   () => {})
     const u3 = subscribeToTodos(items => setAllTodos(items), () => {})
     const u4 = subscribeToExpenses(setAllExpenses,   () => {})
-    return () => { u1(); u2(); u3(); u4() }
+    const u5 = subscribeToProposals(setAllProposals, () => {})
+    return () => { u1(); u2(); u3(); u4(); u5() }
   }, [companyId, user])
 
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -80,6 +84,16 @@ export default function GlobalSearch({ onClose }: Props) {
     )
   }, [allInvoices, q])
 
+  const proposalResults = useMemo(() => {
+    if (!q) return []
+    return allProposals.filter(p =>
+      p.proposalNumber.toLowerCase().includes(q) ||
+      p.customerName.toLowerCase().includes(q) ||
+      p.customerEmail.toLowerCase().includes(q) ||
+      p.customerPhone.includes(q),
+    )
+  }, [allProposals, q])
+
   const todoResults = useMemo(() => {
     if (!q) return []
     return allTodos.filter(t => t.title.toLowerCase().includes(q))
@@ -103,7 +117,7 @@ export default function GlobalSearch({ onClose }: Props) {
     return CATEGORY_ORDER.map(cat => ({ cat, items: map.get(cat)! })).filter(g => g.items.length > 0)
   }, [customerResults])
 
-  const totalResults = customerResults.length + invoiceResults.length + todoResults.length + expenseResults.length
+  const totalResults = customerResults.length + invoiceResults.length + proposalResults.length + todoResults.length + expenseResults.length
 
   function go(path: string) {
     navigate(path)
@@ -216,6 +230,33 @@ export default function GlobalSearch({ onClose }: Props) {
                   {invoiceResults.length > MAX_PER_GROUP && (
                     <button onClick={() => go('/invoices')} className="w-full text-left px-4 py-2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
                       +{invoiceResults.length - MAX_PER_GROUP} more invoices →
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* ── Proposals ── */}
+              {proposalResults.length > 0 && (
+                <div>
+                  <SectionHeader label="Proposals" />
+                  {proposalResults.slice(0, MAX_PER_GROUP).map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => go(`/proposals/${p.id}`)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800 transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
+                        <span className="text-sm">📝</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-100 truncate">{p.proposalNumber} · {p.customerName}</p>
+                        <p className="text-xs text-gray-400">{fmtCurrency(p.lineItems.reduce((s, l) => s + l.qty * l.rate, 0))} · {p.status}</p>
+                      </div>
+                    </button>
+                  ))}
+                  {proposalResults.length > MAX_PER_GROUP && (
+                    <button onClick={() => go('/proposals')} className="w-full text-left px-4 py-2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                      +{proposalResults.length - MAX_PER_GROUP} more proposals →
                     </button>
                   )}
                 </div>

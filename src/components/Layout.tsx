@@ -5,6 +5,8 @@ import { usePermissions } from '../hooks/usePermissions'
 import { useChatStore } from '../stores/chatStore'
 import { useReminders } from '../hooks/useReminders'
 import { useInstallPrompt } from '../hooks/useInstallPrompt'
+import { subscribeToNotifications, markNotificationRead, markAllNotificationsRead } from '../services/notificationService'
+import type { AppNotification } from '../models/notification'
 import GlobalSearch from './GlobalSearch'
 import RemindersPanel from './RemindersPanel'
 
@@ -35,6 +37,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const { notifications: reminderItems, urgentCount, recentActivity, permission, requestPermission } = useReminders()
   const { unreadCount, startWatch, stopWatch } = useChatStore()
+
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>([])
+  useEffect(() => subscribeToNotifications(setAppNotifications, () => {}), [])
+  const unreadNotifCount = useMemo(() => appNotifications.filter(n => !n.read).length, [appNotifications])
+  const bellBadgeCount = urgentCount + unreadNotifCount
 
   // Sidebar collapsed (icon-only) state
   const [collapsed, setCollapsed] = useState(() =>
@@ -236,18 +243,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
                 </svg>
               </button>
-              {/* Reminders */}
+              {/* Reminders + Notifications */}
               <button
                 onClick={() => setShowReminders(v => !v)}
-                title="Reminders"
+                title="Reminders & Notifications"
                 className="relative text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
                 </svg>
-                {urgentCount > 0 && (
+                {bellBadgeCount > 0 && (
                   <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-xs font-bold text-white leading-none">
-                    {urgentCount > 9 ? '9+' : urgentCount}
+                    {bellBadgeCount > 9 ? '9+' : bellBadgeCount}
                   </span>
                 )}
               </button>
@@ -501,13 +508,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
               </svg>
             </button>
-            <button onClick={() => setShowReminders(v => !v)} aria-label="Reminders" className="relative text-gray-400 hover:text-white p-1.5 rounded transition-colors">
+            <button onClick={() => setShowReminders(v => !v)} aria-label="Reminders & Notifications" className="relative text-gray-400 hover:text-white p-1.5 rounded transition-colors">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
               </svg>
-              {urgentCount > 0 && (
+              {bellBadgeCount > 0 && (
                 <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center text-xs font-bold text-white leading-none">
-                  {urgentCount > 9 ? '9+' : urgentCount}
+                  {bellBadgeCount > 9 ? '9+' : bellBadgeCount}
                 </span>
               )}
             </button>
@@ -577,7 +584,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {/* Global search modal */}
       {showSearch && <GlobalSearch onClose={closeSearch} />}
 
-      {/* Reminders panel */}
+      {/* Reminders & Notifications panel */}
       {showReminders && (
         <RemindersPanel
           notifications={reminderItems}
@@ -585,6 +592,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           permission={permission}
           onRequestPermission={requestPermission}
           onClose={() => setShowReminders(false)}
+          appNotifications={appNotifications}
+          onMarkNotificationRead={markNotificationRead}
+          onMarkAllNotificationsRead={() => markAllNotificationsRead(appNotifications.filter(n => !n.read).map(n => n.id))}
         />
       )}
 

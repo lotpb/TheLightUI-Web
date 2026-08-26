@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import {
-  subscribeToCatalog, addCatalogItem, updateCatalogItem, deleteCatalogItem,
+  subscribeToCatalog, addCatalogItem, updateCatalogItem, deleteCatalogItem, adjustStock,
 } from '../../services/catalogService'
 import type { CatalogItem } from '../../models/catalogItem'
-import { UNIT_OPTIONS } from '../../models/catalogItem'
+import { UNIT_OPTIONS, stockLevel, STOCK_LEVEL_LABELS, STOCK_LEVEL_COLORS } from '../../models/catalogItem'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
 import { formatCurrency } from '../../models/customer'
 
-const EMPTY_FORM = { name: '', description: '', price: '', unit: 'each', category: '' }
+const EMPTY_FORM = {
+  name: '', description: '', price: '', unit: 'each', category: '',
+  trackInventory: false, stockQty: '0', lowStockThreshold: '5',
+}
 
 type FormState = typeof EMPTY_FORM
 
@@ -22,12 +25,18 @@ function ItemForm({
 }) {
   const [form, setForm]   = useState<FormState>(
     initial
-      ? { name: initial.name, description: initial.description, price: String(initial.price), unit: initial.unit, category: initial.category }
+      ? {
+          name: initial.name, description: initial.description, price: String(initial.price),
+          unit: initial.unit, category: initial.category,
+          trackInventory: initial.trackInventory,
+          stockQty: String(initial.stockQty),
+          lowStockThreshold: String(initial.lowStockThreshold),
+        }
       : EMPTY_FORM,
   )
   const [saving, setSaving] = useState(false)
 
-  function set(field: keyof FormState, value: string) {
+  function set<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm(f => ({ ...f, [field]: value }))
   }
 
@@ -101,6 +110,40 @@ function ItemForm({
         </div>
       </div>
 
+      <div className="border-t border-gray-700/40 pt-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.trackInventory}
+            onChange={e => set('trackInventory', e.target.checked)}
+            className="w-3.5 h-3.5 rounded accent-indigo-500"
+          />
+          <span className="text-sm text-gray-300">Track inventory for this item</span>
+        </label>
+        {form.trackInventory && (
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Stock Quantity</label>
+              <input
+                type="number" min="0"
+                value={form.stockQty}
+                onChange={e => set('stockQty', e.target.value)}
+                className="input-field w-full text-sm py-1.5"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Low Stock Threshold</label>
+              <input
+                type="number" min="0"
+                value={form.lowStockThreshold}
+                onChange={e => set('lowStockThreshold', e.target.value)}
+                className="input-field w-full text-sm py-1.5"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={onCancel} className="btn-secondary text-sm px-4 py-1.5">Cancel</button>
         <button
@@ -145,6 +188,11 @@ export default function CatalogPage() {
     )
   }, [items, search])
 
+  const lowStockItems = useMemo(
+    () => items.filter(i => { const lvl = stockLevel(i); return lvl === 'low' || lvl === 'out' }),
+    [items],
+  )
+
   // Group by category
   const grouped = useMemo(() => {
     const map = new Map<string, CatalogItem[]>()
@@ -157,15 +205,25 @@ export default function CatalogPage() {
   }, [filtered])
 
   async function handleAdd(f: FormState) {
-    await addCatalogItem(f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim())
+    await addCatalogItem(
+      f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
+      f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
+    )
     setShowAdd(false)
     toast('Item added', 'success')
   }
 
   async function handleEdit(id: string, f: FormState) {
-    await updateCatalogItem(id, f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim())
+    await updateCatalogItem(
+      id, f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
+      f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
+    )
     setEditId(null)
     toast('Item updated', 'success')
+  }
+
+  async function handleAdjustStock(id: string, delta: number) {
+    await adjustStock(id, delta)
   }
 
   async function handleDelete(id: string) {
@@ -192,6 +250,18 @@ export default function CatalogPage() {
           </button>
         )}
       </div>
+
+      {/* Low stock banner */}
+      {lowStockItems.length > 0 && (
+        <div className="card p-3 border-yellow-700/40 bg-yellow-950/20 flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-yellow-300">
+            ⚠ {lowStockItems.length} item{lowStockItems.length !== 1 ? 's' : ''} low or out of stock:
+          </span>
+          <span className="text-sm text-yellow-200">
+            {lowStockItems.map(i => i.name).join(', ')}
+          </span>
+        </div>
+      )}
 
       {/* Add form */}
       {showAdd && (
@@ -249,6 +319,31 @@ export default function CatalogPage() {
                           <p className="text-xs text-gray-500 truncate mt-0.5">{item.description}</p>
                         )}
                       </div>
+
+                      {/* Stock */}
+                      {item.trackInventory && (
+                        <div className="shrink-0 flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleAdjustStock(item.id, -1)}
+                            disabled={item.stockQty <= 0}
+                            className="w-6 h-6 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm leading-none disabled:opacity-30 transition-colors"
+                          >
+                            −
+                          </button>
+                          <div className="text-center w-12">
+                            <p className="text-sm font-semibold text-gray-200">{item.stockQty}</p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${STOCK_LEVEL_COLORS[stockLevel(item)]}`}>
+                              {STOCK_LEVEL_LABELS[stockLevel(item)]}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleAdjustStock(item.id, 1)}
+                            className="w-6 h-6 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm leading-none transition-colors"
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
 
                       {/* Price + unit */}
                       <div className="shrink-0 text-right">

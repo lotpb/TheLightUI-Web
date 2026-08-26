@@ -1,10 +1,14 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { doc, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../firebase/config'
 import { requestLeadScoring, type LeadScore } from '../../services/leadScoreService'
-import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
-import { type Stage, STAGE_CONFIG, endOfToday, getStage } from '../../models/pipeline'
+import { fullName, formatCurrency, categoryMatches, type CustomerItem } from '../../models/customer'
+import { REALTIME_LIMIT } from '../../services/customerService'
+import { subscribeToPipelineStages } from '../../services/pipelineStageService'
+import {
+  DEFAULT_STAGES, STAGE_COLOR_CLASSES, effectiveStageId, type PipelineStageConfig,
+} from '../../models/pipelineStage'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSharedCustomers } from '../../hooks/useSharedCustomers'
 import { useSharedLeadScores } from '../../hooks/useSharedLeadScores'
@@ -12,7 +16,7 @@ import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 import PipelineJobsTabs from '../../components/PipelineJobsTabs'
 
-// ─── Types & config ──────────────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────────────────────────
 
 const MAX_PER_COL = 30
 const COLLECTION  = 'Customers'
@@ -24,10 +28,10 @@ function directionsUrl(c: CustomerItem): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
 }
 
-// "New" and "contacted" leads with no update in a while are going cold —
-// flag them so they don't just quietly sit in the board unnoticed.
-function isStale(c: CustomerItem, stage: Stage): boolean {
-  if (stage !== 'new' && stage !== 'contacted') return false
+// Open (non-won/lost) stages with no update in a while are going cold — flag
+// them so they don't just quietly sit in the board unnoticed.
+function isStale(c: CustomerItem, stage: PipelineStageConfig | undefined): boolean {
+  if (!stage || stage.kind !== 'open') return false
   return Date.now() - c.lastUpdateDate.getTime() > STALE_DAYS * DAY_MS
 }
 function daysSince(d: Date): number {
@@ -36,38 +40,43 @@ function daysSince(d: Date): number {
 
 // ─── Firestore patches ───────────────────────────────────────────────────────
 
-async function applyStageChange(id: string, targetStage: Stage, apptDate?: Date) {
+async function applyStageChange(id: string, stage: PipelineStageConfig, apptDate?: Date) {
   const ref = doc(db, COLLECTION, id)
-  switch (targetStage) {
-    case 'new':
-      await updateDoc(ref, { active: '1', category: 'Lead', callback: '', start: Timestamp.fromDate(new Date(0)) })
-      break
-    case 'contacted':
-      await updateDoc(ref, { active: '1', category: 'Lead', callback: 'Yes' })
-      break
-    case 'appointment':
-      if (!apptDate) throw new Error('No date provided')
-      await updateDoc(ref, { active: '1', category: 'Lead', start: Timestamp.fromDate(apptDate) })
-      break
-    case 'won':
-      await updateDoc(ref, { active: '1', category: 'Customer' })
-      break
-    case 'lost':
-      await updateDoc(ref, { active: '0' })
-      break
+  const updates: Record<string, unknown> = { pipelineStage: stage.id }
+
+  if (stage.kind === 'won') {
+    updates.active = '1'
+    updates.category = 'Customer'
+  } else if (stage.kind === 'lost') {
+    updates.active = '0'
+  } else {
+    updates.active = '1'
+    // Preserve the legacy field side-effects for the two default "open"
+    // stage ids so the Callback Queue / Funnel pages (which read `callback`
+    // directly, not `pipelineStage`) stay in sync for companies that never
+    // customized their board.
+    if (stage.id === 'new') { updates.category = 'Lead'; updates.callback = ''; updates.start = Timestamp.fromDate(new Date(0)) }
+    if (stage.id === 'contacted') { updates.category = 'Lead'; updates.callback = 'Yes' }
   }
+
+  if (stage.requiresDate) {
+    if (!apptDate) throw new Error('No date provided')
+    updates.start = Timestamp.fromDate(apptDate)
+  }
+
+  await updateDoc(ref, updates)
 }
 
 // ─── Date picker modal ───────────────────────────────────────────────────────
 
-function ApptModal({ onConfirm, onCancel }: { onConfirm: (d: Date) => void; onCancel: () => void }) {
+function ApptModal({ stageLabel, onConfirm, onCancel }: { stageLabel: string; onConfirm: (d: Date) => void; onCancel: () => void }) {
   const today = new Date().toISOString().slice(0, 10)
   const [val, setVal] = useState('')
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-xs shadow-2xl">
-        <h3 className="text-base font-semibold text-white mb-1">Set Appointment Date</h3>
-        <p className="text-xs text-gray-400 mb-4">Pick a date for this appointment.</p>
+        <h3 className="text-base font-semibold text-white mb-1">Set Date for "{stageLabel}"</h3>
+        <p className="text-xs text-gray-400 mb-4">Pick a date for this stage.</p>
         <input
           type="date"
           min={today}
@@ -97,7 +106,14 @@ export default function PipelinePage() {
   usePageTitle('Pipeline')
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
 
-  const { items: all, loading } = useSharedCustomers()
+  const { items: allCustomers, loading, hitCap } = useSharedCustomers()
+  const all = useMemo(
+    () => allCustomers.filter(c => categoryMatches(c.category, 'Lead') || categoryMatches(c.category, 'Customer')),
+    [allCustomers],
+  )
+
+  const [stages, setStages] = useState<PipelineStageConfig[]>(DEFAULT_STAGES)
+  useEffect(() => subscribeToPipelineStages(setStages, () => {}), [])
 
   const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
@@ -119,11 +135,11 @@ export default function PipelinePage() {
 
   // Drag state
   const [draggingId,    setDraggingId]    = useState<string | null>(null)
-  const [dragOverStage, setDragOverStage] = useState<Stage | null>(null)
+  const [dragOverStage, setDragOverStage] = useState<string | null>(null)
   const draggingIdRef = useRef<string | null>(null)
 
-  // Appointment date modal
-  const [pendingAppt, setPendingAppt] = useState<{ id: string } | null>(null)
+  // Date-prompt modal (for stages with requiresDate)
+  const [pendingDate, setPendingDate] = useState<{ id: string; stage: PipelineStageConfig } | null>(null)
 
   async function handleScoreLeads() {
     setScoring(true)
@@ -138,23 +154,35 @@ export default function PipelinePage() {
   }
 
   const columns = useMemo(() => {
-    const buckets: Record<Stage, CustomerItem[]> = { new: [], contacted: [], appointment: [], won: [], lost: [] }
+    const buckets: Record<string, CustomerItem[]> = {}
+    for (const s of stages) buckets[s.id] = []
     for (const c of filtered) {
-      const stage = getStage(c)
-      if (stage) buckets[stage].push(c)
+      const stageId = effectiveStageId(c, stages)
+      ;(buckets[stageId] ??= []).push(c)
     }
-    buckets.appointment.sort((a, b) => (a.startDate?.getTime() ?? 0) - (b.startDate?.getTime() ?? 0))
-    for (const stage of ['new', 'contacted', 'won', 'lost'] as const) {
-      buckets[stage].sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
+    for (const s of stages) {
+      if (s.requiresDate) {
+        buckets[s.id].sort((a, b) => (a.startDate?.getTime() ?? 0) - (b.startDate?.getTime() ?? 0))
+      } else {
+        buckets[s.id].sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
+      }
     }
     return buckets
-  }, [filtered])
+  }, [filtered, stages])
 
-  const wonAmount = useMemo(() => columns.won.reduce((s, c) => s + c.amount, 0), [columns.won])
-  const staleCount = useMemo(
-    () => columns.new.filter(c => isStale(c, 'new')).length + columns.contacted.filter(c => isStale(c, 'contacted')).length,
-    [columns],
+  const wonStage = useMemo(() => stages.find(s => s.kind === 'won'), [stages])
+  const wonAmount = useMemo(
+    () => wonStage ? (columns[wonStage.id] ?? []).reduce((s, c) => s + c.amount, 0) : 0,
+    [columns, wonStage],
   )
+  const staleCount = useMemo(() => {
+    let n = 0
+    for (const s of stages) {
+      if (s.kind !== 'open') continue
+      n += (columns[s.id] ?? []).filter(c => isStale(c, s)).length
+    }
+    return n
+  }, [columns, stages])
 
   // Drag handlers
   function onDragStart(id: string) {
@@ -166,30 +194,36 @@ export default function PipelinePage() {
     setDraggingId(null)
     setDragOverStage(null)
   }
-  function onDragOverCol(e: React.DragEvent, stage: Stage) {
+  function onDragOverCol(e: React.DragEvent, stageId: string) {
     e.preventDefault()
-    setDragOverStage(stage)
+    setDragOverStage(stageId)
   }
   function onDragLeaveCol() {
     setDragOverStage(null)
   }
-  async function onDropCol(e: React.DragEvent, targetStage: Stage) {
+  // Drag-and-drop is mouse-only — the HTML5 DnD events this board relies on
+  // never fire from a touch gesture, so this is also the tap-to-move path
+  // used by PipelineCard's "⋯" menu on phones/tablets.
+  async function moveCard(id: string, targetStage: PipelineStageConfig) {
+    const card = all.find(c => c.id === id)
+    if (!card) return
+
+    const fromStage = effectiveStageId(card, stages)
+    if (fromStage === targetStage.id) return
+
+    if (targetStage.requiresDate) {
+      setPendingDate({ id, stage: targetStage })
+    } else {
+      await applyStageChange(id, targetStage)
+    }
+  }
+
+  async function onDropCol(e: React.DragEvent, targetStage: PipelineStageConfig) {
     e.preventDefault()
     setDragOverStage(null)
     const id = draggingIdRef.current
     if (!id) return
-
-    const card = all.find(c => c.id === id)
-    if (!card) return
-
-    const fromStage = getStage(card)
-    if (fromStage === targetStage) return
-
-    if (targetStage === 'appointment') {
-      setPendingAppt({ id })
-    } else {
-      await applyStageChange(id, targetStage)
-    }
+    await moveCard(id, targetStage)
   }
 
   return (
@@ -229,6 +263,7 @@ export default function PipelinePage() {
               </>
             )}
           </button>
+          <Link to="/pipeline/stages" className="btn-secondary text-sm px-3 py-1.5">⚙️ Stages</Link>
           <Link to="/leads" className="btn-secondary text-sm px-3 py-1.5">View List</Link>
         </div>
       </div>
@@ -242,6 +277,12 @@ export default function PipelinePage() {
         className="input-field w-full text-sm py-2 mb-3 shrink-0"
       />
 
+      {hitCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-3 shrink-0">
+          ⚠ Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some leads may not appear on this board — contact support to raise this limit.
+        </div>
+      )}
+
       {/* Summary strip */}
       {!loading && staleCount > 0 && (
         <div className="flex gap-3 mb-4 flex-wrap shrink-0">
@@ -254,7 +295,7 @@ export default function PipelinePage() {
       {/* Board */}
       {loading ? (
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {STAGE_CONFIG.map(s => (
+          {stages.map(s => (
             <div key={s.id} className="shrink-0 w-64 bg-gray-800/50 rounded-2xl p-4 animate-pulse">
               <div className="h-4 bg-gray-700 rounded w-24 mb-4" />
               {[1, 2, 3].map(i => <div key={i} className="h-20 bg-gray-700 rounded-xl mb-2" />)}
@@ -263,8 +304,10 @@ export default function PipelinePage() {
         </div>
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-4 flex-1 items-start min-h-0">
-          {STAGE_CONFIG.map(({ id, label, colorClass, barClass, badgeClass, dropHint }) => {
-            const items    = columns[id]
+          {stages.map(stage => {
+            const { id, label, kind } = stage
+            const colors = STAGE_COLOR_CLASSES[stage.colorKey]
+            const items    = columns[id] ?? []
             const shown    = items.slice(0, MAX_PER_COL)
             const overflow = items.length - shown.length
             const isOver   = dragOverStage === id
@@ -274,7 +317,7 @@ export default function PipelinePage() {
                 key={id}
                 onDragOver={e => onDragOverCol(e, id)}
                 onDragLeave={onDragLeaveCol}
-                onDrop={e => onDropCol(e, id)}
+                onDrop={e => onDropCol(e, stage)}
                 className={[
                   'shrink-0 w-64 flex flex-col rounded-2xl border overflow-hidden transition-colors',
                   isOver
@@ -282,16 +325,16 @@ export default function PipelinePage() {
                     : 'bg-gray-900 border-gray-800',
                 ].join(' ')}
               >
-                <div className={`h-1 ${barClass}`} />
+                <div className={`h-1 ${colors.bar}`} />
 
                 <div className="flex items-center justify-between px-3 py-3">
-                  <span className={`text-sm font-semibold ${colorClass}`}>{label}</span>
-                  <span className={`text-xs font-bold text-white px-2 py-0.5 rounded-full ${badgeClass}`}>
+                  <span className={`text-sm font-semibold ${colors.text}`}>{label}</span>
+                  <span className={`text-xs font-bold text-white px-2 py-0.5 rounded-full ${colors.badge}`}>
                     {items.length}
                   </span>
                 </div>
 
-                {id === 'won' && wonAmount > 0 && (
+                {kind === 'won' && wonAmount > 0 && id === wonStage?.id && (
                   <p className="px-3 -mt-2 pb-2 text-xs text-green-400 font-medium">
                     {formatCurrency(wonAmount)} total
                   </p>
@@ -300,7 +343,7 @@ export default function PipelinePage() {
                 {/* Drop target hint */}
                 {isOver && draggingId && (
                   <div className="mx-2 mb-2 border-2 border-dashed border-white/20 rounded-xl py-2 text-center text-xs text-gray-400">
-                    {dropHint}
+                    {kind === 'won' ? 'Convert to Customer' : kind === 'lost' ? 'Mark Inactive' : `Move to ${label}`}
                   </div>
                 )}
 
@@ -313,17 +356,19 @@ export default function PipelinePage() {
                         key={c.id}
                         customer={c}
                         coloredAvatars={coloredAvatars}
-                        stage={id}
+                        stage={stage}
+                        allStages={stages}
                         score={scores[c.id] ?? null}
                         isDragging={draggingId === c.id}
                         onDragStart={() => onDragStart(c.id)}
                         onDragEnd={onDragEnd}
+                        onMove={targetStage => moveCard(c.id, targetStage)}
                       />
                     ))
                   )}
                   {overflow > 0 && (
                     <Link
-                      to={id === 'won' ? '/customers' : '/leads'}
+                      to={kind === 'won' ? '/customers' : '/leads'}
                       className="text-xs text-center text-indigo-400 hover:text-indigo-300 py-2 transition-colors"
                     >
                       +{overflow} more →
@@ -336,14 +381,15 @@ export default function PipelinePage() {
         </div>
       )}
 
-      {/* Appointment date modal */}
-      {pendingAppt && (
+      {/* Date-prompt modal */}
+      {pendingDate && (
         <ApptModal
+          stageLabel={pendingDate.stage.label}
           onConfirm={async (date) => {
-            await applyStageChange(pendingAppt.id, 'appointment', date)
-            setPendingAppt(null)
+            await applyStageChange(pendingDate.id, pendingDate.stage, date)
+            setPendingDate(null)
           }}
-          onCancel={() => setPendingAppt(null)}
+          onCancel={() => setPendingDate(null)}
         />
       )}
     </div>
@@ -369,27 +415,43 @@ function PipelineCard({
   customer: c,
   coloredAvatars,
   stage,
+  allStages,
   score,
   isDragging,
   onDragStart,
   onDragEnd,
+  onMove,
 }: {
   customer: CustomerItem
   coloredAvatars: boolean
-  stage: Stage
+  stage: PipelineStageConfig
+  allStages: PipelineStageConfig[]
   score: LeadScore | null
   isDragging: boolean
   onDragStart: () => void
   onDragEnd: () => void
+  onMove: (target: PipelineStageConfig) => void
 }) {
   const name    = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
   const color   = coloredAvatars ? avatarColor(name) : avatarOriginal()
-  const eot     = endOfToday()
-  const apptLabel = c.startDate && c.startDate > eot
+  const apptLabel = stage.requiresDate && c.startDate
     ? c.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : null
   const stale = isStale(c, stage)
+
+  // Drag-and-drop doesn't work on touch devices — this menu is how phones
+  // and tablets move a card between columns.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuOpen])
 
   return (
     <div
@@ -397,7 +459,7 @@ function PipelineCard({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={[
-        'rounded-xl border transition-all cursor-grab active:cursor-grabbing',
+        'rounded-xl border transition-all cursor-grab active:cursor-grabbing flex items-start',
         isDragging
           ? 'opacity-40 border-gray-600 bg-gray-800 scale-95'
           : 'bg-gray-800 border-transparent hover:bg-gray-700/80 hover:border-gray-700',
@@ -407,7 +469,7 @@ function PipelineCard({
         to={`/records/${c.id}`}
         draggable={false}
         onClick={e => { if (isDragging) e.preventDefault() }}
-        className="flex flex-col gap-2 p-3 block"
+        className="flex flex-col gap-2 p-3 flex-1 min-w-0"
       >
         <div className="flex items-center gap-2">
           <div
@@ -446,7 +508,7 @@ function PipelineCard({
           </div>
         )}
 
-        {(c.city || c.street) && stage !== 'won' && (
+        {(c.city || c.street) && stage.kind !== 'won' && (
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs text-gray-500 truncate">{[c.city, c.state].filter(Boolean).join(', ')}</p>
             <a
@@ -464,6 +526,30 @@ function PipelineCard({
           </div>
         )}
       </Link>
+      <div className="relative shrink-0 pt-2 pr-1" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setMenuOpen(v => !v)}
+          className="w-6 h-6 flex items-center justify-center rounded-full text-gray-500 hover:text-gray-200 hover:bg-gray-700/60 transition-colors"
+          aria-label="Move to another stage"
+        >
+          ⋯
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 w-40 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">
+            {allStages.filter(s => s.id !== stage.id).map(s => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => { onMove(s); setMenuOpen(false) }}
+                className="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-700/50 transition-colors"
+              >
+                Move to {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

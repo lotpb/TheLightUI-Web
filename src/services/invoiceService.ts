@@ -77,6 +77,7 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     lastGeneratedAt: data.lastGeneratedAt ? toDate(data.lastGeneratedAt) : null,
     generatedFrom:   data.generatedFrom ? String(data.generatedFrom) : null,
     paymentLink:     data.paymentLink ? String(data.paymentLink) : null,
+    lastReminderSentAt: data.lastReminderSentAt ? toDate(data.lastReminderSentAt) : null,
   }
 }
 
@@ -232,6 +233,9 @@ export async function generateNextInvoice(template: Invoice): Promise<string> {
 export async function deleteInvoice(id: string): Promise<void> {
   const snap = await getDoc(doc(db, COL, id))
   const customerId = snap.exists() ? String(snap.data().customerId ?? '') : ''
+  // Stamp the actor's name before the delete so the auditLog trigger's "before"
+  // snapshot (the only data it has left to read) can attribute the deletion.
+  await updateDoc(doc(db, COL, id), { lastEditedByName: getCurrentUserLabel().name })
   await deleteDoc(doc(db, COL, id))
   if (customerId) await recomputeCustomerPaidTotal(customerId)
 }

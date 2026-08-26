@@ -20,6 +20,7 @@ const SettingsPage       = lazy(() => import('./pages/SettingsPage'))
 const ProfilePage        = lazy(() => import('./pages/ProfilePage'))
 const TipPage            = lazy(() => import('./pages/TipPage'))
 const PipelinePage       = lazy(() => import('./pages/pipeline/PipelinePage'))
+const PipelineStagesPage = lazy(() => import('./pages/pipeline/PipelineStagesPage'))
 const ExpenseListPage    = lazy(() => import('./pages/expenses/ExpenseListPage'))
 const ExpenseFormPage    = lazy(() => import('./pages/expenses/ExpenseFormPage'))
 const ChartPage          = lazy(() => import('./pages/chart/ChartPage'))
@@ -42,6 +43,12 @@ const InvoiceListPage        = lazy(() => import('./pages/invoices/InvoiceListPa
 const InvoiceFormPage        = lazy(() => import('./pages/invoices/InvoiceFormPage'))
 const InvoiceDetailPage      = lazy(() => import('./pages/invoices/InvoiceDetailPage'))
 const RecurringInvoicesPage  = lazy(() => import('./pages/invoices/RecurringInvoicesPage'))
+const ProposalListPage       = lazy(() => import('./pages/proposals/ProposalListPage'))
+const ProposalFormPage       = lazy(() => import('./pages/proposals/ProposalFormPage'))
+const ProposalDetailPage     = lazy(() => import('./pages/proposals/ProposalDetailPage'))
+const PublicProposalPage     = lazy(() => import('./pages/proposals/PublicProposalPage'))
+const ProposalPipelinePage   = lazy(() => import('./pages/proposals/ProposalPipelinePage'))
+const InvoicePipelinePage    = lazy(() => import('./pages/invoices/InvoicePipelinePage'))
 const HeatMapPage        = lazy(() => import('./pages/heatmap/HeatMapPage'))
 const FollowUpsPage      = lazy(() => import('./pages/followups/FollowUpsPage'))
 const ForecastPage       = lazy(() => import('./pages/forecast/ForecastPage'))
@@ -71,6 +78,11 @@ const AutomationsPage       = lazy(() => import('./pages/automations/Automations
 const ServiceRequestsPage   = lazy(() => import('./pages/servicerequests/ServiceRequestsPage'))
 const EmailInboxPage        = lazy(() => import('./pages/emailinbox/EmailInboxPage'))
 const AuditLogPage          = lazy(() => import('./pages/auditlog/AuditLogPage'))
+const PurchaseOrdersPage    = lazy(() => import('./pages/purchaseorders/PurchaseOrdersPage'))
+const CustomerHealthPage    = lazy(() => import('./pages/health/CustomerHealthPage'))
+const VendorScorecardsPage  = lazy(() => import('./pages/vendorscorecards/VendorScorecardsPage'))
+const WebhooksPage          = lazy(() => import('./pages/webhooks/WebhooksPage'))
+const ApiKeysPage           = lazy(() => import('./pages/apikeys/ApiKeysPage'))
 
 function PageLoader() {
   return (
@@ -108,12 +120,14 @@ const router = createBrowserRouter(
       <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/i/:token"      element={<PublicInvoicePage />} />
+      <Route path="/p/:token"      element={<PublicProposalPage />} />
       <Route path="/portal/:token" element={<CustomerPortalPage />} />
       <Route path="/join"    element={<JoinPage />} />
       <Route path="/" element={<Protected><Navigate to="/menu" replace /></Protected>} />
 
       <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
       <Route path="/pipeline"  element={<Protected><PipelinePage /></Protected>} />
+      <Route path="/pipeline/stages" element={<Protected><PipelineStagesPage /></Protected>} />
 
       {(['leads', 'customers', 'vendors', 'employees'] as const).map(cat => (
         <Route key={cat} path={`/${cat}`} element={<Protected><CustomerListPage /></Protected>} />
@@ -151,8 +165,14 @@ const router = createBrowserRouter(
       <Route path="/invoices"              element={<Protected><InvoiceListPage /></Protected>} />
       <Route path="/invoices/new"          element={<Protected><InvoiceFormPage /></Protected>} />
       <Route path="/invoices/recurring"    element={<Protected><RecurringInvoicesPage /></Protected>} />
+      <Route path="/invoices/pipeline"     element={<Protected><InvoicePipelinePage /></Protected>} />
       <Route path="/invoices/:id"          element={<Protected><InvoiceDetailPage /></Protected>} />
       <Route path="/invoices/:id/edit"     element={<Protected><InvoiceFormPage /></Protected>} />
+      <Route path="/proposals"             element={<Protected><ProposalListPage /></Protected>} />
+      <Route path="/proposals/pipeline"    element={<Protected><ProposalPipelinePage /></Protected>} />
+      <Route path="/proposals/new"         element={<Protected><ProposalFormPage /></Protected>} />
+      <Route path="/proposals/:id"         element={<Protected><ProposalDetailPage /></Protected>} />
+      <Route path="/proposals/:id/edit"    element={<Protected><ProposalFormPage /></Protected>} />
       <Route path="/heatmap"           element={<Protected><HeatMapPage /></Protected>} />
       <Route path="/followups"         element={<Protected><FollowUpsPage /></Protected>} />
       <Route path="/forecast"          element={<Protected><ForecastPage /></Protected>} />
@@ -175,6 +195,11 @@ const router = createBrowserRouter(
       <Route path="/service-requests"                    element={<Protected><ServiceRequestsPage /></Protected>} />
       <Route path="/email-inbox"                         element={<Protected><EmailInboxPage /></Protected>} />
       <Route path="/audit-log"                           element={<Protected><AuditLogPage /></Protected>} />
+      <Route path="/purchase-orders"                     element={<Protected><PurchaseOrdersPage /></Protected>} />
+      <Route path="/customer-health"                     element={<Protected><CustomerHealthPage /></Protected>} />
+      <Route path="/vendor-scorecards"                   element={<Protected><VendorScorecardsPage /></Protected>} />
+      <Route path="/webhooks"                            element={<Protected><WebhooksPage /></Protected>} />
+      <Route path="/api-keys"                            element={<Protected><ApiKeysPage /></Protected>} />
       <Route path="/team"              element={<Protected><TeamPage /></Protected>} />
       <Route path="/leaderboard"       element={<Protected><LeaderboardPage /></Protected>} />
       <Route path="/catalog"           element={<Protected><CatalogPage /></Protected>} />

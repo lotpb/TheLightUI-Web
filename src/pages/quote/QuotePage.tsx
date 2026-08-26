@@ -1,25 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getCustomer } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import {
+  subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile,
+} from '../../services/companyProfileService'
 
-// ─── Company info — persisted per-browser ────────────────────────────────────
-
-type CompanyInfo = { name: string; address: string; phone: string; email: string }
-
-function loadCompany(): CompanyInfo {
-  return {
-    name:    localStorage.getItem('thelight.co.name')    ?? '',
-    address: localStorage.getItem('thelight.co.address') ?? '',
-    phone:   localStorage.getItem('thelight.co.phone')   ?? '',
-    email:   localStorage.getItem('thelight.co.email')   ?? '',
-  }
-}
-
-function saveCo(field: keyof CompanyInfo, value: string) {
-  localStorage.setItem(`thelight.co.${field}`, value)
-}
+type CompanyInfo = CompanyProfile
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -55,10 +43,13 @@ export default function QuotePage() {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
   const [loading, setLoading]   = useState(true)
-  const [co, setCo]             = useState<CompanyInfo>(loadCompany)
+  const [co, setCo]             = useState<CompanyInfo>(EMPTY_PROFILE)
   const [notes, setNotes]       = useState(() => localStorage.getItem(`thelight.quote.notes.${id}`) ?? '')
+  const coSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   usePageTitle(customer ? `Quote — ${fullName(customer)}` : 'Quote')
+
+  useEffect(() => subscribeToCompanyProfile(setCo, () => {}), [])
 
   useEffect(() => {
     if (!id) return
@@ -87,7 +78,9 @@ export default function QuotePage() {
   function updateCo(field: keyof CompanyInfo, value: string) {
     const next = { ...co, [field]: value }
     setCo(next)
-    saveCo(field, value)
+    // Debounce the Firestore write so typing doesn't fire a save per keystroke.
+    if (coSaveTimer.current) clearTimeout(coSaveTimer.current)
+    coSaveTimer.current = setTimeout(() => { saveCompanyProfile(next).catch(() => {}) }, 600)
   }
 
   function saveNotes(v: string) {

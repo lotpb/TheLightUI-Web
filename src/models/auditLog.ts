@@ -1,4 +1,4 @@
-export type AuditEntityType = 'customer' | 'invoice'
+export type AuditEntityType = 'customer' | 'invoice' | 'proposal'
 export type AuditAction = 'created' | 'updated' | 'deleted'
 
 export interface AuditChange {
@@ -48,6 +48,9 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   taxRate: 'Tax Rate',
   lineItems: 'Line Items',
   paymentLink: 'Payment Link',
+  proposalNumber: 'Proposal #',
+  expiresDate: 'Expires',
+  convertedInvoiceId: 'Converted Invoice',
 }
 
 export function fieldLabel(field: string): string {

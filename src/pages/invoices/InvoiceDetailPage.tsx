@@ -11,11 +11,7 @@ import {
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { isSafeHttpUrl } from '../../utils/safeUrl'
-
-const CO_NAME_KEY  = 'thelight.co.name'
-const CO_ADDR_KEY  = 'thelight.co.address'
-const CO_PHONE_KEY = 'thelight.co.phone'
-const CO_EMAIL_KEY = 'thelight.co.email'
+import { subscribeToCompanyProfile, saveCompanyProfile } from '../../services/companyProfileService'
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -29,12 +25,17 @@ export default function InvoiceDetailPage() {
   const [deleting, setDeleting] = useState(false)
   const [sharing, setSharing] = useState(false)
 
-  // Company info (persisted, same keys as QuotePage)
-  const [coName,  setCoName]  = useState(() => localStorage.getItem(CO_NAME_KEY)  ?? '')
-  const [coAddr,  setCoAddr]  = useState(() => localStorage.getItem(CO_ADDR_KEY)  ?? '')
-  const [coPhone, setCoPhone] = useState(() => localStorage.getItem(CO_PHONE_KEY) ?? '')
-  const [coEmail, setCoEmail] = useState(() => localStorage.getItem(CO_EMAIL_KEY) ?? '')
+  // Company info — shared across the team via Firestore (companyProfileService)
+  const [coName,  setCoName]  = useState('')
+  const [coAddr,  setCoAddr]  = useState('')
+  const [coPhone, setCoPhone] = useState('')
+  const [coEmail, setCoEmail] = useState('')
   const [editCo,  setEditCo]  = useState(false)
+
+  useEffect(() => subscribeToCompanyProfile(
+    p => { setCoName(p.name); setCoAddr(p.address); setCoPhone(p.phone); setCoEmail(p.email) },
+    () => {},
+  ), [])
 
   // Payment link
   const [paymentLinkInput, setPaymentLinkInput] = useState('')
@@ -92,12 +93,13 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  function saveCoInfo() {
-    localStorage.setItem(CO_NAME_KEY,  coName)
-    localStorage.setItem(CO_ADDR_KEY,  coAddr)
-    localStorage.setItem(CO_PHONE_KEY, coPhone)
-    localStorage.setItem(CO_EMAIL_KEY, coEmail)
+  async function saveCoInfo() {
     setEditCo(false)
+    try {
+      await saveCompanyProfile({ name: coName, address: coAddr, phone: coPhone, email: coEmail })
+    } catch {
+      toast('Could not save company info', 'error')
+    }
   }
 
   async function setStatus(status: Invoice['status']) {
@@ -127,6 +129,18 @@ export default function InvoiceDetailPage() {
 
   function fmtDate(d: Date) {
     return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  }
+
+  function timeAgo(d: Date): string {
+    const diff = Date.now() - d.getTime()
+    const mins = Math.floor(diff / 60_000)
+    if (mins < 1)  return 'just now'
+    if (mins < 60) return `${mins}m ago`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24)  return `${hrs}h ago`
+    const days = Math.floor(hrs / 24)
+    if (days < 7)  return `${days}d ago`
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   function handlePrint() {
@@ -324,6 +338,11 @@ export default function InvoiceDetailPage() {
           )}
           {statusSaving && (
             <span className="w-3.5 h-3.5 border border-gray-500 border-t-transparent rounded-full animate-spin" />
+          )}
+          {invoice.lastReminderSentAt && (
+            <span className="text-xs text-gray-500" title={invoice.lastReminderSentAt.toLocaleString()}>
+              ✉️ Reminded {timeAgo(invoice.lastReminderSentAt)}
+            </span>
           )}
         </div>
         <div className="flex gap-2 flex-wrap">

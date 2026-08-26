@@ -6,11 +6,12 @@ import type { CustomerItem } from '../models/customer'
 interface Snapshot {
   items: CustomerItem[]
   loading: boolean
+  hitCap: boolean
 }
 
 type Listener = (snap: Snapshot) => void
 
-let snapshot: Snapshot = { items: [], loading: true }
+let snapshot: Snapshot = { items: [], loading: true, hitCap: false }
 let unsub: (() => void) | null = null
 let subscribedCompanyId: string | null = null
 let refCount = 0
@@ -24,11 +25,11 @@ function notify() {
 function subscribe(companyId: string) {
   unsub?.()
   subscribedCompanyId = companyId
-  snapshot = { items: snapshot.items, loading: true }
+  snapshot = { items: snapshot.items, loading: true, hitCap: snapshot.hitCap }
   notify()
   unsub = subscribeToCustomers(
-    (items) => { snapshot = { items, loading: false }; notify() },
-    ()      => { snapshot = { ...snapshot, loading: false }; notify() },
+    (items, hitCap) => { snapshot = { items, loading: false, hitCap }; notify() },
+    ()               => { snapshot = { ...snapshot, loading: false }; notify() },
   )
 }
 
@@ -36,7 +37,7 @@ function teardown() {
   unsub?.()
   unsub = null
   subscribedCompanyId = null
-  snapshot = { items: [], loading: true }
+  snapshot = { items: [], loading: true, hitCap: false }
 }
 
 useAuthStore.subscribe((state) => {

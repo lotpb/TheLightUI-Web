@@ -3,7 +3,7 @@ import {
   collection, query, where, orderBy, onSnapshot,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { db } from '../firebase/config'
+import { auth, db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 
 export interface InviteDoc {
@@ -93,9 +93,15 @@ export async function redeemInvite(
 
   // Sync the new companyId into the user's Firebase Auth custom claims so that
   // Firestore security rules (which check the token claim) work immediately.
+  // syncUserClaims also writes a claimRefreshSignals doc for the auth store's
+  // background listener, but that round-trip is too slow for what happens
+  // next: the caller navigates straight to the dashboard, whose queries would
+  // otherwise fire with the pre-join token and get denied. Force the refresh
+  // here so it's already applied before this call resolves.
   try {
     const fns = getFunctions()
     await httpsCallable(fns, 'syncUserClaims')({})
+    await auth.currentUser?.getIdToken(true)
   } catch {
     // If CF is unavailable the user may need to sign out and back in.
   }

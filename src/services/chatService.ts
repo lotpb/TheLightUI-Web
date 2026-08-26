@@ -1,12 +1,13 @@
 import {
   collection, doc, getDoc, getDocs, writeBatch,
-  query, orderBy, onSnapshot, Timestamp,
+  query, where, orderBy, onSnapshot, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import {
   ref, uploadBytes, getDownloadURL,
 } from 'firebase/storage'
 import { db, storage } from '../firebase/config'
+import { getCompanyId } from '../stores/authStore'
 import {
   chatUserFromDoc, chatMessageFromDoc, recentMessageFromDoc,
   type ChatUser, type ChatMessage, type RecentMessage, type ChatMessageType,
@@ -15,21 +16,31 @@ import {
 // -- Users --
 
 export async function fetchChatUser(uid: string): Promise<ChatUser | null> {
-  const snap = await getDoc(doc(db, 'users', uid))
-  if (!snap.exists()) return null
-  const d = snap.data()
-  return {
-    id: snap.id,
-    uid: (d['uid'] as string) || snap.id,
-    email: (d['email'] as string) || '',
-    profileImageUrl: (d['profileImageUrl'] as string) || '',
-    firstName: (d['firstName'] as string) || '',
-    lastName: (d['lastName'] as string) || '',
+  // Swallow per-user failures (e.g. a stale account denied by security rules)
+  // so one bad contact doesn't take down Promise.all for the whole inbox.
+  try {
+    const snap = await getDoc(doc(db, 'users', uid))
+    if (!snap.exists()) return null
+    const d = snap.data()
+    return {
+      id: snap.id,
+      uid: (d['uid'] as string) || snap.id,
+      email: (d['email'] as string) || '',
+      profileImageUrl: (d['profileImageUrl'] as string) || '',
+      firstName: (d['firstName'] as string) || '',
+      lastName: (d['lastName'] as string) || '',
+    }
+  } catch {
+    return null
   }
 }
 
 export async function fetchAllUsers(excludeUid?: string): Promise<ChatUser[]> {
-  const snap = await getDocs(collection(db, 'users'))
+  const companyId = getCompanyId()
+  if (!companyId) return []
+  // Security rules require list queries on `users` to be scoped by companyId —
+  // an unfiltered collection query is rejected outright, not just filtered.
+  const snap = await getDocs(query(collection(db, 'users'), where('companyId', '==', companyId)))
   return snap.docs
     .map(chatUserFromDoc)
     .filter(u => u.uid !== excludeUid)

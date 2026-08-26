@@ -33,7 +33,9 @@ export default function AuditLogPage() {
 
   function recordLink(entry: AuditLogEntry): string | null {
     if (entry.action === 'deleted') return null
-    return entry.entityType === 'customer' ? `/records/${entry.entityId}` : `/invoices/${entry.entityId}`
+    if (entry.entityType === 'customer') return `/records/${entry.entityId}`
+    if (entry.entityType === 'proposal') return `/proposals/${entry.entityId}`
+    return `/invoices/${entry.entityId}`
   }
 
   return (
@@ -41,11 +43,11 @@ export default function AuditLogPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Audit Log</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Who changed what on Customer &amp; Invoice records</p>
+        <p className="text-sm text-gray-500 mt-0.5">Who changed what on Customer, Invoice &amp; Proposal records</p>
       </div>
 
       <div className="flex gap-1 mb-6 bg-gray-800/60 p-1 rounded-xl w-fit">
-        {(['all', 'customer', 'invoice'] as Filter[]).map(f => (
+        {(['all', 'customer', 'invoice', 'proposal'] as Filter[]).map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -53,7 +55,7 @@ export default function AuditLogPage() {
               filter === f ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            {f === 'all' ? 'All' : f === 'customer' ? 'Customers' : 'Invoices'}
+            {f === 'all' ? 'All' : f === 'customer' ? 'Customers' : f === 'invoice' ? 'Invoices' : 'Proposals'}
           </button>
         ))}
       </div>

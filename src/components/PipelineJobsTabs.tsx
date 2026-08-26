@@ -1,8 +1,10 @@
 import { NavLink } from 'react-router-dom'
 
 const TABS = [
-  { to: '/pipeline', label: 'Pipeline' },
-  { to: '/jobs',     label: 'Jobs' },
+  { to: '/pipeline',          label: 'Pipeline' },
+  { to: '/jobs',              label: 'Jobs' },
+  { to: '/proposals/pipeline', label: 'Proposals' },
+  { to: '/invoices/pipeline',  label: 'Invoices' },
 ]
 
 export default function PipelineJobsTabs() {

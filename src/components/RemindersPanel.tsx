@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Notification, NotifType, RecentActivity } from '../hooks/useReminders'
+import type { AppNotification } from '../models/notification'
 
 interface Props {
   notifications: Notification[]
@@ -8,6 +9,9 @@ interface Props {
   permission: NotificationPermission
   onRequestPermission: () => void
   onClose: () => void
+  appNotifications: AppNotification[]
+  onMarkNotificationRead: (id: string) => void
+  onMarkAllNotificationsRead: () => void
 }
 
 const ACTIVITY_META: Record<RecentActivity['kind'], { icon: string; color: string }> = {
@@ -21,7 +25,9 @@ function fmtAgo(d: Date): string {
   if (diff < 1)  return 'Just now'
   if (diff < 60) return `${diff}m ago`
   const hrs = Math.floor(diff / 60)
-  return hrs === 1 ? '1h ago' : `${hrs}h ago`
+  if (hrs < 24) return hrs === 1 ? '1h ago' : `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return days === 1 ? '1d ago' : `${days}d ago`
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -52,12 +58,17 @@ const URGENCY_GROUPS: Array<{ key: Notification['urgency']; label: string; label
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
-export default function RemindersPanel({ notifications, recentActivity, permission, onRequestPermission, onClose }: Props) {
+export default function RemindersPanel({
+  notifications, recentActivity, permission, onRequestPermission, onClose,
+  appNotifications, onMarkNotificationRead, onMarkAllNotificationsRead,
+}: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const [tab, setTab] = useState<'reminders' | 'activity'>('reminders')
 
   const grouped = URGENCY_GROUPS.map(g => ({
     ...g,
@@ -70,6 +81,7 @@ export default function RemindersPanel({ notifications, recentActivity, permissi
     { followup: 0, task: 0, serviceplan: 0, appointment: 0 },
   )
   const hasAny = notifications.length > 0
+  const unreadCount = appNotifications.filter(n => !n.read).length
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -80,12 +92,24 @@ export default function RemindersPanel({ notifications, recentActivity, permissi
       <div className="relative w-80 max-w-full h-full bg-gray-900 border-l border-gray-800 flex flex-col shadow-2xl">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
-          <div>
-            <h2 className="text-base font-semibold text-white">Notifications</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {notifications.length === 0 ? 'All clear' : `${notifications.length} item${notifications.length !== 1 ? 's' : ''} need attention`}
-            </p>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <div className="flex gap-1 bg-gray-800/60 p-1 rounded-xl">
+            <button
+              onClick={() => setTab('reminders')}
+              className={`text-sm px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                tab === 'reminders' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Reminders{notifications.length > 0 && ` (${notifications.length})`}
+            </button>
+            <button
+              onClick={() => setTab('activity')}
+              className={`text-sm px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                tab === 'activity' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Activity{unreadCount > 0 && ` (${unreadCount})`}
+            </button>
           </div>
           <button
             onClick={onClose}
@@ -98,6 +122,46 @@ export default function RemindersPanel({ notifications, recentActivity, permissi
           </button>
         </div>
 
+        {tab === 'activity' ? (
+          <>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800/60">
+              <p className="text-xs text-gray-500">
+                {appNotifications.length === 0 ? 'No activity yet' : `${appNotifications.length} recent event${appNotifications.length !== 1 ? 's' : ''}`}
+              </p>
+              {unreadCount > 0 && (
+                <button onClick={onMarkAllNotificationsRead} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                  Mark all read
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {appNotifications.length === 0 ? (
+                <p className="p-6 text-sm text-gray-500 text-center">No notifications yet</p>
+              ) : (
+                <div className="divide-y divide-gray-800">
+                  {appNotifications.map(n => (
+                    <Link
+                      key={n.id}
+                      to={n.linkTo}
+                      onClick={() => { if (!n.read) onMarkNotificationRead(n.id); onClose() }}
+                      className={`block px-4 py-3 hover:bg-gray-800/60 transition-colors ${!n.read ? 'bg-indigo-950/20' : ''}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 shrink-0" />}
+                        <div className="min-w-0 flex-1">
+                          <p className={`text-sm font-medium ${n.read ? 'text-gray-300' : 'text-white'}`}>{n.title}</p>
+                          <p className="text-xs text-gray-500 mt-0.5 truncate">{n.body}</p>
+                          <p className="text-xs text-gray-600 mt-1">{fmtAgo(n.createdAt)}</p>
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+        <>
         {/* Type summary strip */}
         {hasAny && (
           <div className="flex gap-2 px-3 py-2 border-b border-gray-800/60 flex-wrap">
@@ -235,6 +299,8 @@ export default function RemindersPanel({ notifications, recentActivity, permissi
             Follow-ups · Tasks · Service Plans · Appointments · 24h activity
           </p>
         </div>
+        </>
+        )}
       </div>
     </div>
   )

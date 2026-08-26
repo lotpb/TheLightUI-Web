@@ -6,10 +6,7 @@ import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
-import { usePageTitle } from '../../hooks/usePageTitle'
-import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePickerStore } from '../../stores/pickerStore'
-import { usePrefStore } from '../../stores/prefStore'
 import { useAuthStore } from '../../stores/authStore'
 import { subscribeToActivities, addActivity, deleteActivity } from '../../services/activityService'
 import { ACTIVITY_TYPES, type Activity, type ActivityType } from '../../models/activity'
@@ -33,10 +30,16 @@ import {
 } from '../../services/sequenceService'
 import type { Sequence, SequenceEnrollment } from '../../models/sequence'
 import { subscribeToInvoices } from '../../services/invoiceService'
+import { subscribeToProposals } from '../../services/proposalService'
 import { subscribeToServicePlans } from '../../services/servicePlanService'
 import { generatePortalLink } from '../../services/customerPortalService'
 import { effectiveStatus, statusClasses, statusLabel, invoiceTotal, fmtCurrency } from '../../models/invoice'
 import type { Invoice } from '../../models/invoice'
+import {
+  effectiveStatus as proposalEffectiveStatus, statusClasses as proposalStatusClasses,
+  statusLabel as proposalStatusLabel, proposalTotal,
+} from '../../models/proposal'
+import type { Proposal } from '../../models/proposal'
 import type { ServicePlan } from '../../models/servicePlan'
 import { subscribeToServiceRequests } from '../../services/serviceRequestService'
 import { STATUS_LABELS as REQUEST_STATUS_LABELS, STATUS_COLORS as REQUEST_STATUS_COLORS, type ServiceRequest } from '../../models/serviceRequest'
@@ -51,17 +54,93 @@ const ROLE_COLORS: Record<string, string> = {
   viewer:   'bg-gray-500/20 text-gray-400 border-gray-600/30',
 }
 
+type TabKey = 'details' | 'related' | 'activity' | 'email' | 'sequences' | 'documents'
+
+const TAB_DEFS: { key: TabKey; label: string; icon: string }[] = [
+  { key: 'details',   label: 'Details',   icon: '📇' },
+  { key: 'activity',  label: 'Activity',  icon: '📋' },
+  { key: 'related',   label: 'Related',   icon: '🔗' },
+  { key: 'email',     label: 'Email',     icon: '✉️' },
+  { key: 'sequences', label: 'Sequences', icon: '🔁' },
+  { key: 'documents', label: 'Files',     icon: '📎' },
+]
+
+function DetailTabBar({
+  active,
+  counts,
+  onChange,
+}: {
+  active: TabKey
+  counts: Record<TabKey, number>
+  onChange: (key: TabKey) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const btnRefs = useRef<Partial<Record<TabKey, HTMLButtonElement>>>({})
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
+
+  useEffect(() => {
+    function measure() {
+      const btn = btnRefs.current[active]
+      const container = containerRef.current
+      if (!btn || !container) return
+      const containerRect = container.getBoundingClientRect()
+      const btnRect = btn.getBoundingClientRect()
+      setIndicator({ left: btnRect.left - containerRect.left + container.scrollLeft, width: btnRect.width })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [active])
+
+  return (
+    <div className="border-b border-gray-800 mb-6">
+      <div ref={containerRef} className="relative flex gap-6 overflow-x-auto scrollbar-none">
+        {TAB_DEFS.map(tab => {
+          const isActive = active === tab.key
+          const count = counts[tab.key]
+          return (
+            <button
+              key={tab.key}
+              ref={el => { if (el) btnRefs.current[tab.key] = el }}
+              onClick={() => onChange(tab.key)}
+              className={`flex items-center gap-1.5 pb-3 pt-1 text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
+                isActive ? 'text-white' : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <span className="text-base leading-none">{tab.icon}</span>
+              <span>{tab.label}</span>
+              {count > 0 && (
+                <span className={`text-xs font-semibold rounded-full px-1.5 py-0.5 leading-none transition-colors ${
+                  isActive ? 'bg-indigo-500/20 text-indigo-300' : 'bg-gray-800 text-gray-500'
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          )
+        })}
+        {indicator && (
+          <span
+            className="absolute bottom-0 h-[2px] bg-indigo-500 rounded-full transition-all duration-200 ease-out"
+            style={{ left: indicator.left, width: indicator.width }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navBack  = useNavBack('/records')
   const toast = useToast()
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
-  usePageTitle(customer ? fullName(customer) : '')
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [compose, setCompose] = useState<'email' | 'sms' | null>(null)
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([])
+  const [allProposals, setAllProposals] = useState<Proposal[]>([])
   const [allPlans,    setAllPlans]    = useState<ServicePlan[]>([])
   const [portalLink,  setPortalLink]  = useState<string | null>(null)
   const [generatingPortal, setGeneratingPortal] = useState(false)
@@ -69,6 +148,10 @@ export default function CustomerDetailPage() {
   const isReady   = useAuthStore(s => s.isReady)
   const [linkedRole, setLinkedRole] = useState<string>('')
   const [linkedLastSeen, setLinkedLastSeen] = useState<Date | null>(null)
+  const [activeTab, setActiveTab] = useState<TabKey>('details')
+  const [tabCounts, setTabCounts] = useState<Record<TabKey, number>>({
+    details: 0, related: 0, activity: 0, email: 0, sequences: 0, documents: 0,
+  })
 
   useEffect(() => {
     if (!id) return
@@ -100,6 +183,10 @@ export default function CustomerDetailPage() {
 
   useEffect(() => {
     return subscribeToInvoices(setAllInvoices, () => {})
+  }, [companyId])
+
+  useEffect(() => {
+    return subscribeToProposals(setAllProposals, () => {})
   }, [companyId])
 
   useEffect(() => {
@@ -153,7 +240,6 @@ export default function CustomerDetailPage() {
   }
 
   const labels = usePickerStore(s => s.labels)
-  const coloredAvatars = usePrefStore(s => s.coloredAvatars)
 
   if (loading) return <LoadingSkeleton />
 
@@ -166,13 +252,12 @@ export default function CustomerDetailPage() {
     )
   }
 
-  const name = fullName(customer)
   const catLabel = customer.category
     ? (CATEGORY_LABELS[customer.category as CustomerCategory] ?? customer.category)
     : ''
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6">
+    <div className="max-w-6xl mx-auto px-4 py-6">
       {/* Back + actions */}
       <div className="flex items-start justify-between mb-6 gap-2 flex-wrap">
         <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm mt-1">
@@ -194,191 +279,180 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      {/* Header card */}
-      <div className="card p-6 mb-4">
-        {/* Row 1: table layout — avatar | name+lastname | amount trailing */}
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '12px' }}>
-          <tbody>
-            <tr>
-              <td style={{ width: '56px', verticalAlign: 'top', padding: 0 }}>
-                {customer.photo ? (
-                  <img src={customer.photo} alt={name} style={{ width: '56px', height: '56px', borderRadius: '9999px', objectFit: 'cover', display: 'block' }} />
-                ) : (
-                  <div style={{ width: '56px', height: '56px', borderRadius: '9999px', background: (coloredAvatars ? avatarColor(name) : avatarOriginal()).bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <span style={{ fontSize: '18px', fontWeight: 700, color: (coloredAvatars ? avatarColor(name) : avatarOriginal()).text }}>
-                      {customer.category.toLowerCase() === 'vendor'
-                        ? (customer.first[0] || '?').toUpperCase()
-                        : [customer.first[0], customer.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
-                    </span>
-                  </div>
-                )}
-              </td>
-              <td style={{ verticalAlign: 'top', paddingLeft: '16px', overflow: 'hidden' }}>
-                {/* Desktop: first + last on one line (vendors: first only) */}
-                <h1 className="hidden sm:block" style={{ fontSize: '22px', fontWeight: 700, color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>
-                  {customer.category.toLowerCase() === 'vendor'
-                    ? customer.first || '—'
-                    : [customer.first, customer.lastname].filter(Boolean).join(' ') || '—'}
-                </h1>
-                {/* Mobile: two lines (vendors: first only) */}
-                <div className="sm:hidden">
-                  <h1 style={{ fontSize: '22px', fontWeight: 700, color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>{customer.first || '—'}</h1>
-                  {customer.category.toLowerCase() !== 'vendor' && customer.lastname && (
-                    <p style={{ fontSize: '22px', fontWeight: 700, color: 'white', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{customer.lastname}</p>
-                  )}
-                </div>
-              </td>
-              <td style={{ verticalAlign: 'top', paddingLeft: '12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                {customer.amount > 0 && (
-                  <span style={{ fontSize: '20px', fontWeight: 700, color: 'rgb(74,222,128)' }}>{formatCurrency(customer.amount)}</span>
-                )}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
+        {/* ── Sidebar: identity, status, actions, tags ─────────────────── */}
+        <aside className="space-y-4 lg:sticky lg:top-6">
+          <div className="card px-4 py-2 text-center">
+            <h1 className="text-xl font-bold text-white leading-tight break-words">
+              {customer.category.toLowerCase() === 'vendor'
+                ? customer.first || '—'
+                : [customer.first, customer.lastname].filter(Boolean).join(' ') || '—'}
+            </h1>
+          </div>
 
-        {/* Row 3: status badges — flex-nowrap + shrink-0 keeps all on one line */}
-        <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'nowrap', gap: '6px', marginBottom: '1.25rem' }}>
-          {catLabel && (
-            <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, fontSize: '11px', fontWeight: 500, background: 'rgba(67,56,202,0.3)', color: 'rgb(165,180,252)', padding: '3px 8px', borderRadius: '9999px', whiteSpace: 'nowrap' }}>
-              {catLabel}
-            </span>
-          )}
-          <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, fontSize: '11px', fontWeight: 500, padding: '3px 8px', borderRadius: '9999px', whiteSpace: 'nowrap', background: customer.isActive ? 'rgba(21,128,61,0.2)' : 'rgba(55,65,81,0.4)', color: customer.isActive ? 'rgb(74,222,128)' : 'rgb(156,163,175)' }}>
-            {customer.isActive ? 'Active' : 'Inactive'}
-          </span>
-          {customer.rate && (
-            <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, fontSize: '11px', fontWeight: 500, background: 'rgba(161,98,7,0.2)', color: 'rgb(250,204,21)', padding: '3px 8px', borderRadius: '9999px', whiteSpace: 'nowrap' }}>
-              ★ {customer.rate}
-            </span>
-          )}
-          {(customer.category.toLowerCase() === 'vendor' ? customer.salesman : customer.callback).toLowerCase() === 'yes' && (
-            <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, gap: '3px', fontSize: '11px', fontWeight: 500, background: 'rgba(21,128,61,0.2)', color: 'rgb(74,222,128)', padding: '3px 8px', borderRadius: '9999px', whiteSpace: 'nowrap' }}>
-              <svg style={{ width: '11px', height: '11px', flexShrink: 0, fill: 'currentColor' }} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-              Called
-            </span>
-          )}
-        </div>
+          <div className="card p-6 relative overflow-hidden">
+            <div className="pointer-events-none absolute -top-20 -right-20 w-48 h-48 bg-indigo-600/10 rounded-full blur-3xl" />
 
-        {/* Action button bar — matches iOS LeadDetailUI action menu */}
-        <div className="flex gap-3 mt-5 pt-4 border-t border-gray-700/50 overflow-x-auto pb-1">
-          {customer.phone && (
-            <ActionTile
-              href={`tel:${customer.phone}`}
-              icon="📞"
-              label="Call"
-            />
-          )}
-          {customer.phone && (
-            <ActionTile
-              onClick={() => setCompose('sms')}
-              icon="💬"
-              label="Message"
-            />
-          )}
-          {customer.email && (
-            <ActionTile
-              onClick={() => setCompose('email')}
-              icon="✉️"
-              label="Email"
-            />
-          )}
-          {customer.street && (
-            <ActionTile
-              to={`/maps?address=${encodeURIComponent(
-                [customer.street, customer.city, customer.state, customer.zip]
-                  .filter(Boolean).join(', ')
-              )}`}
-              icon="🗺️"
-              label="Map"
-            />
-          )}
-          <ActionTile
-            onClick={handleToggleActive}
-            icon={customer.isActive ? '⭐' : '☆'}
-            label="Active"
-            active={customer.isActive}
-          />
-          <ActionTile
-            onClick={() => downloadVCF(customer)}
-            icon="👤"
-            label="Contact"
-          />
-          {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
-            <ActionTile
-              onClick={() => downloadICS(customer)}
-              icon="📅"
-              label="Calendar"
-            />
-          )}
-          <ActionTile
-            onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
-            icon="🖨️"
-            label="Print"
-          />
-          <ActionTile
-            to={`/records/${id}/quote`}
-            icon="📋"
-            label="Quote"
-          />
-          <ActionTile
-            to={`/invoices/new?customerId=${id}`}
-            icon="🧾"
-            label="Invoice"
-          />
-        </div>
-      </div>
+            <div className="relative flex flex-col items-center text-center gap-3">
+              {customer.amount > 0 && (
+                <p className="text-2xl font-bold text-green-400 -mt-1 self-start text-left w-full">{formatCurrency(customer.amount)}</p>
+              )}
 
-      {/* Tags + Score */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <TagsSection
-            customerId={id!}
-            tags={customer.tags ?? []}
-            allTags={[]}
-            onUpdate={tags => setCustomer({ ...customer, tags })}
-          />
-        </div>
-        {customer.category.toLowerCase() === 'lead' && (
-          <ScoreBadge customer={customer} />
-        )}
-        {customer.category.toLowerCase() === 'customer' && (
-          <HealthScoreBadge customer={customer} invoices={allInvoices} plans={allPlans} />
-        )}
-      </div>
-
-      {/* Detail fields */}
-      <div className="space-y-4">
-        <FieldGroup title="Contact">
-          <Field label="Phone"    value={customer.phone} />
-          <Field label="Email"    value={customer.email || '—'} />
-          {customer.category.toLowerCase() !== 'employee' && customer.category.toLowerCase() !== 'lead' && (
-            <Field
-              label={customer.category.toLowerCase() === 'customer' ? 'Spouse' : 'Web Page'}
-              value={customer.spouse}
-            />
-          )}
-          {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'customer' && (
-            <div className="px-4 py-3">
-              <FieldCell label="Called">
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-4 h-4 fill-current shrink-0 ${customer.callback.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-                  <span className={customer.callback.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
-                    {customer.callback.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+              <div className="flex flex-nowrap gap-1.5 justify-center overflow-x-auto max-w-full">
+                {catLabel && (
+                  <span className="inline-flex items-center shrink-0 text-xs font-medium bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full">
+                    {catLabel}
                   </span>
+                )}
+                <span className={`inline-flex items-center shrink-0 text-xs font-medium px-2.5 py-1 rounded-full ${
+                  customer.isActive ? 'bg-green-500/15 text-green-400' : 'bg-gray-700/50 text-gray-400'
+                }`}>
+                  {customer.isActive ? 'Active' : 'Inactive'}
                 </span>
-              </FieldCell>
+                {customer.rate && (
+                  <span className="inline-flex items-center shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
+                    ★ {customer.rate}
+                  </span>
+                )}
+                {(customer.category.toLowerCase() === 'vendor' ? customer.salesman : customer.callback).toLowerCase() === 'yes' && (
+                  <span className="inline-flex items-center shrink-0 gap-1 text-xs font-medium bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full">
+                    <svg className="w-3 h-3 fill-current shrink-0" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                    Called
+                  </span>
+                )}
+              </div>
             </div>
-          )}
-        </FieldGroup>
+
+            {/* Action tiles */}
+            <div className="grid grid-cols-4 gap-2 mt-5 pt-4 border-t border-gray-700/50">
+              {customer.phone && (
+                <ActionTile href={`tel:${customer.phone}`} icon="📞" label="Call" />
+              )}
+              {customer.phone && (
+                <ActionTile onClick={() => setCompose('sms')} icon="💬" label="Message" />
+              )}
+              {customer.email && (
+                <ActionTile onClick={() => setCompose('email')} icon="✉️" label="Email" />
+              )}
+              {customer.street && (
+                <ActionTile
+                  to={`/maps?address=${encodeURIComponent(
+                    [customer.street, customer.city, customer.state, customer.zip]
+                      .filter(Boolean).join(', ')
+                  )}`}
+                  icon="🗺️"
+                  label="Map"
+                />
+              )}
+              <ActionTile
+                onClick={handleToggleActive}
+                icon={customer.isActive ? '⭐' : '☆'}
+                label="Active"
+                active={customer.isActive}
+              />
+              <ActionTile to={`/proposals/new?customerId=${id}`} icon="📝" label="Proposal" />
+              <ActionTile to={`/invoices/new?customerId=${id}`} icon="🧾" label="Invoice" />
+              <ActionTile to={`/records/${id}/quote`} icon="📋" label="Quote" />
+              <ActionTile onClick={() => downloadVCF(customer)} icon="👤" label="Contact" />
+              {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
+                <ActionTile onClick={() => downloadICS(customer)} icon="📅" label="Calendar" />
+              )}
+              <ActionTile
+                onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
+                icon="🖨️"
+                label="Print"
+              />
+            </div>
+          </div>
+
+          {/* Tags + Score */}
+          <div className="card p-4">
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Tags</p>
+              {customer.category.toLowerCase() === 'lead' && (
+                <ScoreBadge customer={customer} />
+              )}
+              {customer.category.toLowerCase() === 'customer' && (
+                <HealthScoreBadge customer={customer} invoices={allInvoices} plans={allPlans} />
+              )}
+            </div>
+            <TagsSection
+              customerId={id!}
+              tags={customer.tags ?? []}
+              allTags={[]}
+              onUpdate={tags => setCustomer({ ...customer, tags })}
+            />
+          </div>
+
+          <FollowUpSection
+            customerId={id!}
+            followUpDate={customer.followUpDate}
+            onUpdate={date => setCustomer({ ...customer, followUpDate: date })}
+          />
+        </aside>
+
+        {/* ── Main: tabbed content ──────────────────────────────────────── */}
+        <main className="min-w-0">
+          <DetailTabBar active={activeTab} counts={tabCounts} onChange={setActiveTab} />
+
+      <div className={activeTab === 'details' ? 'space-y-4' : 'hidden'}>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FieldGroup title="Contact">
+            <Field label="Phone"    value={customer.phone} />
+            <Field label="Email"    value={customer.email || '—'} />
+            {customer.category.toLowerCase() !== 'employee' && customer.category.toLowerCase() !== 'lead' && (
+              <Field
+                label={customer.category.toLowerCase() === 'customer' ? 'Spouse' : 'Web Page'}
+                value={customer.spouse}
+              />
+            )}
+            {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'customer' && (
+              <div className="px-4 py-3">
+                <FieldCell label="Called">
+                  <span className="flex items-center gap-1.5">
+                    <svg className={`w-4 h-4 fill-current shrink-0 ${customer.callback.toLowerCase() === 'yes' ? 'text-green-400' : 'text-gray-500'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+                    <span className={customer.callback.toLowerCase() === 'yes' ? 'text-white' : 'text-gray-500'}>
+                      {customer.callback.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                    </span>
+                  </span>
+                </FieldCell>
+              </div>
+            )}
+          </FieldGroup>
+
+          <FieldGroup title="Dates">
+            {customer.category.toLowerCase() === 'lead' && (
+              <DateField label="Apt Date" value={formatDate(customer.startDate)} />
+            )}
+            {customer.category.toLowerCase() === 'employee' && (
+              <FieldRow>
+                <FieldCell label="Start Date"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
+                <FieldCell label="Termination"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+              </FieldRow>
+            )}
+            {customer.category.toLowerCase() === 'customer' && (
+              <FieldRow>
+                <FieldCell label="Start"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
+                <FieldCell label="Complete"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+              </FieldRow>
+            )}
+            <FieldRow>
+              <FieldCell label="Date Added"><DateChip>{formatDate(customer.creationDate) || '—'}</DateChip></FieldCell>
+              <FieldCell label="Last Update"><DateChip>{formatDate(customer.lastUpdateDate) || '—'}</DateChip></FieldCell>
+            </FieldRow>
+          </FieldGroup>
+        </div>
 
         <FieldGroup title="Address">
           <Field label="Street" value={customer.street} />
-          <FieldRow>
-            <FieldCell label="City">{customer.city || '—'}</FieldCell>
-            <FieldCell label="State">{customer.state || '—'}</FieldCell>
-            <FieldCell label="ZIP">{customer.zip || '—'}</FieldCell>
-          </FieldRow>
+          <Field
+            label="City"
+            value={
+              [customer.city, [customer.state, customer.zip].filter(Boolean).join(' ')]
+                .filter(Boolean).join(', ')
+            }
+          />
         </FieldGroup>
 
         <FieldGroup title={customer.category.toLowerCase() === 'employee' ? 'Employee Info' : 'Job Info'}>
@@ -540,44 +614,47 @@ export default function CustomerDetailPage() {
           </FieldGroup>
         )}
 
-        <FieldGroup title="Dates">
-          {customer.category.toLowerCase() === 'lead' && (
-            <DateField label="Apt Date" value={formatDate(customer.startDate)} />
-          )}
-          {customer.category.toLowerCase() === 'employee' && (
-            <FieldRow>
-              <FieldCell label="Start Date"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
-              <FieldCell label="Termination"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
-            </FieldRow>
-          )}
-          {customer.category.toLowerCase() === 'customer' && (
-            <FieldRow>
-              <FieldCell label="Start"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
-              <FieldCell label="Complete"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
-            </FieldRow>
-          )}
-          <FieldRow>
-            <FieldCell label="Date Added"><DateChip>{formatDate(customer.creationDate) || '—'}</DateChip></FieldCell>
-            <FieldCell label="Last Update"><DateChip>{formatDate(customer.lastUpdateDate) || '—'}</DateChip></FieldCell>
-          </FieldRow>
-        </FieldGroup>
-
-        <FollowUpSection
-          customerId={id!}
-          followUpDate={customer.followUpDate}
-          onUpdate={date => setCustomer({ ...customer, followUpDate: date })}
-        />
         <CustomFieldsSection customer={customer} />
-        <NotesSection
-          customer={customer}
-          onUpdate={comments => setCustomer({ ...customer, comments })}
+      </div>
+
+      <div className={activeTab === 'related' ? 'space-y-4' : 'hidden'}>
+        <RelatedRecordsSection
+          customerId={id!}
+          invoices={allInvoices.filter(inv => inv.customerId === id)}
+          proposals={allProposals.filter(p => p.customerId === id)}
+          onCount={n => setTabCounts(c => (c.related === n ? c : { ...c, related: n }))}
         />
-        <RelatedRecordsSection customerId={id!} invoices={allInvoices.filter(inv => inv.customerId === id)} />
-        <ActivityLogSection customerId={id!} />
-        <EmailThreadSection customerId={id!} />
+      </div>
+
+      <div className={activeTab === 'activity' ? 'space-y-4' : 'hidden'}>
+        <ActivityLogSection
+          customerId={id!}
+          onCount={n => setTabCounts(c => (c.activity === n ? c : { ...c, activity: n }))}
+        />
         <AuditHistorySection entityId={id!} />
-        <SequencesSection customer={customer} />
-        <DocumentsSection customerId={id!} />
+      </div>
+
+      <div className={activeTab === 'email' ? 'space-y-4' : 'hidden'}>
+        <EmailThreadSection
+          customerId={id!}
+          onCount={n => setTabCounts(c => (c.email === n ? c : { ...c, email: n }))}
+        />
+      </div>
+
+      <div className={activeTab === 'sequences' ? 'space-y-4' : 'hidden'}>
+        <SequencesSection
+          customer={customer}
+          onCount={n => setTabCounts(c => (c.sequences === n ? c : { ...c, sequences: n }))}
+        />
+      </div>
+
+      <div className={activeTab === 'documents' ? 'space-y-4' : 'hidden'}>
+        <DocumentsSection
+          customerId={id!}
+          onCount={n => setTabCounts(c => (c.documents === n ? c : { ...c, documents: n }))}
+        />
+      </div>
+        </main>
       </div>
 
       {compose && (
@@ -609,15 +686,15 @@ type ActionTileProps = {
 
 function ActionTile({ icon, label, href, to, onClick, active }: ActionTileProps) {
   const base =
-    `flex flex-col items-center justify-center gap-1.5 w-16 shrink-0 py-3 rounded-2xl transition-colors cursor-pointer select-none ${
+    `flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-colors cursor-pointer select-none ${
       active
         ? 'bg-gray-700 text-white hover:bg-gray-600'
-        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+        : 'bg-gray-700/60 text-gray-300 hover:bg-gray-700'
     }`
   const inner = (
     <>
-      <span className="text-xl leading-none">{icon}</span>
-      <span className="text-xs font-medium leading-tight text-center">{label}</span>
+      <span className="text-lg leading-none">{icon}</span>
+      <span className="text-[11px] font-medium leading-tight text-center">{label}</span>
     </>
   )
   if (href) return <a href={href} className={base}>{inner}</a>
@@ -851,142 +928,13 @@ function FollowUpSection({
   )
 }
 
-// ── Notes Timeline ────────────────────────────────────────────────────────────
-
-interface NoteEntry {
-  date: string   // e.g. "Aug 11, 2026"
-  text: string
-}
-
-function parseNotes(raw: string): NoteEntry[] {
-  if (!raw?.trim()) return []
-  const parts = raw.split(/(?=--- \[)/)
-  const entries: NoteEntry[] = []
-  for (const part of parts) {
-    const match = part.match(/^--- \[([^\]]+)\] ---\s*([\s\S]*)/)
-    if (match) {
-      const text = match[2].trim()
-      if (text) entries.push({ date: match[1], text })
-    } else {
-      const text = part.trim()
-      if (text) entries.push({ date: 'Original', text })
-    }
-  }
-  return entries
-}
-
-function buildNoteHeader(): string {
-  return `--- [${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] ---`
-}
-
-function NotesSection({
-  customer,
-  onUpdate,
-}: {
-  customer: CustomerItem
-  onUpdate: (comments: string) => void
-}) {
-  const [adding, setAdding] = useState(false)
-  const [draft, setDraft]   = useState('')
-  const [saving, setSaving] = useState(false)
-  const toast = useToast()
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  useEffect(() => {
-    if (adding) textareaRef.current?.focus()
-  }, [adding])
-
-  const entries = parseNotes(customer.comments ?? '')
-
-  async function handleSave() {
-    const text = draft.trim()
-    if (!text) return
-    setSaving(true)
-    const newEntry = `${buildNoteHeader()}\n${text}`
-    const existing = customer.comments?.trim() ?? ''
-    const merged   = existing ? `${newEntry}\n\n${existing}` : newEntry
-    try {
-      await updateCustomer(customer.id, { ...customer, comments: merged })
-      onUpdate(merged)
-      setDraft('')
-      setAdding(false)
-    } catch {
-      toast('Could not save note', 'error')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-          Notes {entries.length > 0 && <span className="text-gray-600 font-normal normal-case">({entries.length})</span>}
-        </p>
-        <button
-          onClick={() => { setAdding(a => !a); setDraft('') }}
-          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-        >
-          {adding ? 'Cancel' : '+ Note'}
-        </button>
-      </div>
-
-      {adding && (
-        <div className="p-4 border-b border-gray-700/30 space-y-2.5">
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave() }}
-            rows={3}
-            placeholder="Write a note…"
-            className="input-field w-full resize-none text-sm"
-          />
-          <div className="flex justify-end">
-            <button
-              onClick={handleSave}
-              disabled={saving || !draft.trim()}
-              className="btn-primary text-sm px-4 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {saving ? '…' : 'Save Note'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {entries.length === 0 && !adding ? (
-        <p className="px-4 py-5 text-sm text-gray-500 text-center">No notes yet</p>
-      ) : (
-        <div className="relative">
-          {entries.length > 1 && (
-            <div className="absolute left-[27px] top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
-          )}
-          <div className="divide-y divide-gray-700/20">
-            {entries.map((entry, idx) => (
-              <div key={idx} className="flex gap-3 px-4 py-3.5">
-                <div className="w-5 h-5 rounded-full bg-gray-700 border border-gray-600 flex items-center justify-center shrink-0 mt-0.5 z-10">
-                  <span className="text-[8px] text-gray-400">📝</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-gray-500 mb-1">{entry.date}</p>
-                  <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{entry.text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AuditHistorySection({ entityId }: { entityId: string }) {
+function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?: (n: number) => void }) {
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => subscribeToEntityAuditLog(entityId, setEntries, () => {}), [entityId])
 
-  if (entries.length === 0) return null
+  useEffect(() => { onCount?.(entries.length) }, [entries.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = expanded ? entries : entries.slice(0, 3)
 
@@ -1000,6 +948,9 @@ function AuditHistorySection({ entityId }: { entityId: string }) {
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
         <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">History</p>
       </div>
+      {entries.length === 0 && (
+        <p className="px-4 py-5 text-sm text-gray-500 text-center">No history yet</p>
+      )}
       <div className="divide-y divide-gray-700/30">
         {visible.map(entry => (
           <div key={entry.id} className="px-4 py-2.5">
@@ -1032,12 +983,12 @@ function AuditHistorySection({ entityId }: { entityId: string }) {
   )
 }
 
-function EmailThreadSection({ customerId }: { customerId: string }) {
+function EmailThreadSection({ customerId, onCount }: { customerId: string; onCount?: (n: number) => void }) {
   const [messages, setMessages] = useState<EmailMessage[]>([])
 
   useEffect(() => subscribeToEmailThread(customerId, setMessages, () => {}), [customerId])
 
-  if (messages.length === 0) return null
+  useEffect(() => { onCount?.(messages.length) }, [messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function fmtTime(d: Date): string {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
@@ -1049,6 +1000,9 @@ function EmailThreadSection({ customerId }: { customerId: string }) {
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
         <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Email Thread</p>
       </div>
+      {messages.length === 0 ? (
+        <p className="px-4 py-5 text-sm text-gray-500 text-center">No email messages yet</p>
+      ) : (
       <div className="divide-y divide-gray-700/30">
         {messages.map(m => (
           <div
@@ -1072,6 +1026,7 @@ function EmailThreadSection({ customerId }: { customerId: string }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   )
 }
@@ -1081,7 +1036,17 @@ function EmailThreadSection({ customerId }: { customerId: string }) {
 // full relationship — billing, service history, time on site — is visible in
 // one place instead of requiring a separate search in each module.
 
-function RelatedRecordsSection({ customerId, invoices }: { customerId: string; invoices: Invoice[] }) {
+function RelatedRecordsSection({
+  customerId,
+  invoices,
+  proposals,
+  onCount,
+}: {
+  customerId: string
+  invoices: Invoice[]
+  proposals: Proposal[]
+  onCount?: (n: number) => void
+}) {
   const [requests, setRequests] = useState<ServiceRequest[]>([])
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
 
@@ -1091,7 +1056,8 @@ function RelatedRecordsSection({ customerId, invoices }: { customerId: string; i
   const myRequests = requests.filter(r => r.customerId === customerId)
   const myTimeEntries = timeEntries.filter(t => t.customerId === customerId)
 
-  if (invoices.length === 0 && myRequests.length === 0 && myTimeEntries.length === 0) return null
+  const totalCount = invoices.length + proposals.length + myRequests.length + myTimeEntries.length
+  useEffect(() => { onCount?.(totalCount) }, [totalCount]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function fmtDate(d: Date): string {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -1108,6 +1074,10 @@ function RelatedRecordsSection({ customerId, invoices }: { customerId: string; i
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
         <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Related Records</p>
       </div>
+
+      {totalCount === 0 && (
+        <p className="px-4 py-5 text-sm text-gray-500 text-center">No related records yet</p>
+      )}
 
       {invoices.length > 0 && (
         <div className="px-4 py-3 border-b border-gray-700/30">
@@ -1127,6 +1097,32 @@ function RelatedRecordsSection({ customerId, invoices }: { customerId: string; i
                       {statusLabel(status)}
                     </span>
                     <span className="text-sm text-gray-400">{fmtCurrency(invoiceTotal(inv))}</span>
+                  </span>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {proposals.length > 0 && (
+        <div className="px-4 py-3 border-b border-gray-700/30">
+          <p className="text-xs font-semibold text-gray-500 mb-2">Proposals ({proposals.length})</p>
+          <div className="space-y-1.5">
+            {proposals.slice(0, 5).map(p => {
+              const status = proposalEffectiveStatus(p)
+              return (
+                <Link
+                  key={p.id}
+                  to={`/proposals/${p.id}`}
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                >
+                  <span className="text-sm text-gray-300 truncate">{p.proposalNumber || 'Draft'}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${proposalStatusClasses(status)}`}>
+                      {proposalStatusLabel(status)}
+                    </span>
+                    <span className="text-sm text-gray-400">{fmtCurrency(proposalTotal(p))}</span>
                   </span>
                 </Link>
               )
@@ -1174,7 +1170,7 @@ function RelatedRecordsSection({ customerId, invoices }: { customerId: string; i
   )
 }
 
-function ActivityLogSection({ customerId }: { customerId: string }) {
+function ActivityLogSection({ customerId, onCount }: { customerId: string; onCount?: (n: number) => void }) {
   const user = useAuthStore(s => s.user)
   const [activities, setActivities] = useState<Activity[]>([])
   const [type, setType] = useState<ActivityType>('call')
@@ -1187,6 +1183,8 @@ function ActivityLogSection({ customerId }: { customerId: string }) {
     const unsub = subscribeToActivities(customerId, setActivities, () => {})
     return unsub
   }, [customerId])
+
+  useEffect(() => { onCount?.(activities.length) }, [activities.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleAdd() {
     if (!note.trim() || !user) return
@@ -1787,7 +1785,7 @@ function ComposeModal({
 
 // ── Documents ─────────────────────────────────────────────────────────────────
 
-function DocumentsSection({ customerId }: { customerId: string }) {
+function DocumentsSection({ customerId, onCount }: { customerId: string; onCount?: (n: number) => void }) {
   const user = useAuthStore(s => s.user)
   const fileRef = useRef<HTMLInputElement>(null)
   const [docs, setDocs]         = useState<CustomerDocument[]>([])
@@ -1800,6 +1798,8 @@ function DocumentsSection({ customerId }: { customerId: string }) {
     const unsub = subscribeToDocuments(customerId, setDocs, () => {})
     return unsub
   }, [customerId])
+
+  useEffect(() => { onCount?.(docs.length) }, [docs.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleFiles(files: FileList | null) {
     if (!files?.length || !user) return
@@ -1834,7 +1834,7 @@ function DocumentsSection({ customerId }: { customerId: string }) {
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-          Documents {docs.length > 0 && <span className="text-gray-600 font-normal normal-case">({docs.length})</span>}
+          Files {docs.length > 0 && <span className="text-gray-600 font-normal normal-case">({docs.length})</span>}
         </p>
         <button
           onClick={() => fileRef.current?.click()}
@@ -1958,7 +1958,7 @@ function DocumentsSection({ customerId }: { customerId: string }) {
 
 // ── Sequences ─────────────────────────────────────────────────────────────────
 
-function SequencesSection({ customer }: { customer: CustomerItem }) {
+function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCount?: (n: number) => void }) {
   const toast = useToast()
   const [sequences,    setSequences]    = useState<Sequence[]>([])
   const [enrollments,  setEnrollments]  = useState<SequenceEnrollment[]>([])
@@ -1969,6 +1969,8 @@ function SequencesSection({ customer }: { customer: CustomerItem }) {
 
   useEffect(() => subscribeToSequences(setSequences, () => {}), [])
   useEffect(() => subscribeToCustomerEnrollments(customer.id, setEnrollments, () => {}), [customer.id])
+
+  useEffect(() => { onCount?.(enrollments.length) }, [enrollments.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!enrollOpen) return

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman } from '../../services/customerService'
+import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, REALTIME_LIMIT } from '../../services/customerService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
 import { useAuthStore } from '../../stores/authStore'
@@ -14,6 +14,8 @@ import { usePickerStore } from '../../stores/pickerStore'
 import { usePrefStore } from '../../stores/prefStore'
 import { usePermissions } from '../../hooks/usePermissions'
 import { tagColor } from '../../utils/tagColor'
+import { leadStatusColor } from '../../utils/leadStatusColor'
+import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
 import { scoreLead } from '../../utils/leadScore'
 import { calculateHealthScoreLight } from '../../utils/customerHealth'
 import CSVImportModal from '../../components/CSVImportModal'
@@ -898,7 +900,7 @@ export default function CustomerListPage() {
 
       {hitRecordCap && (
         <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4">
-          ⚠ Showing the first 2,000 records only. Some records may not be visible — contact support to raise this limit.
+          ⚠ Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some records may not be visible — contact support to raise this limit.
         </div>
       )}
 
@@ -1143,6 +1145,11 @@ function CustomerRow({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
             {!c.isActive && <span className="text-xs text-gray-500 shrink-0">inactive</span>}
+            {c.category.toLowerCase() === 'lead' && c.leadStatus && (
+              <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${leadStatusColor(c.leadStatus)}`}>
+                {c.leadStatus}
+              </span>
+            )}
             {(c.tags ?? []).slice(0, 2).map(tag => (
               <span key={tag} className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${tagColor(tag)}`}>{tag}</span>
             ))}
@@ -1156,16 +1163,28 @@ function CustomerRow({
           </p>
         </div>
         <div className="shrink-0 text-right flex flex-col items-end gap-1">
-          {c.amount > 0 && <p className="text-sm font-semibold text-green-400">{formatCurrency(c.amount)}</p>}
-          {c.category.toLowerCase() === 'lead' && (() => {
-            const ls = scoreLead(c)
-            return (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${ls.badgeClass}`}>
-                <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
-                {ls.label}
-              </span>
-            )
-          })()}
+          {c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
+          {c.category.toLowerCase() === 'lead' && (
+            <div className="flex items-center gap-1.5">
+              {(() => {
+                const ls = scoreLead(c)
+                return (
+                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${ls.badgeClass}`}>
+                    <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
+                    {ls.label}
+                  </span>
+                )
+              })()}
+              {(() => {
+                const days = dealAgeDays(c)
+                return (
+                  <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${dealAgeClasses(days)}`}>
+                    {days} {days === 1 ? 'Day' : 'Days'}
+                  </span>
+                )
+              })()}
+            </div>
+          )}
           {c.category.toLowerCase() === 'customer' && (() => {
             const hs = calculateHealthScoreLight(c)
             return (
@@ -1175,7 +1194,6 @@ function CustomerRow({
               </span>
             )
           })()}
-          {c.phone && <p className="text-xs text-gray-500">{c.phone}</p>}
         </div>
       </Link>
     </div>

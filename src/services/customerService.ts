@@ -13,8 +13,9 @@ const COLLECTION = 'Customers'
 // Safety cap for the real-time listener. Prevents loading 100k+ documents into
 // the browser's JS heap. Companies that grow past this limit should migrate to
 // server-side aggregation (Cloud Functions) for analytics and cursor pagination
-// for the list view. 2 000 covers virtually all production use cases today.
-const REALTIME_LIMIT = 2_000
+// for the list view. Exported so consumers can show an accurate warning
+// instead of hardcoding the number (and so it can be tuned in one place).
+export const REALTIME_LIMIT = 5_000
 
 export function subscribeToCustomers(
   onData: (items: CustomerItem[], hitCap: boolean) => void,
@@ -95,6 +96,9 @@ export async function updateCustomer(
 }
 
 export async function deleteCustomer(id: string): Promise<void> {
+  // Stamp the actor's name before the delete so the auditLog trigger's "before"
+  // snapshot (the only data it has left to read) can attribute the deletion.
+  await updateDoc(doc(db, COLLECTION, id), { lastEditedByName: getCurrentUserLabel().name })
   await deleteDoc(doc(db, COLLECTION, id))
 }
 
@@ -432,6 +436,7 @@ export async function importCustomersFromJSON(
         leadSource: r.leadSource ?? '',
         paymentStatus: r.paymentStatus ?? '',
         customFields: {},
+        pipelineStage: '',
       }
       const data = { ...customerToFirestore(item, userId), companyId }
       const ref = r.id

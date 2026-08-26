@@ -30,6 +30,7 @@ export interface Invoice {
   lastGeneratedAt?: Date | null
   generatedFrom?: string | null
   paymentLink?: string | null
+  lastReminderSentAt?: Date | null
 }
 
 export function lineItemTotal(item: InvoiceLineItem): number {

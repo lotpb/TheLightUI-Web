@@ -12,17 +12,7 @@ import type { SigningDocSnapshot } from '../../models/signingRequest'
 import { useAuthStore } from '../../stores/authStore'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
-
-// Reuse company info from QuotePage localStorage keys
-type CoInfo = { name: string; address: string; phone: string; email: string }
-function loadCo(): CoInfo {
-  return {
-    name:    localStorage.getItem('thelight.co.name')    ?? '',
-    address: localStorage.getItem('thelight.co.address') ?? '',
-    phone:   localStorage.getItem('thelight.co.phone')   ?? '',
-    email:   localStorage.getItem('thelight.co.email')   ?? '',
-  }
-}
+import { subscribeToCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
 
 export default function DocTemplatePreviewPage() {
   const { id } = useParams<{ id: string }>()
@@ -34,10 +24,12 @@ export default function DocTemplatePreviewPage() {
   const [query,      setQuery]      = useState('')
   const [showList,   setShowList]   = useState(false)
   const [tplLoading, setTplLoading] = useState(true)
-  const [co,         setCo]         = useState<CoInfo>(loadCo)
+  const [co,         setCo]         = useState<CompanyProfile>(EMPTY_PROFILE)
   const [signLink,   setSignLink]   = useState<string | null>(null)
   const [signSending, setSignSending] = useState(false)
   const toast = useToast()
+
+  useEffect(() => subscribeToCompanyProfile(setCo, () => {}), [])
 
   usePageTitle(template ? `Generate — ${template.name}` : 'Generate Document')
 

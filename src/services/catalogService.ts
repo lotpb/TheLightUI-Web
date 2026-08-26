@@ -1,6 +1,6 @@
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, serverTimestamp, Timestamp, query, where,
+  doc, serverTimestamp, Timestamp, query, where, increment,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -24,6 +24,9 @@ function docToItem(id: string, d: Record<string, unknown>): CatalogItem {
     unit:        String(d.unit        ?? 'each'),
     category:    String(d.category    ?? ''),
     createdAt:   toDate(d.createdAt),
+    trackInventory:    Boolean(d.trackInventory ?? false),
+    stockQty:          typeof d.stockQty === 'number' ? d.stockQty : 0,
+    lowStockThreshold: typeof d.lowStockThreshold === 'number' ? d.lowStockThreshold : 5,
   }
 }
 
@@ -53,20 +56,30 @@ export function subscribeToCatalog(
 
 export async function addCatalogItem(
   name: string, description: string, price: number, unit: string, category: string,
+  trackInventory = false, stockQty = 0, lowStockThreshold = 5,
 ): Promise<void> {
   const companyId = getCompanyId()
   await addDoc(collection(db, COL), {
     companyId, name, description, price, unit, category,
+    trackInventory, stockQty, lowStockThreshold,
     createdAt: serverTimestamp(),
   })
 }
 
 export async function updateCatalogItem(
   id: string, name: string, description: string, price: number, unit: string, category: string,
+  trackInventory = false, stockQty = 0, lowStockThreshold = 5,
 ): Promise<void> {
-  await updateDoc(doc(db, COL, id), { name, description, price, unit, category })
+  await updateDoc(doc(db, COL, id), {
+    name, description, price, unit, category,
+    trackInventory, stockQty, lowStockThreshold,
+  })
 }
 
 export async function deleteCatalogItem(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+export async function adjustStock(id: string, delta: number): Promise<void> {
+  await updateDoc(doc(db, COL, id), { stockQty: increment(delta) })
 }

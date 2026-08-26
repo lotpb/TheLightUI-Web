@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { doc, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../firebase/config'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { type JobStage, JOB_STAGE_CONFIG as STAGE_CONFIG, getJobStage as getStage } from '../../models/jobPipeline'
+import { REALTIME_LIMIT } from '../../services/customerService'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSharedCustomers } from '../../hooks/useSharedCustomers'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
@@ -63,7 +64,7 @@ function defaultDatesFor(targetStage: JobStage, existingStart: Date | null, exis
 export default function JobsPage() {
   usePageTitle('Jobs')
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
-  const { items: all, loading } = useSharedCustomers()
+  const { items: all, loading, hitCap } = useSharedCustomers()
 
   const now = useMemo(() => new Date(), [])
 
@@ -130,12 +131,10 @@ export default function JobsPage() {
   function onDragLeaveCol() {
     setDragOverStage(null)
   }
-  async function onDropCol(e: React.DragEvent, targetStage: JobStage) {
-    e.preventDefault()
-    setDragOverStage(null)
-    const id = draggingIdRef.current
-    if (!id) return
-
+  // Drag-and-drop is mouse-only — the HTML5 DnD events this board relies on
+  // never fire from a touch gesture, so this is also the tap-to-move path
+  // used by JobCard's "⋯" menu on phones/tablets.
+  async function moveCard(id: string, targetStage: JobStage) {
     const card = all.find(c => c.id === id)
     if (!card) return
 
@@ -152,6 +151,14 @@ export default function JobsPage() {
     }
     const { start, completion } = defaultDatesFor(targetStage, card.startDate, card.completionDate)
     setPendingSchedule({ id, targetStage, start, completion })
+  }
+
+  async function onDropCol(e: React.DragEvent, targetStage: JobStage) {
+    e.preventDefault()
+    setDragOverStage(null)
+    const id = draggingIdRef.current
+    if (!id) return
+    await moveCard(id, targetStage)
   }
 
   return (
@@ -177,6 +184,12 @@ export default function JobsPage() {
         placeholder="Search by name, salesman, city, or job…"
         className="input-field w-full text-sm py-2 mb-4"
       />
+
+      {hitCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4">
+          ⚠ Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some jobs may not appear on this board — contact support to raise this limit.
+        </div>
+      )}
 
       {/* Summary strip */}
       {!loading && (columns.active.length > 0 || columns.complete.length > 0 || overdueCount > 0) && (
@@ -231,7 +244,8 @@ export default function JobsPage() {
                     <div className="space-y-2">
                       {items.slice(0, MAX_PER_COL).map(c => (
                         <JobCard key={c.id} customer={c} stage={id} coloredAvatars={coloredAvatars}
-                          isDragging={false} onDragStart={() => {}} onDragEnd={() => {}} draggable={false} />
+                          isDragging={false} onDragStart={() => {}} onDragEnd={() => {}} draggable={false}
+                          onMove={targetStage => moveCard(c.id, targetStage)} />
                       ))}
                       {items.length > MAX_PER_COL && (
                         <Link to="/customers" className="block text-xs text-center text-indigo-400 hover:text-indigo-300 py-2">
@@ -289,6 +303,7 @@ export default function JobsPage() {
                           isDragging={draggingId === c.id}
                           onDragStart={() => onDragStart(c.id)}
                           onDragEnd={onDragEnd}
+                          onMove={targetStage => moveCard(c.id, targetStage)}
                         />
                       ))
                     )}
@@ -395,6 +410,7 @@ function JobCard({
   isDragging,
   onDragStart,
   onDragEnd,
+  onMove,
 }: {
   customer: CustomerItem
   stage: JobStage
@@ -403,6 +419,7 @@ function JobCard({
   isDragging: boolean
   onDragStart: () => void
   onDragEnd: () => void
+  onMove: (target: JobStage) => void
 }) {
   const name    = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
@@ -414,13 +431,26 @@ function JobCard({
     : null
   const isOverdue = daysUntilComplete !== null && daysUntilComplete < 0
 
+  // Drag-and-drop doesn't work on touch devices — this menu is how phones
+  // and tablets move a card between columns.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuOpen])
+
   return (
     <div
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={[
-        'rounded-xl border transition-all',
+        'rounded-xl border transition-all flex items-start',
         draggable ? 'cursor-grab active:cursor-grabbing' : '',
         isDragging
           ? 'opacity-40 border-gray-600 bg-gray-800 scale-95'
@@ -431,7 +461,7 @@ function JobCard({
         to={`/records/${c.id}`}
         draggable={false}
         onClick={e => { if (isDragging) e.preventDefault() }}
-        className="flex flex-col gap-2 p-3 block"
+        className="flex flex-col gap-2 p-3 flex-1 min-w-0"
       >
         {/* Name row */}
         <div className="flex items-center gap-2">
@@ -516,6 +546,30 @@ function JobCard({
           <p className="text-xs text-gray-500 truncate">{c.salesman}</p>
         )}
       </Link>
+      <div className="relative shrink-0 pt-2 pr-1" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setMenuOpen(v => !v)}
+          className="w-6 h-6 flex items-center justify-center rounded-full text-gray-500 hover:text-gray-200 hover:bg-gray-700/60 transition-colors"
+          aria-label="Move to another stage"
+        >
+          ⋯
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 w-40 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">
+            {STAGE_CONFIG.filter(s => s.id !== stage).map(s => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => { onMove(s.id); setMenuOpen(false) }}
+                className="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-700/50 transition-colors"
+              >
+                Move to {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

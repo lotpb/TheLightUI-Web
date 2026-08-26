@@ -7,6 +7,7 @@ import { CATEGORIES, fullName, formatCurrency, type CustomerItem } from '../../m
 import { effectiveStatus, fmtCurrency, invoiceTotal, type Invoice } from '../../models/invoice'
 import { EXPENSE_CATEGORIES, type Expense } from '../../models/expense'
 import { useAuthStore } from '../../stores/authStore'
+import { buildInvoiceIIF, buildInvoiceQBOCSV, buildExpenseQBOCSV } from '../../utils/quickbooksExport'
 
 // ── CSV utilities ─────────────────────────────────────────────────────────────
 
@@ -25,7 +26,11 @@ function buildCSV(headers: string[], rows: (string | number | boolean | null | u
 }
 
 function downloadCSV(filename: string, csv: string) {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  downloadFile(filename, csv, 'text/csv;charset=utf-8;')
+}
+
+function downloadFile(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
   const url  = URL.createObjectURL(blob)
   const a    = document.createElement('a')
   a.href     = url
@@ -241,6 +246,14 @@ export default function ExportPage() {
     printTable('Invoices', headers, rows)
   }
 
+  function exportInvoicesIIF() {
+    downloadFile(`invoices_${new Date().toISOString().slice(0,10)}.iif`, buildInvoiceIIF(filteredInvoices), 'text/plain;charset=utf-8;')
+  }
+
+  function exportInvoicesQBOCSV() {
+    downloadFile(`invoices_qbo_${new Date().toISOString().slice(0,10)}.csv`, buildInvoiceQBOCSV(filteredInvoices), 'text/csv;charset=utf-8;')
+  }
+
   function exportExpensesCSV() {
     const headers = ['Date', 'Title', 'Category', 'Amount', 'Reimbursable', 'Notes']
     const rows = filteredExpenses.map(e => [
@@ -257,6 +270,10 @@ export default function ExportPage() {
       formatCurrency(e.amount), e.isReimbursable ? 'Yes' : 'No', e.notes,
     ])
     printTable('Expenses', headers, rows)
+  }
+
+  function exportExpensesQBOCSV() {
+    downloadFile(`expenses_qbo_${new Date().toISOString().slice(0,10)}.csv`, buildExpenseQBOCSV(filteredExpenses), 'text/csv;charset=utf-8;')
   }
 
   function toggleField(key: string) {
@@ -405,6 +422,23 @@ export default function ExportPage() {
             onPrint={printInvoices}
             disabled={filteredInvoices.length === 0}
           />
+
+          <QuickBooksCard disabled={filteredInvoices.length === 0}>
+            <button
+              onClick={exportInvoicesIIF}
+              disabled={filteredInvoices.length === 0}
+              className="btn-secondary text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              IIF (QuickBooks Desktop)
+            </button>
+            <button
+              onClick={exportInvoicesQBOCSV}
+              disabled={filteredInvoices.length === 0}
+              className="btn-secondary text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              CSV (QuickBooks Online)
+            </button>
+          </QuickBooksCard>
         </div>
       )}
 
@@ -450,6 +484,16 @@ export default function ExportPage() {
             onPrint={printExpenses}
             disabled={filteredExpenses.length === 0}
           />
+
+          <QuickBooksCard disabled={filteredExpenses.length === 0}>
+            <button
+              onClick={exportExpensesQBOCSV}
+              disabled={filteredExpenses.length === 0}
+              className="btn-secondary text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              CSV (QuickBooks Online)
+            </button>
+          </QuickBooksCard>
         </div>
       )}
     </div>
@@ -505,6 +549,24 @@ function ExportActions({
             Export CSV
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── QuickBooks export card ────────────────────────────────────────────────────
+
+function QuickBooksCard({ disabled, children }: { disabled: boolean; children: React.ReactNode }) {
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <p className="text-white font-semibold">QuickBooks</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {disabled ? 'No records match the current filters' : 'IIF imports into QuickBooks Desktop; CSV matches QuickBooks Online\'s importer columns'}
+          </p>
+        </div>
+        <div className="flex gap-2">{children}</div>
       </div>
     </div>
   )

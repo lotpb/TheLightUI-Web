@@ -27,6 +27,26 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // Caller's role, read from their own users/{uid} doc. '' if signed out or
+    // the doc/field is missing. One get() per rule evaluation — well within
+    // the per-request budget since each write only evaluates its own rule once.
+    function callerRole() {
+      return isSignedIn()
+           ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '')
+           : '';
+    }
+
+    // Viewer is the read-only role (see usePermissions.ts canEdit: false) —
+    // enforced here so it's a real security boundary, not just a hidden button.
+    function isViewer() {
+      return callerRole() == 'viewer';
+    }
+
+    // Team management (invite/role-change) is owner/admin only.
+    function canManageTeam() {
+      return callerRole() == 'owner' || callerRole() == 'admin';
+    }
+
     // ── User Profiles ─────────────────────────────────────────────────────────
     //
     //   Own profile: full read/write (profile edits, FCM token arrayUnion).
@@ -75,9 +95,9 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.companyId == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && (
                          // Normal update: document already belongs to this company.
                          (resource.data.get('companyId', '') == claimedCompanyId()
@@ -89,7 +109,7 @@ service cloud.firestore {
                           && resource.data.get('uid', '') == request.auth.uid
                           && request.resource.data.get('companyId', '') == claimedCompanyId())
                        );
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -147,12 +167,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -165,12 +185,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -182,9 +202,9 @@ service cloud.firestore {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -196,11 +216,11 @@ service cloud.firestore {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -237,9 +257,11 @@ service cloud.firestore {
     //
     match /serviceRequests/{requestId} {
       allow create: if true;
-      allow read, delete: if hasCompanyId()
-                          && resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow read: if hasCompanyId()
+                  && resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
     }
@@ -257,7 +279,10 @@ service cloud.firestore {
       allow get:    if true;
       allow list:   if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow create: if hasCompanyId();
+      // Direct client creation previously allowed ANY company member (including
+      // viewer/salesman) to write an invite doc, bypassing inviteUser's
+      // owner/admin check entirely. Team management is owner/admin only.
+      allow create: if hasCompanyId() && canManageTeam();
       allow update: if isSignedIn() && resource.data.used == false;
       allow delete: if false;
     }
@@ -266,11 +291,11 @@ service cloud.firestore {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -282,7 +307,7 @@ service cloud.firestore {
     //
     match /commissionStructures/{companyId} {
       allow read:  if hasCompanyId() && request.auth.token.companyId == companyId;
-      allow write: if hasCompanyId() && request.auth.token.companyId == companyId;
+      allow write: if hasCompanyId() && !isViewer() && request.auth.token.companyId == companyId;
     }
 
     // ── Service Plans ─────────────────────────────────────────────────────────
@@ -294,12 +319,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -324,11 +349,11 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -341,12 +366,53 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Proposals ─────────────────────────────────────────────────────────────
+    //
+    //   Quotes/estimates sent to a customer, optionally converted to an
+    //   Invoice once accepted. All CRUD scoped to the caller's companyId claim.
+    //
+    match /Proposals/{proposalId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Public Proposal Snapshots ──────────────────────────────────────────────
+    //
+    //   Document ID is the share token (UUID). Anyone can read a single doc
+    //   (no auth needed — customer link). Company members create/refresh the
+    //   snapshot. The customer (unauthenticated) may also flip status from
+    //   'sent' to 'accepted'/'declined' — onProposalResponse (Cloud Function)
+    //   mirrors that back onto the real Proposals doc.
+    //
+    match /publicProposals/{token} {
+      allow get: if true;
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if (hasCompanyId() && !isViewer()
+                        && resource.data.get('companyId', '') == claimedCompanyId())
+                    || (resource.data.get('status', '') == 'sent'
+                        && request.resource.data.get('status', '') in ['accepted', 'declined']
+                        && request.resource.data.get('companyId', '') == resource.data.get('companyId', '')
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']));
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -356,8 +422,8 @@ service cloud.firestore {
     //   path variable is the authoritative ownership check.
     //
     match /Goals/{goalCompanyId} {
-      allow read, write: if hasCompanyId()
-                         && claimedCompanyId() == goalCompanyId;
+      allow read:  if hasCompanyId() && claimedCompanyId() == goalCompanyId;
+      allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == goalCompanyId;
     }
 
     // ── Customer Documents ────────────────────────────────────────────────────
@@ -370,9 +436,9 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -387,13 +453,15 @@ service cloud.firestore {
       allow get:    if true;
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      // Signer submits: only pending→signed transition, companyId unchanged
+      // Signer submits (unauthenticated, public link): only pending→signed
+      // transition, companyId unchanged. Not viewer-gated — the signer isn't
+      // a team member at all.
       allow update: if resource.data.get('status', '') == 'pending'
                     && request.resource.data.get('status', '') == 'signed'
                     && request.resource.data.get('companyId', '') == resource.data.get('companyId', '');
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -405,7 +473,7 @@ service cloud.firestore {
     //
     match /leadForms/{formCompanyId} {
       allow get:   if true;
-      allow write: if hasCompanyId() && claimedCompanyId() == formCompanyId;
+      allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == formCompanyId;
     }
 
     // ── Lead Submissions ──────────────────────────────────────────────────────
@@ -415,8 +483,10 @@ service cloud.firestore {
     //
     match /leadSubmissions/{subId} {
       allow create: if true;
-      allow read, update, delete: if hasCompanyId()
-                                  && resource.data.get('companyId', '') == claimedCompanyId();
+      allow read: if hasCompanyId()
+                  && resource.data.get('companyId', '') == claimedCompanyId();
+      allow update, delete: if hasCompanyId() && !isViewer()
+                            && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
     // ── Document Templates ────────────────────────────────────────────────────
@@ -428,12 +498,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -446,12 +516,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -464,11 +534,91 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── API Keys ───────────────────────────────────────────────────────────────
+    //
+    //   Inbound read-only API access. Only keyHash (SHA-256, one-way) is ever
+    //   stored — the raw key is generated client-side and shown once. All CRUD
+    //   scoped to the caller's companyId claim; the read API (apiRead Cloud
+    //   Function) looks keys up by hash via the admin SDK, bypassing these rules.
+    //
+    match /apiKeys/{keyId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Notifications (persistent bell icon) ──────────────────────────────────
+    //
+    //   Written only by Cloud Functions (admin SDK). Company members can read
+    //   and mark their own company's notifications read.
+    //
+    match /notifications/{notifId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if false;
+      // update is a shared "mark read" flag toggled by every team member
+      // (including viewer) with no client-side gating — not a CRM data edit,
+      // so it's intentionally not viewer-restricted.
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Webhook Subscriptions ──────────────────────────────────────────────────
+    //
+    //   Outbound integrations (Zapier, custom tools). All CRUD scoped to the
+    //   caller's companyId claim. Delivery + status updates happen via Cloud
+    //   Functions (admin SDK, bypasses these rules).
+    //
+    match /webhookSubscriptions/{subId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Purchase Orders ────────────────────────────────────────────────────────
+    //
+    //   Vendor/job PO tracking. All CRUD scoped to the caller's companyId claim.
+    //
+    match /purchaseOrders/{poId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -495,12 +645,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -516,10 +666,11 @@ service cloud.firestore {
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
       allow create: if false;
+      // update is a shared "mark read" flag, same reasoning as notifications above.
       allow update: if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -533,12 +684,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -552,12 +703,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -582,12 +733,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -600,12 +751,12 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -619,11 +770,11 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
                     && resource.data.companyId == claimedCompanyId();
-      allow create: if hasCompanyId()
+      allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
-      allow update: if hasCompanyId()
+      allow update: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow delete: if hasCompanyId()
+      allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
@@ -633,8 +784,8 @@ service cloud.firestore {
     //   Full read/write restricted to the owning company.
     //
     match /companies/{companyId}/settings/{settingId} {
-      allow read, write: if hasCompanyId()
-                         && claimedCompanyId() == companyId;
+      allow read:  if hasCompanyId() && claimedCompanyId() == companyId;
+      allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == companyId;
     }
 
     // ── Picker Lists (legacy shared document) ─────────────────────────────────
@@ -645,7 +796,7 @@ service cloud.firestore {
     //
     match /settings/pickerLists {
       allow read:  if isSignedIn();
-      allow write: if hasCompanyId();
+      allow write: if hasCompanyId() && !isViewer();
     }
 
   }

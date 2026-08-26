@@ -1,6 +1,6 @@
 import {
   collection, doc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy,
+  onSnapshot, query, where, orderBy, serverTimestamp,
   Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -27,6 +27,8 @@ function toRequest(id: string, d: Record<string, unknown>): ServiceRequest {
     preferredDate: String(d['preferredDate'] ?? ''),
     status:        (d['status'] as ServiceRequestStatus) ?? 'new',
     createdAt:     toDate(d['createdAt']),
+    firstContactedAt: d['firstContactedAt'] ? toDate(d['firstContactedAt']) : null,
+    resolvedAt:       d['resolvedAt']       ? toDate(d['resolvedAt'])       : null,
   }
 }
 
@@ -50,8 +52,18 @@ export function subscribeToServiceRequests(
   )
 }
 
-export async function updateServiceRequestStatus(id: string, status: ServiceRequestStatus): Promise<void> {
-  await updateDoc(doc(db, COL, id), { status })
+export async function updateServiceRequestStatus(request: ServiceRequest, status: ServiceRequestStatus): Promise<void> {
+  const updates: Record<string, unknown> = { status }
+  if (!request.firstContactedAt && status !== 'new') {
+    updates.firstContactedAt = serverTimestamp()
+  }
+  if ((status === 'completed' || status === 'dismissed') && !request.resolvedAt) {
+    updates.resolvedAt = serverTimestamp()
+  }
+  if (status === 'new') {
+    updates.resolvedAt = null
+  }
+  await updateDoc(doc(db, COL, request.id), updates)
 }
 
 export async function deleteServiceRequest(id: string): Promise<void> {

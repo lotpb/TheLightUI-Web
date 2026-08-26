@@ -774,17 +774,6 @@ export default function CustomerFormPage() {
           </FormSection>
         )}
 
-        {/* Comments */}
-        <FormSection title="Comments">
-          <textarea
-            className="input-field resize-none"
-            rows={4}
-            value={form.comments}
-            onChange={e => set('comments', e.target.value)}
-            placeholder="Notes…"
-          />
-        </FormSection>
-
         <div className="pb-8" />
       </form>
 

@@ -1,8 +1,9 @@
 import * as functions from 'firebase-functions/v1'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore'
+import { getFirestore, FieldValue, Timestamp, type DocumentSnapshot } from 'firebase-admin/firestore'
 import { getMessaging, type MulticastMessage } from 'firebase-admin/messaging'
+import { createHmac, createHash } from 'crypto'
 
 initializeApp()
 const db        = getFirestore()
@@ -1037,6 +1038,154 @@ export const bulkSendEmail = functions
     return { sent, skipped }
   })
 
+// ── Bulk reminder emails (Invoices / Proposals) ─────────────────────────────────
+// Callable: reminds each selected record's customer by email. Skips records
+// with no email on file. Stamps lastReminderSentAt (already in
+// AUDIT_IGNORE_FIELDS, so this doesn't spam the audit log) so the UI can show
+// "reminded Xd ago" if it wants to.
+
+function lineItemsTotal(data: Record<string, unknown>): number {
+  const items = Array.isArray(data['lineItems']) ? data['lineItems'] as Record<string, unknown>[] : []
+  const subtotal = items.reduce((s, i) => s + (Number(i['qty'] ?? 0) * Number(i['rate'] ?? 0)), 0)
+  const taxRate = Number(data['taxRate'] ?? 0)
+  return subtotal + subtotal * (taxRate / 100)
+}
+
+function fmtMoney(n: number): string {
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+}
+
+function fmtDateShort(v: unknown): string {
+  if (v instanceof Timestamp) return v.toDate().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  return ''
+}
+
+export const bulkSendInvoiceReminders = functions
+  .runWith({ secrets: ['RESEND_API_KEY'], timeoutSeconds: 300, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    }
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+    }
+    const apiKey = process.env.RESEND_API_KEY
+    if (!apiKey) {
+      throw new functions.https.HttpsError('unavailable', 'Email sending is not configured')
+    }
+
+    const { invoiceIds } = data as { invoiceIds: string[] }
+    if (!Array.isArray(invoiceIds) || invoiceIds.length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'invoiceIds is required')
+    }
+    if (invoiceIds.length > 500) {
+      throw new functions.https.HttpsError('invalid-argument', 'Maximum 500 reminders per send')
+    }
+
+    let sent = 0
+    let skipped = 0
+
+    for (let i = 0; i < invoiceIds.length; i += 30) {
+      const batch = invoiceIds.slice(i, i + 30)
+      const snap = await db.collection('Invoices')
+        .where('__name__', 'in', batch)
+        .where('companyId', '==', companyId)
+        .get()
+
+      for (const doc of snap.docs) {
+        const inv = doc.data()
+        const email = String(inv['customerEmail'] ?? '').trim()
+        if (!email || !email.includes('@')) { skipped++; continue }
+
+        const total = fmtMoney(lineItemsTotal(inv))
+        const dueDate = fmtDateShort(inv['dueDate'])
+        const invoiceNumber = String(inv['invoiceNumber'] ?? doc.id)
+        const shareToken = inv['shareToken'] ? String(inv['shareToken']) : ''
+        const link = shareToken ? `https://thelightui.web.app/i/${shareToken}` : ''
+
+        const subject = `Payment Reminder: Invoice ${invoiceNumber}`
+        const body = [
+          `Hi ${inv['customerName'] ?? ''},`,
+          '',
+          `This is a friendly reminder that invoice ${invoiceNumber} for ${total} is due${dueDate ? ` on ${dueDate}` : ''}.`,
+          link ? `You can view and pay it here: ${link}` : 'Please contact us if you have any questions.',
+        ].join('\n')
+
+        await sendAutomationEmail(apiKey, companyId, String(inv['customerId'] ?? ''), email, subject, body)
+        await doc.ref.update({ lastReminderSentAt: FieldValue.serverTimestamp() })
+        sent++
+
+        if (sent > 0 && sent % 10 === 0) await new Promise(r => setTimeout(r, 500))
+      }
+    }
+
+    return { sent, skipped }
+  })
+
+export const bulkSendProposalReminders = functions
+  .runWith({ secrets: ['RESEND_API_KEY'], timeoutSeconds: 300, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    }
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+    }
+    const apiKey = process.env.RESEND_API_KEY
+    if (!apiKey) {
+      throw new functions.https.HttpsError('unavailable', 'Email sending is not configured')
+    }
+
+    const { proposalIds } = data as { proposalIds: string[] }
+    if (!Array.isArray(proposalIds) || proposalIds.length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'proposalIds is required')
+    }
+    if (proposalIds.length > 500) {
+      throw new functions.https.HttpsError('invalid-argument', 'Maximum 500 reminders per send')
+    }
+
+    let sent = 0
+    let skipped = 0
+
+    for (let i = 0; i < proposalIds.length; i += 30) {
+      const batch = proposalIds.slice(i, i + 30)
+      const snap = await db.collection('Proposals')
+        .where('__name__', 'in', batch)
+        .where('companyId', '==', companyId)
+        .get()
+
+      for (const doc of snap.docs) {
+        const p = doc.data()
+        const email = String(p['customerEmail'] ?? '').trim()
+        if (!email || !email.includes('@')) { skipped++; continue }
+
+        const total = fmtMoney(lineItemsTotal(p))
+        const expires = fmtDateShort(p['expiresDate'])
+        const proposalNumber = String(p['proposalNumber'] ?? doc.id)
+        const shareToken = p['shareToken'] ? String(p['shareToken']) : ''
+        const link = shareToken ? `https://thelightui.web.app/p/${shareToken}` : ''
+
+        const subject = `Reminder: Proposal ${proposalNumber} awaiting your response`
+        const body = [
+          `Hi ${p['customerName'] ?? ''},`,
+          '',
+          `Just a reminder that proposal ${proposalNumber} for ${total} is still awaiting your response${expires ? `, and expires on ${expires}` : ''}.`,
+          link ? `You can review and respond here: ${link}` : 'Please contact us if you have any questions.',
+        ].join('\n')
+
+        await sendAutomationEmail(apiKey, companyId, String(p['customerId'] ?? ''), email, subject, body)
+        await doc.ref.update({ lastReminderSentAt: FieldValue.serverTimestamp() })
+        sent++
+
+        if (sent > 0 && sent % 10 === 0) await new Promise(r => setTimeout(r, 500))
+      }
+    }
+
+    return { sent, skipped }
+  })
+
 // ── Sequence runner ────────────────────────────────────────────────────────────
 // Runs daily at 9 AM ET. For each active enrollment whose nextRunAt has passed,
 // executes the current step (add note or set follow-up), then advances or completes.
@@ -1110,11 +1259,14 @@ export const runSequences = functions.pubsub
 
 // ── Automation Rules engine ─────────────────────────────────────────────────────
 // If/Then triggers authored in the `automationRules` collection. When a watched
-// field on a Customer or Invoice document changes (optionally to a specific
-// value), runs the rule's actions: set another field, add a note, set a
-// follow-up date, or send an email. Fires are recorded in `automationLog`.
+// field changes (optionally to a specific value) on a Customer, Invoice,
+// Service Request, Purchase Order, or Signing Request document, runs the
+// rule's actions: set another field, add a note, set a follow-up date, or
+// send an email. Service Requests / Purchase Orders / Signing Requests don't
+// carry their own comments/followUpDate/email, so their actions resolve to
+// the Customer record they're linked to. Fires are recorded in `automationLog`.
 
-type AutomationEntityType = 'customer' | 'invoice'
+type AutomationEntityType = 'customer' | 'invoice' | 'serviceRequest' | 'purchaseOrder' | 'signingRequest'
 
 interface AutomationTrigger {
   entityType: AutomationEntityType
@@ -1141,12 +1293,45 @@ interface AutomationRuleDoc {
   actions: AutomationAction[]
 }
 
-// Fields an automation is allowed to read a trigger from or write via set_field.
-// Kept server-side (not client-supplied) so a rule document can never be used to
-// overwrite protected fields like companyId.
-const AUTOMATION_FIELD_ALLOW: Record<AutomationEntityType, string[]> = {
-  customer: ['category', 'leadStatus', 'employeeStatus', 'paymentStatus', 'salesman', 'callback'],
-  invoice:  ['status'],
+// Entity types whose actions resolve to a linked Customer record rather than
+// the triggering document itself.
+const CUSTOMER_LINKED_TYPES = new Set<AutomationEntityType>(['serviceRequest', 'purchaseOrder', 'signingRequest'])
+
+// Fields an automation is allowed to read a trigger from. Kept server-side
+// (not client-supplied) so a rule document can never target arbitrary fields.
+const AUTOMATION_TRIGGER_FIELD_ALLOW: Record<AutomationEntityType, string[]> = {
+  customer:       ['category', 'leadStatus', 'employeeStatus', 'paymentStatus', 'salesman', 'callback'],
+  invoice:        ['status'],
+  serviceRequest: ['status'],
+  purchaseOrder:  ['status'],
+  signingRequest: ['status'],
+}
+
+// Fields a set_field action may write. Customer-linked source types always
+// write Customer fields, since that's the document actually being updated.
+function resolveActionFieldAllow(entityType: AutomationEntityType): string[] {
+  return (entityType === 'customer' || CUSTOMER_LINKED_TYPES.has(entityType))
+    ? AUTOMATION_TRIGGER_FIELD_ALLOW.customer
+    : AUTOMATION_TRIGGER_FIELD_ALLOW.invoice
+}
+
+// Resolves which Customer record a customer-linked source document's actions
+// should apply to. Service/Signing Requests carry customerId directly; a
+// Purchase Order links to a job (jobId) or, failing that, its vendor.
+function resolveTargetCustomerId(entityType: AutomationEntityType, after: Record<string, unknown>): string {
+  if (entityType === 'purchaseOrder') return String(after['jobId'] || after['vendorId'] || '')
+  return String(after['customerId'] ?? '')
+}
+
+function computeEntityLabel(
+  entityType: AutomationEntityType, entityId: string, after: Record<string, unknown>, first: string, lastname: string,
+): string {
+  if (entityType === 'customer')       return [first, lastname].filter(Boolean).join(' ') || entityId
+  if (entityType === 'invoice')        return String(after['invoiceNumber'] ?? entityId)
+  if (entityType === 'purchaseOrder')  return String(after['poNumber'] ?? entityId)
+  if (entityType === 'serviceRequest') return String(after['name'] ?? entityId)
+  const doc = after['document'] as Record<string, unknown> | undefined // signingRequest
+  return String(doc?.['customerName'] ?? entityId)
 }
 
 function automationMerge(s: string, ctx: Record<string, string>): string {
@@ -1197,13 +1382,15 @@ async function runAutomationsFor(
 
   if (rulesSnap.empty) return
 
-  const allowedFields = new Set(AUTOMATION_FIELD_ALLOW[entityType])
+  const triggerAllowedFields = new Set(AUTOMATION_TRIGGER_FIELD_ALLOW[entityType])
+  const actionAllowedFields  = new Set(resolveActionFieldAllow(entityType))
   const apiKey = process.env.RESEND_API_KEY
+  const isCustomerLinked = entityType === 'customer' || CUSTOMER_LINKED_TYPES.has(entityType)
 
   for (const ruleDoc of rulesSnap.docs) {
     const rule = ruleDoc.data() as AutomationRuleDoc
     const trigger = rule.trigger
-    if (!trigger || trigger.entityType !== entityType || !allowedFields.has(trigger.field)) continue
+    if (!trigger || trigger.entityType !== entityType || !triggerAllowedFields.has(trigger.field)) continue
 
     const beforeVal = String(before[trigger.field] ?? '')
     const afterVal  = String(after[trigger.field]  ?? '')
@@ -1212,42 +1399,56 @@ async function runAutomationsFor(
     const fired = trigger.type === 'any_change' ? true : afterVal === trigger.value
     if (!fired) continue
 
+    // Resolve the document actions actually write to: the triggering doc
+    // itself for customer/invoice, or its linked Customer for the other types.
+    let targetCollection = collectionName
+    let targetId = entityId
+    let targetData = after
+    if (CUSTOMER_LINKED_TYPES.has(entityType)) {
+      const custId = resolveTargetCustomerId(entityType, after)
+      if (!custId) continue
+      const custSnap = await db.collection('Customers').doc(custId).get()
+      if (!custSnap.exists) continue
+      targetCollection = 'Customers'
+      targetId = custId
+      targetData = custSnap.data() ?? {}
+    }
+
     const updates: Record<string, unknown> = {}
     const summaries: string[] = []
 
-    const first    = String(after['first']    ?? '')
-    const lastname = String(after['lastname'] ?? '')
-    const email    = String(after['email'] ?? after['customerEmail'] ?? '')
+    const first    = String(targetData['first']    ?? '')
+    const lastname = String(targetData['lastname'] ?? '')
+    const email    = String(targetData['email'] ?? targetData['customerEmail'] ?? '')
     const mergeCtx: Record<string, string> = {
       first, lastname,
-      city:     String(after['city']     ?? ''),
-      salesman: String(after['salesman'] ?? ''),
+      city:     String(targetData['city']     ?? ''),
+      salesman: String(targetData['salesman'] ?? ''),
     }
 
     for (const action of rule.actions ?? []) {
       try {
         if (action.type === 'set_field' && action.field
-            && action.field !== trigger.field
-            && allowedFields.has(action.field)) {
+            && !(action.field === trigger.field && targetCollection === collectionName)
+            && actionAllowedFields.has(action.field)) {
           updates[action.field] = action.value ?? ''
           summaries.push(`set ${action.field}="${action.value ?? ''}"`)
-        } else if (action.type === 'add_note' && entityType === 'customer') {
+        } else if (action.type === 'add_note' && isCustomerLinked) {
           const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
           const noteEntry = `--- [${dateStr}] ---\n[Automation: ${rule.name}] ${action.text ?? ''}`
-          const existing = String(after['comments'] ?? '')
+          const existing = String(targetData['comments'] ?? '')
           updates['comments'] = existing.trim() ? `${noteEntry}\n\n${existing}` : noteEntry
           summaries.push('added note')
-        } else if (action.type === 'set_followup_days' && entityType === 'customer') {
+        } else if (action.type === 'set_followup_days' && isCustomerLinked) {
           const due = new Date()
           due.setDate(due.getDate() + (action.days ?? 0))
           updates['followUpDate'] = Timestamp.fromDate(due)
           summaries.push(`follow-up in ${action.days ?? 0}d`)
         } else if (action.type === 'send_email' && apiKey && email) {
-          const customerId = entityType === 'customer' ? entityId : String(after['customerId'] ?? '')
           await sendAutomationEmail(
             apiKey,
             companyId,
-            customerId,
+            targetId,
             email,
             automationMerge(action.subject ?? '', mergeCtx),
             automationMerge(action.body    ?? '', mergeCtx),
@@ -1262,7 +1463,7 @@ async function runAutomationsFor(
     if (Object.keys(updates).length > 0) {
       updates['lastUpdate'] = Timestamp.now()
       updates['lastEditedByName'] = `Automation: ${rule.name}`
-      await db.collection(collectionName).doc(entityId).update(updates)
+      await db.collection(targetCollection).doc(targetId).update(updates)
     }
 
     await ruleDoc.ref.update({
@@ -1270,17 +1471,13 @@ async function runAutomationsFor(
       lastRunAt: FieldValue.serverTimestamp(),
     })
 
-    const entityLabel = entityType === 'customer'
-      ? ([first, lastname].filter(Boolean).join(' ') || entityId)
-      : String(after['invoiceNumber'] ?? entityId)
-
     await db.collection('automationLog').add({
       companyId,
       ruleId:   ruleDoc.id,
       ruleName: rule.name,
       entityType,
       entityId,
-      entityLabel,
+      entityLabel: computeEntityLabel(entityType, entityId, after, first, lastname),
       actionsSummary: summaries.join('; ') || 'no matching actions',
       ranAt: FieldValue.serverTimestamp(),
     })
@@ -1305,6 +1502,155 @@ export const onInvoiceAutomation = functions
     return null
   })
 
+export const onServiceRequestAutomation = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .firestore.document('serviceRequests/{id}')
+  .onUpdate(async (change, context) => {
+    const id = context.params.id as string
+    await runAutomationsFor('serviceRequest', 'serviceRequests', id, change.before.data() ?? {}, change.after.data() ?? {})
+    return null
+  })
+
+export const onServiceRequestCreated = functions.firestore
+  .document('serviceRequests/{id}')
+  .onCreate(async (snap, context) => {
+    const id = context.params.id as string
+    const data = snap.data() ?? {}
+    const companyId = String(data['companyId'] ?? '')
+    if (!companyId) return null
+    await dispatchWebhooks(companyId, 'serviceRequest.created', {
+      id, name: data['name'] ?? '', description: data['description'] ?? '', customerId: data['customerId'] ?? '',
+    })
+    await notifyCompany(
+      companyId, 'serviceRequest.created',
+      'New Service Request', String(data['name'] ?? 'A customer') + ' submitted a request', '/service-requests',
+    )
+    return null
+  })
+
+export const onPurchaseOrderAutomation = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .firestore.document('purchaseOrders/{id}')
+  .onUpdate(async (change, context) => {
+    const id = context.params.id as string
+    const before = change.before.data() ?? {}
+    const after  = change.after.data()  ?? {}
+    await runAutomationsFor('purchaseOrder', 'purchaseOrders', id, before, after)
+
+    const companyId = String(after['companyId'] ?? '')
+    if (companyId && before['status'] !== 'received' && after['status'] === 'received') {
+      await dispatchWebhooks(companyId, 'purchaseOrder.received', {
+        id, poNumber: after['poNumber'] ?? '', vendorId: after['vendorId'] ?? '', vendorName: after['vendorName'] ?? '',
+      })
+      await notifyCompany(
+        companyId, 'purchaseOrder.received',
+        'Purchase Order Received', `${after['poNumber'] ?? ''} from ${after['vendorName'] ?? 'vendor'}`, '/purchase-orders',
+      )
+    }
+    return null
+  })
+
+export const onSigningRequestAutomation = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .firestore.document('signingRequests/{id}')
+  .onUpdate(async (change, context) => {
+    const id = context.params.id as string
+    const before = change.before.data() ?? {}
+    const after  = change.after.data()  ?? {}
+    await runAutomationsFor('signingRequest', 'signingRequests', id, before, after)
+
+    const companyId = String(after['companyId'] ?? '')
+    if (companyId && before['status'] !== 'signed' && after['status'] === 'signed') {
+      const doc = after['document'] as Record<string, unknown> | undefined
+      await dispatchWebhooks(companyId, 'signingRequest.signed', {
+        id, customerId: after['customerId'] ?? '', customerName: doc?.['customerName'] ?? '', signerName: after['signerName'] ?? '',
+      })
+      await notifyCompany(
+        companyId, 'signingRequest.signed',
+        'Document Signed', `${doc?.['customerName'] ?? after['signerName'] ?? 'A customer'} signed a document`, '/signing-requests',
+      )
+    }
+    return null
+  })
+
+// ── Outbound Webhooks ──────────────────────────────────────────────────────────
+// Lets external tools (Zapier, custom integrations) subscribe to CRM events.
+// Subscriptions live in `webhookSubscriptions`, managed from the Integrations
+// page. Each delivery is HMAC-signed with the subscription's secret so the
+// receiver can verify it actually came from this app.
+
+type WebhookEventName =
+  | 'customer.created'
+  | 'invoice.created'
+  | 'invoice.paid'
+  | 'proposal.created'
+  | 'proposal.accepted'
+  | 'proposal.declined'
+  | 'purchaseOrder.received'
+  | 'serviceRequest.created'
+  | 'signingRequest.signed'
+
+// Writes a persistent in-app notification (bell icon) for the whole company.
+// Independent of webhook subscriptions — always fires for these events.
+async function notifyCompany(
+  companyId: string, type: WebhookEventName, title: string, body: string, linkTo: string,
+): Promise<void> {
+  await db.collection('notifications').add({
+    companyId, type, title, body, linkTo,
+    read: false,
+    createdAt: FieldValue.serverTimestamp(),
+  })
+}
+
+async function dispatchWebhooks(
+  companyId: string, event: WebhookEventName, data: Record<string, unknown>,
+): Promise<void> {
+  const subsSnap = await db.collection('webhookSubscriptions')
+    .where('companyId', '==', companyId)
+    .where('enabled', '==', true)
+    .get()
+  if (subsSnap.empty) return
+
+  const body = JSON.stringify({ event, companyId, data, timestamp: new Date().toISOString() })
+
+  for (const subDoc of subsSnap.docs) {
+    const sub = subDoc.data()
+    const events: unknown[] = Array.isArray(sub['events']) ? sub['events'] : []
+    if (!events.includes(event)) continue
+
+    const url = String(sub['url'] ?? '')
+    if (!url) continue
+    const secret = String(sub['secret'] ?? '')
+    const signature = createHmac('sha256', secret).update(body).digest('hex')
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-TheLight-Event': event,
+          'X-TheLight-Signature': signature,
+        },
+        body,
+      })
+      await subDoc.ref.update({
+        lastTriggeredAt: FieldValue.serverTimestamp(),
+        lastStatus: res.ok ? 'success' : 'failure',
+        lastError: res.ok ? null : `HTTP ${res.status}`,
+        failureCount: res.ok ? 0 : FieldValue.increment(1),
+      })
+    } catch (err) {
+      console.error(`Webhook delivery to ${url} failed:`, err)
+      await subDoc.ref.update({
+        lastTriggeredAt: FieldValue.serverTimestamp(),
+        lastStatus: 'failure',
+        lastError: err instanceof Error ? err.message : 'Unknown error',
+        failureCount: FieldValue.increment(1),
+      })
+    }
+  }
+}
+
 // ── Audit Log ────────────────────────────────────────────────────────────────────
 // Records who changed what on Customers/Invoices: creation, field-level updates
 // (diffed before vs after), and deletion. Attribution comes from createdByName /
@@ -1324,7 +1670,7 @@ function auditValueLabel(v: unknown): string {
 }
 
 async function auditDiff(
-  entityType: 'customer' | 'invoice',
+  entityType: 'customer' | 'invoice' | 'proposal',
   entityId: string,
   entityLabel: (d: Record<string, unknown>) => string,
   beforeExists: boolean, before: Record<string, unknown>,
@@ -1340,16 +1686,30 @@ async function auditDiff(
       action: 'created', changedBy, changes: [],
       createdAt: FieldValue.serverTimestamp(),
     })
+    if (entityType === 'customer') {
+      await dispatchWebhooks(companyId, 'customer.created', { id: entityId, name: entityLabel(after), category: after['category'] ?? '' })
+      // No in-app notification here — bulk CSV/JSON imports create many Customer
+      // docs at once and would flood the bell with one entry per record.
+    } else if (entityType === 'invoice') {
+      await dispatchWebhooks(companyId, 'invoice.created', { id: entityId, invoiceNumber: entityLabel(after), customerId: after['customerId'] ?? '' })
+      await notifyCompany(companyId, 'invoice.created', 'Invoice Created', entityLabel(after), `/invoices/${entityId}`)
+    } else if (entityType === 'proposal') {
+      await dispatchWebhooks(companyId, 'proposal.created', { id: entityId, proposalNumber: entityLabel(after), customerId: after['customerId'] ?? '' })
+    }
     return
   }
 
   if (beforeExists && !afterExists) {
     const companyId = String(before['companyId'] ?? '')
     if (!companyId) return
+    // The client stamps lastEditedByName immediately before calling delete
+    // (see deleteCustomer/deleteInvoice) specifically so this "before" snapshot
+    // — the only data left once the doc is gone — can attribute the deletion.
+    const changedBy = String(before['lastEditedByName'] ?? before['createdByName'] ?? 'Unknown')
     await db.collection('auditLog').add({
       companyId, entityType, entityId,
       entityLabel: entityLabel(before),
-      action: 'deleted', changedBy: 'Unknown', changes: [],
+      action: 'deleted', changedBy, changes: [],
       createdAt: FieldValue.serverTimestamp(),
     })
     return
@@ -1377,6 +1737,22 @@ async function auditDiff(
     action: 'updated', changedBy, changes,
     createdAt: FieldValue.serverTimestamp(),
   })
+
+  if (entityType === 'proposal') {
+    const statusChange = changes.find(c => c.field === 'status')
+    if (statusChange?.to === 'accepted') {
+      await dispatchWebhooks(companyId, 'proposal.accepted', { id: entityId, proposalNumber: entityLabel(after), customerId: after['customerId'] ?? '' })
+      await notifyCompany(companyId, 'proposal.accepted', 'Proposal Accepted', entityLabel(after), `/proposals/${entityId}`)
+    } else if (statusChange?.to === 'declined') {
+      await dispatchWebhooks(companyId, 'proposal.declined', { id: entityId, proposalNumber: entityLabel(after), customerId: after['customerId'] ?? '' })
+      await notifyCompany(companyId, 'proposal.declined', 'Proposal Declined', entityLabel(after), `/proposals/${entityId}`)
+    }
+  }
+
+  if (entityType === 'invoice' && changes.some(c => c.field === 'status' && c.to === 'paid')) {
+    await dispatchWebhooks(companyId, 'invoice.paid', { id: entityId, invoiceNumber: entityLabel(after), customerId: after['customerId'] ?? '' })
+    await notifyCompany(companyId, 'invoice.paid', 'Invoice Paid', entityLabel(after), `/invoices/${entityId}`)
+  }
 }
 
 export const onCustomerAudit = functions.firestore
@@ -1402,6 +1778,44 @@ export const onInvoiceAudit = functions.firestore
       change.before.exists, change.before.data() ?? {},
       change.after.exists, change.after.data() ?? {},
     )
+    return null
+  })
+
+export const onProposalAudit = functions.firestore
+  .document('Proposals/{id}')
+  .onWrite(async (change, context) => {
+    const id = context.params.id as string
+    await auditDiff(
+      'proposal', id,
+      d => String(d['proposalNumber'] ?? id),
+      change.before.exists, change.before.data() ?? {},
+      change.after.exists, change.after.data() ?? {},
+    )
+    return null
+  })
+
+// Customer clicks Accept/Decline on the public proposal page, which (per
+// firestore.rules) may only flip publicProposals/{token}.status from 'sent'
+// to 'accepted'/'declined'. That snapshot is a copy — this trigger mirrors
+// the response back onto the real Proposals doc, which is what the company
+// actually sees and where onProposalAudit fires the accepted/declined
+// notification + webhook.
+export const onProposalResponse = functions.firestore
+  .document('publicProposals/{token}')
+  .onUpdate(async (change) => {
+    const before = change.before.data()
+    const after = change.after.data()
+    if (before.status === after.status) return null
+    if (after.status !== 'accepted' && after.status !== 'declined') return null
+
+    const proposalId = String(after.proposalId ?? '')
+    if (!proposalId) return null
+
+    await db.collection('Proposals').doc(proposalId).update({
+      status: after.status,
+      respondedAt: FieldValue.serverTimestamp(),
+      lastEditedByName: after.status === 'accepted' ? 'Customer (accepted online)' : 'Customer (declined online)',
+    })
     return null
   })
 
@@ -1464,3 +1878,143 @@ export const emailInboundWebhook = functions
       res.status(500).send('error')
     }
   })
+
+// ── Inbound read API ──────────────────────────────────────────────────────────
+// Read-only REST API for external tools, authenticated with an API key
+// (Authorization: Bearer <key>) managed from the API Keys page. Only the
+// SHA-256 hash of a key is ever stored, so this endpoint hashes the incoming
+// key and looks up the matching `apiKeys` doc to resolve companyId + scopes —
+// every query below is additionally filtered by that companyId for isolation.
+
+function serializeCustomerForApi(doc: DocumentSnapshot): Record<string, unknown> {
+  const d = doc.data() ?? {}
+  return {
+    id: doc.id,
+    first: d['first'] ?? '', lastname: d['lastname'] ?? '',
+    email: d['email'] ?? '', phone: d['phone'] ?? '',
+    category: d['category'] ?? '', street: d['street'] ?? '', city: d['city'] ?? '',
+    state: d['state'] ?? '', zip: d['zip'] ?? '', amount: d['amount'] ?? 0,
+  }
+}
+
+function serializeInvoiceForApi(doc: DocumentSnapshot): Record<string, unknown> {
+  const d = doc.data() ?? {}
+  const issueDate = d['issueDate'] as Timestamp | undefined
+  const dueDate   = d['dueDate']   as Timestamp | undefined
+  return {
+    id: doc.id,
+    invoiceNumber: d['invoiceNumber'] ?? '', status: d['status'] ?? '',
+    customerId: d['customerId'] ?? '', customerName: d['customerName'] ?? '', customerEmail: d['customerEmail'] ?? '',
+    issueDate: issueDate?.toDate?.().toISOString() ?? null,
+    dueDate:   dueDate?.toDate?.().toISOString()   ?? null,
+    lineItems: d['lineItems'] ?? [], taxRate: d['taxRate'] ?? 0,
+  }
+}
+
+export const apiRead = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*')
+  if (req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Methods', 'GET')
+    res.set('Access-Control-Allow-Headers', 'Authorization')
+    res.status(204).send('')
+    return
+  }
+
+  const authHeader = req.get('Authorization') ?? ''
+  const rawKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
+  if (!rawKey) {
+    res.status(401).json({ error: 'Missing Authorization: Bearer <key> header' })
+    return
+  }
+
+  const keyHash = createHash('sha256').update(rawKey).digest('hex')
+  const keySnap = await db.collection('apiKeys').where('keyHash', '==', keyHash).limit(1).get()
+  if (keySnap.empty) {
+    res.status(401).json({ error: 'Invalid API key' })
+    return
+  }
+
+  const keyDoc = keySnap.docs[0]
+  const keyData = keyDoc.data()
+  if (keyData['enabled'] !== true) {
+    res.status(403).json({ error: 'API key has been revoked' })
+    return
+  }
+
+  const companyId = String(keyData['companyId'] ?? '')
+  const scopes: string[] = Array.isArray(keyData['scopes']) ? keyData['scopes'] : []
+  if (!companyId) {
+    res.status(500).json({ error: 'API key is missing a company' })
+    return
+  }
+  await keyDoc.ref.update({ lastUsedAt: FieldValue.serverTimestamp() })
+
+  const segments = req.path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
+  const [resource, sub] = segments
+
+  try {
+    if (resource === 'customers') {
+      if (!scopes.includes('customers.read')) {
+        res.status(403).json({ error: 'API key is missing scope: customers.read' })
+        return
+      }
+
+      if (sub === 'lookup') {
+        const email = String(req.query.email ?? '').trim().toLowerCase()
+        if (!email) {
+          res.status(400).json({ error: 'Provide ?email= to look up a customer' })
+          return
+        }
+        const snap = await db.collection('Customers')
+          .where('companyId', '==', companyId)
+          .where('email', '==', email)
+          .limit(5)
+          .get()
+        res.json({ data: snap.docs.map(serializeCustomerForApi) })
+        return
+      }
+
+      if (sub) {
+        const doc = await db.collection('Customers').doc(sub).get()
+        if (!doc.exists || doc.data()?.['companyId'] !== companyId) {
+          res.status(404).json({ error: 'Customer not found' })
+          return
+        }
+        res.json({ data: serializeCustomerForApi(doc) })
+        return
+      }
+
+      res.status(400).json({ error: 'Specify /customers/:id or /customers/lookup?email=' })
+      return
+    }
+
+    if (resource === 'invoices') {
+      if (!scopes.includes('invoices.read')) {
+        res.status(403).json({ error: 'API key is missing scope: invoices.read' })
+        return
+      }
+
+      if (sub) {
+        const doc = await db.collection('Invoices').doc(sub).get()
+        if (!doc.exists || doc.data()?.['companyId'] !== companyId) {
+          res.status(404).json({ error: 'Invoice not found' })
+          return
+        }
+        res.json({ data: serializeInvoiceForApi(doc) })
+        return
+      }
+
+      const status = req.query.status ? String(req.query.status) : null
+      let q = db.collection('Invoices').where('companyId', '==', companyId) as FirebaseFirestore.Query
+      if (status) q = q.where('status', '==', status)
+      const snap = await q.limit(50).get()
+      res.json({ data: snap.docs.map(serializeInvoiceForApi) })
+      return
+    }
+
+    res.status(404).json({ error: 'Unknown resource. Available: /customers, /invoices' })
+  } catch (err) {
+    console.error('apiRead error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})

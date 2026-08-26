@@ -10,6 +10,7 @@ import { usePrefStore } from '../stores/prefStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { useChatStore } from '../stores/chatStore'
 import StatCard from '../components/StatCard'
+import OnboardingChecklist from '../components/OnboardingChecklist'
 
 // Lazy-load recharts via SnapshotChart so the 115 KB recharts chunk is deferred
 // until the chart actually renders, not on every post-login dashboard load.
@@ -17,13 +18,20 @@ const SnapshotChart = lazy(() => import('../components/SnapshotChart'))
 import { esc } from '../utils/exportUtils'
 import { subscribeToTodos } from '../services/todoService'
 import { subscribeToExpensesToday } from '../services/expenseService'
-import { subscribeToFollowUps, subscribeToCustomers } from '../services/customerService'
+import { subscribeToFollowUps, subscribeToCustomers, REALTIME_LIMIT } from '../services/customerService'
 import { subscribeToAllActivities } from '../services/activityService'
 import { getGoals } from '../services/goalService'
 import { ACTIVITY_TYPES, type Activity } from '../models/activity'
 import { type GoalDoc, type GoalValues, type PeriodRange, emptyGoalValues, currentPeriodRange } from '../models/goal'
-import { type Stage, STAGE_CONFIG, endOfToday, getStage } from '../models/pipeline'
+import { endOfToday } from '../models/pipeline'
 import { type JobStage, JOB_STAGE_CONFIG, getJobStage } from '../models/jobPipeline'
+import { subscribeToPipelineStages } from '../services/pipelineStageService'
+import { DEFAULT_STAGES, STAGE_COLOR_CLASSES, effectiveStageId, type PipelineStageConfig } from '../models/pipelineStage'
+import { subscribeToProposals } from '../services/proposalService'
+import {
+  effectiveStatus as proposalEffectiveStatus, proposalTotal, fmtCurrency as fmtProposalCurrency,
+  type Proposal,
+} from '../models/proposal'
 import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
@@ -67,6 +75,10 @@ export default function DashboardPage() {
   const [activitiesLoading, setActivitiesLoading] = useState(true)
   const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
   const [allCustomersLoading, setAllCustomersLoading] = useState(true)
+  const [customersHitCap, setCustomersHitCap] = useState(false)
+  const [pipelineStages, setPipelineStages] = useState<PipelineStageConfig[]>(DEFAULT_STAGES)
+  const [proposals, setProposals] = useState<Proposal[]>([])
+  const [proposalsLoading, setProposalsLoading] = useState(true)
   const [goals, setGoals] = useState<GoalDoc | null>(null)
   const [chartOpen, setChartOpen] = useState(false)
   const user = useAuthStore(s => s.user)
@@ -119,8 +131,19 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!user) { setAllCustomersLoading(false); return }
     const unsub = subscribeToCustomers(
-      items => { setAllCustomers(items); setAllCustomersLoading(false) },
-      ()    => setAllCustomersLoading(false),
+      (items, hitCap) => { setAllCustomers(items); setCustomersHitCap(hitCap); setAllCustomersLoading(false) },
+      ()               => setAllCustomersLoading(false),
+    )
+    return unsub
+  }, [user, companyId])
+
+  useEffect(() => subscribeToPipelineStages(setPipelineStages, () => {}), [companyId])
+
+  useEffect(() => {
+    if (!user) { setProposalsLoading(false); return }
+    const unsub = subscribeToProposals(
+      items => { setProposals(items); setProposalsLoading(false) },
+      ()    => setProposalsLoading(false),
     )
     return unsub
   }, [user, companyId])
@@ -173,13 +196,30 @@ export default function DashboardPage() {
   }, [allCustomers, monthRange])
 
   const stageCounts = useMemo(() => {
-    const counts: Record<Stage, number> = { new: 0, contacted: 0, appointment: 0, won: 0, lost: 0 }
+    const counts: Record<string, number> = {}
+    for (const s of pipelineStages) counts[s.id] = 0
     for (const c of allCustomers) {
-      const stage = getStage(c)
-      if (stage) counts[stage]++
+      if (!(categoryMatches(c.category, 'Lead') || categoryMatches(c.category, 'Customer'))) continue
+      const id = effectiveStageId(c, pipelineStages)
+      counts[id] = (counts[id] ?? 0) + 1
     }
     return counts
-  }, [allCustomers])
+  }, [allCustomers, pipelineStages])
+
+  const proposalStats = useMemo(() => {
+    const sent     = proposals.filter(p => proposalEffectiveStatus(p) === 'sent')
+    const accepted = proposals.filter(p => proposalEffectiveStatus(p) === 'accepted')
+    const responded = proposals.filter(p => {
+      const s = proposalEffectiveStatus(p)
+      return s === 'accepted' || s === 'declined'
+    })
+    return {
+      pendingValue:  sent.reduce((s, p) => s + proposalTotal(p), 0),
+      acceptedValue: accepted.reduce((s, p) => s + proposalTotal(p), 0),
+      winRate:       responded.length > 0 ? Math.round((accepted.length / responded.length) * 100) : 0,
+      sentCount:     sent.length,
+    }
+  }, [proposals])
 
   const jobStageCounts = useMemo(() => {
     const now = new Date()
@@ -381,12 +421,25 @@ export default function DashboardPage() {
       )
     ) : ''
 
-    const pipelineTotal = STAGE_CONFIG.reduce((s, cfg) => s + stageCounts[cfg.id], 0)
+    const pipelineTotal = pipelineStages.reduce((s, cfg) => s + (stageCounts[cfg.id] ?? 0), 0)
     const pipelineSect = pipelineTotal > 0 ? section(
       'Pipeline', String(pipelineTotal),
       buildTable(
         ['Stage', 'Count'],
-        STAGE_CONFIG.map(cfg => [cfg.label, String(stageCounts[cfg.id])]),
+        pipelineStages.map(cfg => [cfg.label, String(stageCounts[cfg.id] ?? 0)]),
+      )
+    ) : ''
+
+    const proposalSect = proposals.length > 0 ? section(
+      'Proposals', `${proposalStats.winRate}% win rate`,
+      buildTable(
+        ['Metric', 'Value'],
+        [
+          ['Pending',         formatCurrency(proposalStats.pendingValue)],
+          ['Accepted Value',  formatCurrency(proposalStats.acceptedValue)],
+          ['Win Rate',        `${proposalStats.winRate}%`],
+          ['Awaiting Response', String(proposalStats.sentCount)],
+        ],
       )
     ) : ''
 
@@ -473,6 +526,7 @@ export default function DashboardPage() {
 
   ${goalsSect}
   ${pipelineSect}
+  ${proposalSect}
   ${jobPipelineSect}
   ${leadsSect}
   ${apptsSect}
@@ -522,6 +576,14 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <OnboardingChecklist />
+
+      {customersHitCap && (
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+          ⚠ These stats only reflect the first {REALTIME_LIMIT.toLocaleString()} customer records — contact support to raise this limit.
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm">
           {error}
@@ -566,10 +628,11 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Goals / Pipeline / Jobs Pipeline */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* Goals / Pipeline / Proposals / Jobs Pipeline */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <GoalsCard goals={goals} actuals={monthActuals} range={monthRange} loading={allCustomersLoading} />
-        <PipelineSummaryCard counts={stageCounts} loading={allCustomersLoading} />
+        <PipelineSummaryCard stages={pipelineStages} counts={stageCounts} loading={allCustomersLoading} />
+        <ProposalSummaryCard stats={proposalStats} loading={proposalsLoading} />
         <JobsPipelineSummaryCard counts={jobStageCounts} loading={allCustomersLoading} />
       </div>
 
@@ -1137,8 +1200,8 @@ function GoalsCard({
   )
 }
 
-function PipelineSummaryCard({ counts, loading }: { counts: Record<Stage, number>; loading: boolean }) {
-  const total = STAGE_CONFIG.reduce((s, cfg) => s + counts[cfg.id], 0)
+function PipelineSummaryCard({ stages, counts, loading }: { stages: PipelineStageConfig[]; counts: Record<string, number>; loading: boolean }) {
+  const total = stages.reduce((s, cfg) => s + (counts[cfg.id] ?? 0), 0)
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
@@ -1158,22 +1221,68 @@ function PipelineSummaryCard({ counts, loading }: { counts: Record<Stage, number
         ) : (
           <>
             <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
-              {STAGE_CONFIG.map(cfg => {
-                const count = counts[cfg.id]
+              {stages.map(cfg => {
+                const count = counts[cfg.id] ?? 0
                 if (count === 0) return null
-                return <div key={cfg.id} className={cfg.barClass} style={{ width: `${(count / total) * 100}%` }} />
+                return <div key={cfg.id} className={STAGE_COLOR_CLASSES[cfg.colorKey].bar} style={{ width: `${(count / total) * 100}%` }} />
               })}
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
-              {STAGE_CONFIG.map(cfg => (
+              {stages.map(cfg => (
                 <div key={cfg.id} className="flex items-center gap-1.5 text-xs">
-                  <span className={`w-2 h-2 rounded-full ${cfg.barClass}`} />
+                  <span className={`w-2 h-2 rounded-full ${STAGE_COLOR_CLASSES[cfg.colorKey].bar}`} />
                   <span className="text-gray-400">{cfg.label}</span>
-                  <span className={`font-semibold ${cfg.colorClass}`}>{counts[cfg.id]}</span>
+                  <span className={`font-semibold ${STAGE_COLOR_CLASSES[cfg.colorKey].text}`}>{counts[cfg.id] ?? 0}</span>
                 </div>
               ))}
             </div>
           </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ProposalSummaryCard({ stats, loading }: {
+  stats: { pendingValue: number; acceptedValue: number; winRate: number; sentCount: number }
+  loading: boolean
+}) {
+  const hasData = stats.pendingValue > 0 || stats.acceptedValue > 0 || stats.sentCount > 0
+  return (
+    <section className="h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-header mb-0 text-violet-400">Proposals</p>
+        <Link to="/proposals" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all →
+        </Link>
+      </div>
+      <div className="card p-4 flex-1 flex flex-col justify-start">
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : !hasData ? (
+          <p className="text-sm text-gray-500">No proposals yet</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-sm font-bold text-blue-400">{fmtProposalCurrency(stats.pendingValue)}</p>
+              <p className="text-xs text-gray-500">Pending</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-green-400">{fmtProposalCurrency(stats.acceptedValue)}</p>
+              <p className="text-xs text-gray-500">Accepted Value</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">{stats.winRate}%</p>
+              <p className="text-xs text-gray-500">Win Rate</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-amber-400">{stats.sentCount}</p>
+              <p className="text-xs text-gray-500">Awaiting Response</p>
+            </div>
+          </div>
         )}
       </div>
     </section>

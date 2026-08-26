@@ -16,10 +16,49 @@ function normalizeName(c: CustomerItem): string {
   return `${c.first.trim()} ${c.lastname.trim()}`.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+// Classic single-row Levenshtein edit distance.
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], row[j - 1])
+    }
+    prev = row
+  }
+  return prev[b.length]
+}
+
+type DupeReason = 'phone' | 'email' | 'name' | 'fuzzy-name'
+
+const REASON_LABEL: Record<DupeReason, string> = {
+  phone: 'Same Phone',
+  email: 'Same Email',
+  name: 'Same Name',
+  'fuzzy-name': 'Similar Name',
+}
+
+const REASON_BADGE: Record<DupeReason, string> = {
+  phone: 'bg-orange-900/40 text-orange-400',
+  email: 'bg-sky-900/40 text-sky-400',
+  name: 'bg-yellow-900/40 text-yellow-400',
+  'fuzzy-name': 'bg-violet-900/40 text-violet-400',
+}
+
 interface DupePair {
   key: string          // stable sorted ID pair
-  reason: 'phone' | 'name'
-  matchValue: string   // the shared phone / name
+  reason: DupeReason
+  matchValue: string   // the shared phone / email / name
+  similarity?: number  // 0-1, only set for fuzzy-name
   a: CustomerItem
   b: CustomerItem
 }
@@ -27,11 +66,12 @@ interface DupePair {
 function findDuplicates(items: CustomerItem[]): DupePair[] {
   const pairs = new Map<string, DupePair>()
 
-  function addPair(a: CustomerItem, b: CustomerItem, reason: 'phone' | 'name', matchValue: string) {
+  function addPair(a: CustomerItem, b: CustomerItem, reason: DupeReason, matchValue: string, similarity?: number) {
     const [id1, id2] = [a.id, b.id].sort()
     const key = `${id1}|${id2}`
-    if (!pairs.has(key)) {
-      pairs.set(key, { key, reason, matchValue, a, b })
+    // Exact matches (phone/email/name) take priority over a fuzzy-name guess for the same pair.
+    if (!pairs.has(key) || (pairs.get(key)!.reason === 'fuzzy-name' && reason !== 'fuzzy-name')) {
+      pairs.set(key, { key, reason, matchValue, similarity, a, b })
     }
   }
 
@@ -49,6 +89,24 @@ function findDuplicates(items: CustomerItem[]): DupePair[] {
     for (let i = 0; i < group.length; i++) {
       for (let j = i + 1; j < group.length; j++) {
         addPair(group[i], group[j], 'phone', phone)
+      }
+    }
+  }
+
+  // Email-based: group by lowercased email
+  const byEmail = new Map<string, CustomerItem[]>()
+  for (const c of items) {
+    const e = normalizeEmail(c.email)
+    if (!e.includes('@')) continue
+    const group = byEmail.get(e) ?? []
+    group.push(c)
+    byEmail.set(e, group)
+  }
+  for (const [email, group] of byEmail) {
+    if (group.length < 2) continue
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        addPair(group[i], group[j], 'email', email)
       }
     }
   }
@@ -71,8 +129,39 @@ function findDuplicates(items: CustomerItem[]): DupePair[] {
     }
   }
 
+  // Fuzzy name matching — catches typos ("Jonh"/"John") and nicknames that
+  // exact matching misses. Blocked by first letter of last name to keep the
+  // pairwise comparison count manageable on larger customer lists.
+  const blocks = new Map<string, CustomerItem[]>()
+  for (const c of items) {
+    const last = c.lastname.trim()
+    if (last.length < 2) continue
+    const key = last[0].toLowerCase()
+    const group = blocks.get(key) ?? []
+    group.push(c)
+    blocks.set(key, group)
+  }
+  for (const group of blocks.values()) {
+    if (group.length < 2) continue
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i], b = group[j]
+        const nameA = normalizeName(a), nameB = normalizeName(b)
+        if (!nameA || !nameB || nameA === nameB) continue
+        const maxLen = Math.max(nameA.length, nameB.length)
+        if (maxLen < 5) continue // too short to fuzzy-match reliably
+        const dist = levenshtein(nameA, nameB)
+        const similarity = 1 - dist / maxLen
+        if (dist > 0 && dist <= 3 && similarity >= 0.75) {
+          addPair(a, b, 'fuzzy-name', `${nameA} ≈ ${nameB}`, similarity)
+        }
+      }
+    }
+  }
+
+  const REASON_ORDER: Record<DupeReason, number> = { phone: 0, email: 1, name: 2, 'fuzzy-name': 3 }
   return [...pairs.values()].sort((a, b) => {
-    if (a.reason !== b.reason) return a.reason === 'phone' ? -1 : 1
+    if (a.reason !== b.reason) return REASON_ORDER[a.reason] - REASON_ORDER[b.reason]
     return a.matchValue.localeCompare(b.matchValue)
   })
 }
@@ -157,9 +246,10 @@ function computeMergeChanges(primary: CustomerItem, secondary: CustomerItem): {
 
 // ─── Field row ───────────────────────────────────────────────────────────────
 
-function RecordCard({ customer: c, highlight }: { customer: CustomerItem; highlight: 'phone' | 'name' }) {
+function RecordCard({ customer: c, highlight }: { customer: CustomerItem; highlight: DupeReason }) {
   const name     = fullName(c)
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
+  const nameHighlighted = highlight === 'name' || highlight === 'fuzzy-name'
 
   return (
     <div className="flex-1 min-w-0 bg-gray-800/50 rounded-xl p-3 space-y-2">
@@ -172,7 +262,7 @@ function RecordCard({ customer: c, highlight }: { customer: CustomerItem; highli
           )}
         </div>
         <div className="min-w-0">
-          <p className={`text-sm font-semibold truncate ${highlight === 'name' ? 'text-yellow-300' : 'text-gray-100'}`}>
+          <p className={`text-sm font-semibold truncate ${nameHighlighted ? 'text-yellow-300' : 'text-gray-100'}`}>
             {name || '—'}
           </p>
           <p className="text-xs text-gray-500 capitalize">{c.category}</p>
@@ -185,7 +275,11 @@ function RecordCard({ customer: c, highlight }: { customer: CustomerItem; highli
             📞 {c.phone}
           </p>
         )}
-        {c.email && <p className="text-gray-400 truncate">✉ {c.email}</p>}
+        {c.email && (
+          <p className={`truncate ${highlight === 'email' ? 'text-yellow-300 font-medium' : 'text-gray-400'}`}>
+            ✉ {c.email}
+          </p>
+        )}
         {c.salesman && <p className="text-gray-500 truncate">👤 {c.salesman}</p>}
         {c.amount > 0 && <p className="text-green-400">{formatCurrency(c.amount)}</p>}
         <p className="text-gray-600">
@@ -205,7 +299,7 @@ function RecordCard({ customer: c, highlight }: { customer: CustomerItem; highli
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-type FilterMode = 'all' | 'phone' | 'name'
+type FilterMode = 'all' | DupeReason
 
 export default function DuplicatesPage() {
   usePageTitle('Duplicates')
@@ -251,8 +345,11 @@ export default function DuplicatesPage() {
     return p
   }, [allPairs, dismissed, filter])
 
-  const phoneCount = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'phone').length
-  const nameCount  = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'name').length
+  const phoneCount     = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'phone').length
+  const emailCount     = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'email').length
+  const nameCount      = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'name').length
+  const fuzzyNameCount = allPairs.filter(d => !dismissed.has(d.key) && d.reason === 'fuzzy-name').length
+  const totalCount = phoneCount + emailCount + nameCount + fuzzyNameCount
 
   function dismiss(key: string) {
     const next = new Set(dismissed)
@@ -289,7 +386,7 @@ export default function DuplicatesPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Duplicate Detector</h1>
           <p className="text-sm text-gray-400 mt-0.5">
-            Records sharing the same phone number or name
+            Exact phone/email/name matches, plus fuzzy name matches that catch typos
           </p>
         </div>
         {dismissedCount > 0 && (
@@ -300,16 +397,18 @@ export default function DuplicatesPage() {
       </div>
 
       {/* Filter tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 overflow-x-auto scrollbar-none">
         {([
-          { id: 'all',   label: `All (${phoneCount + nameCount})` },
-          { id: 'phone', label: `Same Phone (${phoneCount})` },
-          { id: 'name',  label: `Same Name (${nameCount})` },
+          { id: 'all',        label: `All (${totalCount})` },
+          { id: 'phone',      label: `Same Phone (${phoneCount})` },
+          { id: 'email',      label: `Same Email (${emailCount})` },
+          { id: 'name',       label: `Same Name (${nameCount})` },
+          { id: 'fuzzy-name', label: `Similar Name (${fuzzyNameCount})` },
         ] as { id: FilterMode; label: string }[]).map(f => (
           <button
             key={f.id}
             onClick={() => setFilter(f.id)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+            className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
               filter === f.id
                 ? 'bg-indigo-600 text-white'
                 : 'bg-gray-800 text-gray-400 hover:text-gray-200'
@@ -342,15 +441,13 @@ export default function DuplicatesPage() {
               {/* Pair header */}
               <div className="flex items-center justify-between px-4 py-2.5 bg-gray-800/60 border-b border-gray-700/50">
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    pair.reason === 'phone'
-                      ? 'bg-orange-900/40 text-orange-400'
-                      : 'bg-yellow-900/40 text-yellow-400'
-                  }`}>
-                    {pair.reason === 'phone' ? 'Same Phone' : 'Same Name'}
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${REASON_BADGE[pair.reason]}`}>
+                    {REASON_LABEL[pair.reason]}
                   </span>
                   <span className="text-xs text-gray-500 truncate max-w-[180px]">
-                    {pair.matchValue}
+                    {pair.reason === 'fuzzy-name' && pair.similarity !== undefined
+                      ? `${Math.round(pair.similarity * 100)}% similar`
+                      : pair.matchValue}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
