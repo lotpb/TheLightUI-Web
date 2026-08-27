@@ -1911,6 +1911,33 @@ function serializeInvoiceForApi(doc: DocumentSnapshot): Record<string, unknown> 
   }
 }
 
+// Fixed-window rate limit: max REQUESTS_PER_WINDOW calls per API key per
+// WINDOW_MS. Counters live directly on the apiKeys doc (no new collection
+// needed) and are updated inside a transaction so concurrent requests from
+// the same key can't race past the limit.
+const API_RATE_LIMIT_WINDOW_MS = 60_000
+const API_RATE_LIMIT_PER_WINDOW = 60
+
+async function checkApiRateLimit(keyRef: FirebaseFirestore.DocumentReference): Promise<boolean> {
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(keyRef)
+    const data = snap.data() ?? {}
+    const windowStart = (data['rateLimitWindowStart'] as Timestamp | undefined)?.toMillis() ?? 0
+    const count = typeof data['rateLimitCount'] === 'number' ? data['rateLimitCount'] : 0
+    const now = Date.now()
+
+    if (now - windowStart > API_RATE_LIMIT_WINDOW_MS) {
+      tx.update(keyRef, { rateLimitWindowStart: Timestamp.fromMillis(now), rateLimitCount: 1 })
+      return true
+    }
+    if (count >= API_RATE_LIMIT_PER_WINDOW) {
+      return false
+    }
+    tx.update(keyRef, { rateLimitCount: count + 1 })
+    return true
+  })
+}
+
 export const apiRead = functions.https.onRequest(async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*')
   if (req.method === 'OPTIONS') {
@@ -1938,6 +1965,13 @@ export const apiRead = functions.https.onRequest(async (req, res) => {
   const keyData = keyDoc.data()
   if (keyData['enabled'] !== true) {
     res.status(403).json({ error: 'API key has been revoked' })
+    return
+  }
+
+  const withinLimit = await checkApiRateLimit(keyDoc.ref)
+  if (!withinLimit) {
+    res.set('Retry-After', String(API_RATE_LIMIT_WINDOW_MS / 1000))
+    res.status(429).json({ error: `Rate limit exceeded: max ${API_RATE_LIMIT_PER_WINDOW} requests per minute per API key` })
     return
   }
 

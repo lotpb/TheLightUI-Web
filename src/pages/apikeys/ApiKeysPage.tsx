@@ -201,6 +201,9 @@ export default function ApiKeysPage() {
         <p className="text-xs text-gray-500">
           Send the key as a bearer token: <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">Authorization: Bearer &lt;key&gt;</code>
         </p>
+        <p className="text-xs text-gray-500">
+          Rate limit: 60 requests per minute per key. Over the limit returns <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">429</code>.
+        </p>
         <div className="space-y-1.5 text-xs font-mono text-gray-400">
           <p><span className="text-indigo-400">GET</span> {API_BASE}/customers/lookup?email=jane@example.com</p>
           <p><span className="text-indigo-400">GET</span> {API_BASE}/customers/:id</p>
