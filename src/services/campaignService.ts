@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, getDoc,
-  onSnapshot, query, where, orderBy, writeBatch,
+  onSnapshot, query, where, orderBy, limit, writeBatch,
   serverTimestamp, Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -10,6 +10,10 @@ import type { CustomerItem } from '../models/customer'
 
 const CAMP_COL = 'campaigns'
 const RCPT_COL = 'campaignRecipients'
+
+// Safety cap for a single campaign's recipient list — a large blast could
+// otherwise load thousands of recipient docs into one listener at once.
+const RECIPIENT_REALTIME_LIMIT = 5_000
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -158,10 +162,16 @@ export function subscribeToRecipients(
     collection(db, RCPT_COL),
     where('campaignId', '==', campaignId),
     orderBy('sentAt', 'asc'),
+    limit(RECIPIENT_REALTIME_LIMIT),
   )
   return onSnapshot(
     q,
-    snap => onData(snap.docs.map(d => toRecipient(d.id, d.data()))),
+    snap => {
+      if (snap.size === RECIPIENT_REALTIME_LIMIT) {
+        console.warn(`[subscribeToRecipients] hit ${RECIPIENT_REALTIME_LIMIT}-document cap for campaign ${campaignId}.`)
+      }
+      onData(snap.docs.map(d => toRecipient(d.id, d.data())))
+    },
     onError,
   )
 }

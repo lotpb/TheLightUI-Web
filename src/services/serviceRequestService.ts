@@ -1,6 +1,6 @@
 import {
   collection, doc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, serverTimestamp,
+  onSnapshot, query, where, orderBy, limit, serverTimestamp,
   Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -8,6 +8,11 @@ import { getCompanyId } from '../stores/authStore'
 import type { ServiceRequest, ServiceRequestStatus } from '../models/serviceRequest'
 
 const COL = 'serviceRequests'
+
+// Safety cap for the real-time listener. Especially important here since
+// this collection accepts anonymous public submissions from the customer
+// portal — nothing stops it from growing unbounded.
+const REQUEST_REALTIME_LIMIT = 5_000
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -43,11 +48,17 @@ export function subscribeToServiceRequests(
     collection(db, COL),
     where('companyId', '==', companyId),
     orderBy('createdAt', 'desc'),
+    limit(REQUEST_REALTIME_LIMIT),
   )
 
   return onSnapshot(
     q,
-    snap => onData(snap.docs.map(d => toRequest(d.id, d.data()))),
+    snap => {
+      if (snap.size === REQUEST_REALTIME_LIMIT) {
+        console.warn(`[subscribeToServiceRequests] hit ${REQUEST_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
+      onData(snap.docs.map(d => toRequest(d.id, d.data())))
+    },
     onError,
   )
 }

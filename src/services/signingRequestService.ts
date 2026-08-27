@@ -1,6 +1,6 @@
 import {
   collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, serverTimestamp, Timestamp,
+  onSnapshot, query, where, orderBy, limit, serverTimestamp, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -9,6 +9,10 @@ import type { SigningRequest, SigningDocSnapshot, SigningStatus } from '../model
 import type { DocTemplateKind, DocSection } from '../models/docTemplate'
 
 const COL = 'signingRequests'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const SIGNING_REALTIME_LIMIT = 5_000
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -63,10 +67,16 @@ export function subscribeToSigningRequests(
     collection(db, COL),
     where('companyId', '==', companyId),
     orderBy('createdAt', 'desc'),
+    limit(SIGNING_REALTIME_LIMIT),
   )
   return onSnapshot(
     q,
-    snap => onData(snap.docs.map(d => toRequest(d.id, d.data()))),
+    snap => {
+      if (snap.size === SIGNING_REALTIME_LIMIT) {
+        console.warn(`[subscribeToSigningRequests] hit ${SIGNING_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
+      onData(snap.docs.map(d => toRequest(d.id, d.data())))
+    },
     onError,
   )
 }

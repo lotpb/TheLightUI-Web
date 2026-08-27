@@ -1,5 +1,5 @@
 import {
-  collection, query, where, onSnapshot,
+  collection, query, where, limit, onSnapshot,
   addDoc, deleteDoc, doc, serverTimestamp, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
@@ -8,6 +8,10 @@ import { getCompanyId } from '../stores/authStore'
 import type { Activity, ActivityType } from '../models/activity'
 
 const COL = 'Activities'
+
+// Safety cap for the company-wide activity feed — same reasoning as
+// customerService's REALTIME_LIMIT.
+const ACTIVITY_REALTIME_LIMIT = 5_000
 
 function docToActivity(id: string, data: Record<string, unknown>): Activity {
   return {
@@ -32,8 +36,11 @@ export function subscribeToAllActivities(
   const companyId = getCompanyId()
   if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(ACTIVITY_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === ACTIVITY_REALTIME_LIMIT) {
+        console.warn(`[subscribeToAllActivities] hit ${ACTIVITY_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const items: Activity[] = []
       for (const d of snap.docs) {
         try { items.push(docToActivity(d.id, d.data() as Record<string, unknown>)) } catch { /* skip */ }

@@ -1,12 +1,16 @@
 import {
   collection, doc, addDoc, deleteDoc,
-  onSnapshot, query, where, serverTimestamp,
+  onSnapshot, query, where, limit, serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 
 const COL = 'referrals'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const REFERRAL_REALTIME_LIMIT = 5_000
 
 export interface Referral {
   id: string
@@ -34,8 +38,11 @@ export function subscribeToReferrals(
   const companyId = getCompanyId()
   if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(REFERRAL_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === REFERRAL_REALTIME_LIMIT) {
+        console.warn(`[subscribeToReferrals] hit ${REFERRAL_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const items: Referral[] = snap.docs.map(d => {
         const r = d.data() as Record<string, unknown>
         return {

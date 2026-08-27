@@ -1,6 +1,6 @@
 import {
   collection, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, serverTimestamp, Timestamp,
+  onSnapshot, query, where, orderBy, limit, serverTimestamp, Timestamp,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
@@ -8,6 +8,12 @@ import type { LeadFormSettings, LeadSubmission, SubmissionStatus } from '../mode
 
 const FORMS_COL = 'leadForms'
 const SUBS_COL  = 'leadSubmissions'
+
+// Safety cap for the real-time listener. Especially important here since
+// this form accepts anonymous public submissions — nothing stops it from
+// growing unbounded the way an internal-only collection's growth is at
+// least gated by how many employees are entering records.
+const SUBMISSION_REALTIME_LIMIT = 5_000
 
 function toSettings(companyId: string, d: Record<string, unknown>): LeadFormSettings {
   return {
@@ -68,11 +74,17 @@ export function subscribeToLeadSubmissions(
     collection(db, SUBS_COL),
     where('companyId', '==', companyId),
     orderBy('submittedAt', 'desc'),
+    limit(SUBMISSION_REALTIME_LIMIT),
   )
 
   return onSnapshot(
     q,
-    snap => onData(snap.docs.map(d => toSubmission(d.id, d.data()))),
+    snap => {
+      if (snap.size === SUBMISSION_REALTIME_LIMIT) {
+        console.warn(`[subscribeToLeadSubmissions] hit ${SUBMISSION_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
+      onData(snap.docs.map(d => toSubmission(d.id, d.data())))
+    },
     onError,
   )
 }

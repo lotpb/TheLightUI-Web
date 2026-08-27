@@ -1,6 +1,6 @@
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, getDoc, getDocs, writeBatch, serverTimestamp, Timestamp, query, where,
+  doc, getDoc, getDocs, writeBatch, serverTimestamp, Timestamp, query, where, limit,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -9,6 +9,10 @@ import type { Todo } from '../models/todo'
 
 // Must match iOS ToDoFirestoreSchema.collection
 const COL = 'ToDoItems'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const TODO_REALTIME_LIMIT = 5_000
 
 function toDate(val: unknown): Date {
   if (val instanceof Timestamp) return val.toDate()
@@ -45,8 +49,11 @@ export function subscribeToTodos(
     return () => {}
   }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(TODO_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === TODO_REALTIME_LIMIT) {
+        console.warn(`[subscribeToTodos] hit ${TODO_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const todos: Todo[] = []
       for (const d of snap.docs) {
         try {

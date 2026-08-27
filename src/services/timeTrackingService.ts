@@ -1,12 +1,17 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, Timestamp, serverTimestamp,
+  onSnapshot, query, where, limit, Timestamp, serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 
 const COL = 'timeEntries'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT. Clock-in/out entries accumulate fast (one per employee per
+// shift), so this is one of the higher-risk collections for hitting scale.
+const TIME_ENTRY_REALTIME_LIMIT = 5_000
 
 export interface TimeEntry {
   id: string
@@ -48,8 +53,11 @@ export function subscribeToTimeEntries(
   const companyId = getCompanyId()
   if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(TIME_ENTRY_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === TIME_ENTRY_REALTIME_LIMIT) {
+        console.warn(`[subscribeToTimeEntries] hit ${TIME_ENTRY_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const entries: TimeEntry[] = []
       for (const s of snap.docs) {
         try { entries.push(docToEntry(s.id, s.data() as Record<string, unknown>)) } catch { }

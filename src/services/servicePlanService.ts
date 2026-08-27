@@ -1,6 +1,6 @@
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, serverTimestamp, Timestamp, query, where,
+  doc, serverTimestamp, Timestamp, query, where, limit,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -8,6 +8,10 @@ import { getCompanyId } from '../stores/authStore'
 import { advanceByFrequency, type ServicePlan, type ServicePlanFrequency } from '../models/servicePlan'
 
 const COL = 'ServicePlans'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const PLAN_REALTIME_LIMIT = 5_000
 
 function toDate(val: unknown): Date {
   if (val instanceof Timestamp) return val.toDate()
@@ -48,8 +52,11 @@ export function subscribeToServicePlans(
     return () => {}
   }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(PLAN_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === PLAN_REALTIME_LIMIT) {
+        console.warn(`[subscribeToServicePlans] hit ${PLAN_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const plans: ServicePlan[] = []
       for (const d of snap.docs) {
         try { plans.push(docToPlan(d.id, d.data() as Record<string, unknown>)) }

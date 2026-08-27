@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy,
+  onSnapshot, query, where, orderBy, limit,
   serverTimestamp, Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -8,6 +8,10 @@ import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { generatePONumber, type PurchaseOrder, type PurchaseOrderLineItem, type PurchaseOrderStatus } from '../models/purchaseOrder'
 
 const COL = 'purchaseOrders'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const PO_REALTIME_LIMIT = 5_000
 
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
@@ -53,11 +57,17 @@ export function subscribeToPurchaseOrders(
     collection(db, COL),
     where('companyId', '==', companyId),
     orderBy('createdAt', 'desc'),
+    limit(PO_REALTIME_LIMIT),
   )
 
   return onSnapshot(
     q,
-    snap => onData(snap.docs.map(d => toPO(d.id, d.data()))),
+    snap => {
+      if (snap.size === PO_REALTIME_LIMIT) {
+        console.warn(`[subscribeToPurchaseOrders] hit ${PO_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
+      onData(snap.docs.map(d => toPO(d.id, d.data())))
+    },
     onError,
   )
 }

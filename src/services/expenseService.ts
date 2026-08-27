@@ -1,6 +1,6 @@
 import {
   collection, doc, setDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy, Timestamp,
+  onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy, limit, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -8,6 +8,10 @@ import { expenseFromDoc, expenseToFirestore, type Expense } from '../models/expe
 import { getCompanyId } from '../stores/authStore'
 
 const COL = 'Expenses'
+
+// Safety cap for the real-time listener — same reasoning as customerService's
+// REALTIME_LIMIT.
+const EXPENSE_REALTIME_LIMIT = 5_000
 
 export function subscribeToExpenses(
   onData: (items: Expense[]) => void,
@@ -19,8 +23,11 @@ export function subscribeToExpenses(
     return () => {}
   }
   return onSnapshot(
-    query(collection(db, COL), where('companyId', '==', companyId)),
+    query(collection(db, COL), where('companyId', '==', companyId), limit(EXPENSE_REALTIME_LIMIT)),
     snap => {
+      if (snap.size === EXPENSE_REALTIME_LIMIT) {
+        console.warn(`[subscribeToExpenses] hit ${EXPENSE_REALTIME_LIMIT}-document cap for company ${companyId}.`)
+      }
       const items: Expense[] = []
       for (const d of snap.docs) {
         try { items.push(expenseFromDoc(d)) } catch { /* skip malformed */ }
