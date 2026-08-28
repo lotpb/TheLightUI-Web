@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, FieldValue, Timestamp, type DocumentSnapshot } from 'firebase-admin/firestore'
 import { getMessaging, type MulticastMessage } from 'firebase-admin/messaging'
-import { createHmac, createHash } from 'crypto'
+import { createHmac, createHash, randomUUID } from 'crypto'
 
 initializeApp()
 const db        = getFirestore()
@@ -320,7 +320,7 @@ export const adminListAllTeams = functions
       })
     }
 
-    const UNASSIGNED_KEY = ' unassigned'
+    const UNASSIGNED_KEY = 'unassigned'
 
     for (const doc of userDocs) {
       const d = doc.data()
@@ -621,6 +621,292 @@ export const stripeWebhook = functions
     }
 
     res.json({ received: true })
+  })
+
+// ── QuickBooks Online sync ───────────────────────────────────────────────────
+// One-way invoice push (CRM → QuickBooks), connected via OAuth2. Tokens live
+// in quickbooksTokens/{companyId} (Cloud-Functions-only, never exposed to the
+// client); connection *status* only (no secrets) mirrors to
+// companies/{companyId}/settings/quickbooksStatus so the client can show
+// "Connected" without ever seeing a token.
+//
+// Setup: register an app at https://developer.intuit.com, set its redirect
+// URI to https://us-central1-thelightui.cloudfunctions.net/quickbooksOAuthCallback,
+// and set secrets QUICKBOOKS_CLIENT_ID / QUICKBOOKS_CLIENT_SECRET. Optionally
+// set QUICKBOOKS_ENV=production once out of the sandbox (defaults to sandbox
+// so a misconfigured connection can't accidentally write into a real company).
+//
+// Scope note: this pushes each invoice as a single QuickBooks "Services" line
+// item per CRM line item (Amount overridden to match our qty*rate) rather
+// than mapping a full product/service catalog — a deliberate simplification,
+// not an oversight.
+
+const QUICKBOOKS_REDIRECT_URI = 'https://us-central1-thelightui.cloudfunctions.net/quickbooksOAuthCallback'
+
+function quickbooksApiBase(): string {
+  return process.env.QUICKBOOKS_ENV === 'production'
+    ? 'https://quickbooks.api.intuit.com'
+    : 'https://sandbox-quickbooks.api.intuit.com'
+}
+
+export const quickbooksConnect = functions
+  .runWith({ secrets: ['QUICKBOOKS_CLIENT_ID'] })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+
+    const clientId = process.env.QUICKBOOKS_CLIENT_ID
+    if (!clientId) throw new functions.https.HttpsError('unavailable', 'QuickBooks integration is not configured')
+
+    const state = randomUUID()
+    await db.collection('oauthStates').doc(state).set({
+      companyId, provider: 'quickbooks', createdAt: FieldValue.serverTimestamp(),
+    })
+
+    const url = 'https://appcenter.intuit.com/connect/oauth2?' + new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      scope: 'com.intuit.quickbooks.accounting',
+      redirect_uri: QUICKBOOKS_REDIRECT_URI,
+      state,
+    }).toString()
+
+    return { url }
+  })
+
+export const quickbooksOAuthCallback = functions
+  .runWith({ secrets: ['QUICKBOOKS_CLIENT_ID', 'QUICKBOOKS_CLIENT_SECRET'] })
+  .https.onRequest(async (req, res) => {
+    const { code, state, realmId } = req.query as Record<string, string>
+    try {
+      if (!code || !state || !realmId) throw new Error('Missing code/state/realmId')
+
+      const stateSnap = await db.collection('oauthStates').doc(state).get()
+      if (!stateSnap.exists) throw new Error('Invalid or expired state')
+      const companyId = String(stateSnap.data()?.['companyId'] ?? '')
+      await stateSnap.ref.delete()
+      if (!companyId) throw new Error('No company on state')
+
+      const clientId     = process.env.QUICKBOOKS_CLIENT_ID!
+      const clientSecret  = process.env.QUICKBOOKS_CLIENT_SECRET!
+
+      const tokenRes = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: QUICKBOOKS_REDIRECT_URI,
+        }).toString(),
+      })
+      if (!tokenRes.ok) throw new Error(`Token exchange failed: ${await tokenRes.text()}`)
+      const tokenJson = await tokenRes.json() as Record<string, unknown>
+
+      await db.collection('quickbooksTokens').doc(companyId).set({
+        accessToken:  String(tokenJson['access_token']  ?? ''),
+        refreshToken: String(tokenJson['refresh_token'] ?? ''),
+        realmId,
+        accessTokenExpiresAt: Timestamp.fromMillis(Date.now() + Number(tokenJson['expires_in'] ?? 3600) * 1000),
+      })
+      await db.collection('companies').doc(companyId).collection('settings').doc('quickbooksStatus').set({
+        connected: true, realmId, connectedAt: FieldValue.serverTimestamp(),
+      })
+
+      res.redirect(302, 'https://thelightui.web.app/quickbooks?connected=1')
+    } catch (err) {
+      console.error('quickbooksOAuthCallback error:', err)
+      res.redirect(302, 'https://thelightui.web.app/quickbooks?connected=0')
+    }
+  })
+
+export const quickbooksDisconnect = functions
+  .runWith({ secrets: ['QUICKBOOKS_CLIENT_ID', 'QUICKBOOKS_CLIENT_SECRET'] })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+
+    const tokenRef  = db.collection('quickbooksTokens').doc(companyId)
+    const tokenSnap = await tokenRef.get()
+    const refreshToken = String(tokenSnap.data()?.['refreshToken'] ?? '')
+    const clientId     = process.env.QUICKBOOKS_CLIENT_ID
+    const clientSecret  = process.env.QUICKBOOKS_CLIENT_SECRET
+
+    if (refreshToken && clientId && clientSecret) {
+      try {
+        await fetch('https://developer.api.intuit.com/v2/oauth2/tokens/revoke', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ token: refreshToken }),
+        })
+      } catch (err) {
+        console.error('quickbooksDisconnect: revoke failed (clearing local connection anyway):', err)
+      }
+    }
+
+    await tokenRef.delete()
+    await db.collection('companies').doc(companyId).collection('settings').doc('quickbooksStatus')
+      .set({ connected: false }, { merge: true })
+
+    return { success: true }
+  })
+
+async function getValidQuickBooksAccessToken(companyId: string): Promise<{ accessToken: string; realmId: string }> {
+  const ref  = db.collection('quickbooksTokens').doc(companyId)
+  const snap = await ref.get()
+  if (!snap.exists) throw new functions.https.HttpsError('failed-precondition', 'QuickBooks is not connected')
+  const data = snap.data() ?? {}
+  const realmId   = String(data['realmId'] ?? '')
+  const expiresAt = (data['accessTokenExpiresAt'] as Timestamp | undefined)?.toMillis() ?? 0
+
+  if (Date.now() < expiresAt - 60_000) {
+    return { accessToken: String(data['accessToken'] ?? ''), realmId }
+  }
+
+  const clientId     = process.env.QUICKBOOKS_CLIENT_ID
+  const clientSecret  = process.env.QUICKBOOKS_CLIENT_SECRET
+  if (!clientId || !clientSecret) throw new functions.https.HttpsError('unavailable', 'QuickBooks integration is not configured')
+
+  const res = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: String(data['refreshToken'] ?? '') }).toString(),
+  })
+  if (!res.ok) throw new functions.https.HttpsError('internal', `QuickBooks token refresh failed: ${await res.text()}`)
+  const json = await res.json() as Record<string, unknown>
+
+  const accessToken  = String(json['access_token']  ?? '')
+  const refreshToken = String(json['refresh_token'] ?? data['refreshToken'] ?? '')
+  await ref.update({
+    accessToken, refreshToken,
+    accessTokenExpiresAt: Timestamp.fromMillis(Date.now() + Number(json['expires_in'] ?? 3600) * 1000),
+  })
+  return { accessToken, realmId }
+}
+
+async function qbFetch(
+  accessToken: string, realmId: string, path: string, init?: { method?: string; body?: string },
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${quickbooksApiBase()}/v3/company/${realmId}${path}`, {
+    method: init?.method ?? 'GET',
+    body: init?.body,
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+  })
+  const json = await res.json() as Record<string, unknown>
+  if (!res.ok) throw new functions.https.HttpsError('internal', `QuickBooks API error: ${JSON.stringify(json)}`)
+  return json
+}
+
+async function findOrCreateQuickBooksCustomer(accessToken: string, realmId: string, displayName: string): Promise<string> {
+  const safeName = displayName.replace(/'/g, "\\'")
+  const query = await qbFetch(accessToken, realmId, `/query?query=${encodeURIComponent(`select Id from Customer where DisplayName = '${safeName}'`)}`)
+  const existing = (query['QueryResponse'] as Record<string, unknown> | undefined)?.['Customer'] as Record<string, unknown>[] | undefined
+  if (existing?.[0]?.['Id']) return String(existing[0]['Id'])
+
+  const created = await qbFetch(accessToken, realmId, '/customer', {
+    method: 'POST',
+    body: JSON.stringify({ DisplayName: displayName }),
+  })
+  return String((created['Customer'] as Record<string, unknown>)['Id'])
+}
+
+// Every pushed invoice line uses this one generic "Services" item — see the
+// scope note above the QuickBooks section header.
+async function findOrCreateQuickBooksServiceItem(accessToken: string, realmId: string): Promise<string> {
+  const query = await qbFetch(accessToken, realmId, `/query?query=${encodeURIComponent("select Id from Item where Name = 'Services'")}`)
+  const existing = (query['QueryResponse'] as Record<string, unknown> | undefined)?.['Item'] as Record<string, unknown>[] | undefined
+  if (existing?.[0]?.['Id']) return String(existing[0]['Id'])
+
+  const incomeAccountQuery = await qbFetch(accessToken, realmId, `/query?query=${encodeURIComponent("select Id from Account where AccountType = 'Income' maxresults 1")}`)
+  const incomeAccounts = (incomeAccountQuery['QueryResponse'] as Record<string, unknown> | undefined)?.['Account'] as Record<string, unknown>[] | undefined
+  if (!incomeAccounts?.[0]?.['Id']) {
+    throw new functions.https.HttpsError('failed-precondition', 'No income account found in QuickBooks to attach the default service item to')
+  }
+
+  const created = await qbFetch(accessToken, realmId, '/item', {
+    method: 'POST',
+    body: JSON.stringify({
+      Name: 'Services',
+      Type: 'Service',
+      IncomeAccountRef: { value: String(incomeAccounts[0]['Id']) },
+    }),
+  })
+  return String((created['Item'] as Record<string, unknown>)['Id'])
+}
+
+export const pushInvoiceToQuickBooks = functions
+  .runWith({ secrets: ['QUICKBOOKS_CLIENT_ID', 'QUICKBOOKS_CLIENT_SECRET'], timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+
+    const { invoiceId } = data as { invoiceId: string }
+    if (!invoiceId) throw new functions.https.HttpsError('invalid-argument', 'invoiceId is required')
+
+    const invSnap = await db.collection('Invoices').doc(invoiceId).get()
+    if (!invSnap.exists || invSnap.data()?.['companyId'] !== companyId) {
+      throw new functions.https.HttpsError('not-found', 'Invoice not found')
+    }
+    const inv = invSnap.data()!
+
+    const { accessToken, realmId } = await getValidQuickBooksAccessToken(companyId)
+
+    const customerName = String(inv['customerName'] ?? 'Customer')
+    const customerId = await findOrCreateQuickBooksCustomer(accessToken, realmId, customerName)
+    const itemId      = await findOrCreateQuickBooksServiceItem(accessToken, realmId)
+
+    const lineItems = Array.isArray(inv['lineItems']) ? inv['lineItems'] as Record<string, unknown>[] : []
+    const Line = lineItems.map(li => ({
+      DetailType: 'SalesItemLineDetail',
+      Amount: Number(li['qty'] ?? 0) * Number(li['rate'] ?? 0),
+      Description: String(li['description'] ?? ''),
+      SalesItemLineDetail: { ItemRef: { value: itemId } },
+    }))
+
+    const existingQbId = inv['quickbooksInvoiceId'] ? String(inv['quickbooksInvoiceId']) : ''
+    const body: Record<string, unknown> = {
+      CustomerRef: { value: customerId },
+      Line,
+      DocNumber: String(inv['invoiceNumber'] ?? '').slice(0, 21), // QuickBooks' DocNumber max length
+    }
+
+    let result: Record<string, unknown>
+    if (existingQbId) {
+      const existing = await qbFetch(accessToken, realmId, `/invoice/${existingQbId}`)
+      const syncToken = String((existing['Invoice'] as Record<string, unknown>)['SyncToken'] ?? '0')
+      result = await qbFetch(accessToken, realmId, '/invoice', {
+        method: 'POST',
+        body: JSON.stringify({ ...body, Id: existingQbId, SyncToken: syncToken, sparse: true }),
+      })
+    } else {
+      result = await qbFetch(accessToken, realmId, '/invoice', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+    }
+
+    const qbInvoice = result['Invoice'] as Record<string, unknown>
+    await invSnap.ref.update({ quickbooksInvoiceId: String(qbInvoice['Id']) })
+
+    return { quickbooksInvoiceId: String(qbInvoice['Id']) }
   })
 
 // ── AI Lead Scoring ────────────────────────────────────────────────────────────
@@ -1038,6 +1324,93 @@ export const bulkSendEmail = functions
     return { sent, skipped }
   })
 
+// ── SMS (Twilio) ─────────────────────────────────────────────────────────────
+// Two-way texting per customer. Sending goes through this callable; replies
+// and delivery updates arrive via smsInboundWebhook / smsStatusWebhook below.
+// Each company configures its own Twilio "from" number in
+// companies/{companyId}/settings/profile (field: smsNumber) so a single
+// Twilio account can serve multiple tenants.
+
+async function sendTwilioSms(
+  accountSid: string, authToken: string, from: string, to: string, body: string,
+): Promise<{ sid: string } | { error: string }> {
+  const params = new URLSearchParams({ From: from, To: to, Body: body })
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  })
+  const json = await res.json() as Record<string, unknown>
+  if (!res.ok) {
+    return { error: String(json['message'] ?? `Twilio error ${res.status}`) }
+  }
+  return { sid: String(json['sid'] ?? '') }
+}
+
+export const sendSms = functions
+  .runWith({ secrets: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+    }
+    const companyId = context.auth.token.companyId as string
+    if (!companyId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+    }
+
+    const accountSid = process.env.TWILIO_ACCOUNT_SID
+    const authToken  = process.env.TWILIO_AUTH_TOKEN
+    if (!accountSid || !authToken) {
+      throw new functions.https.HttpsError('unavailable', 'SMS sending is not configured')
+    }
+
+    const { customerId, body } = data as { customerId: string; body: string }
+    if (!customerId || !body?.trim()) {
+      throw new functions.https.HttpsError('invalid-argument', 'customerId and body are required')
+    }
+
+    const profileSnap = await db.collection('companies').doc(companyId).collection('settings').doc('profile').get()
+    const fromNumber = String(profileSnap.data()?.['smsNumber'] ?? '')
+    if (!fromNumber) {
+      throw new functions.https.HttpsError('failed-precondition', 'No SMS number configured for this company')
+    }
+
+    const custSnap = await db.collection('Customers').doc(customerId).get()
+    if (!custSnap.exists || custSnap.data()?.['companyId'] !== companyId) {
+      throw new functions.https.HttpsError('not-found', 'Customer not found')
+    }
+    const toNumber = String(custSnap.data()?.['phone'] ?? '').trim()
+    if (!toNumber) {
+      throw new functions.https.HttpsError('failed-precondition', 'This customer has no phone number on file')
+    }
+
+    const optOutSnap = await db.collection('smsOptOuts').doc(smsOptOutDocId(companyId, toNumber)).get()
+    if (optOutSnap.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'This customer has opted out of SMS')
+    }
+
+    const result = await sendTwilioSms(accountSid, authToken, fromNumber, toNumber, body)
+
+    await db.collection('smsMessages').add({
+      companyId, customerId,
+      direction: 'outbound',
+      fromNumber, toNumber, body,
+      status: 'error' in result ? 'failed' : 'sent',
+      errorMessage: 'error' in result ? result.error : '',
+      twilioSid: 'sid' in result ? result.sid : '',
+      createdAt: FieldValue.serverTimestamp(),
+      read: true,
+    })
+
+    if ('error' in result) {
+      throw new functions.https.HttpsError('internal', result.error)
+    }
+    return { sid: result.sid }
+  })
+
 // ── Bulk reminder emails (Invoices / Proposals) ─────────────────────────────────
 // Callable: reminds each selected record's customer by email. Skips records
 // with no email on file. Stamps lastReminderSentAt (already in
@@ -1186,9 +1559,67 @@ export const bulkSendProposalReminders = functions
     return { sent, skipped }
   })
 
+// ── Warranty expiration reminders ────────────────────────────────────────────
+// Runs daily. Emails the customer once when their warranty first enters the
+// 30-day expiration window — lastReminderSentAt gates it to a single send per
+// warranty, same pattern as the invoice/proposal reminder callables above.
+export const warrantyExpirationReminders = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .pubsub.schedule('0 9 * * *').timeZone('America/New_York')
+  .onRun(async () => {
+    const apiKey = process.env.RESEND_API_KEY
+    if (!apiKey) return null
+
+    const now = Timestamp.now()
+    const in30Days = Timestamp.fromMillis(now.toMillis() + 30 * 24 * 60 * 60 * 1000)
+
+    const snap = await db.collection('Warranties')
+      .where('isActive', '==', true)
+      .where('expirationDate', '<=', in30Days)
+      .get()
+
+    for (const doc of snap.docs) {
+      const w = doc.data()
+      if (w['lastReminderSentAt']) continue // already reminded once for this warranty
+      const expirationDate = w['expirationDate'] as Timestamp | undefined
+      if (!expirationDate || expirationDate.toMillis() < now.toMillis()) continue // already expired
+
+      const companyId  = String(w['companyId']  ?? '')
+      const customerId = String(w['customerId'] ?? '')
+      if (!companyId || !customerId) continue
+
+      try {
+        const custSnap = await db.collection('Customers').doc(customerId).get()
+        const email = String(custSnap.data()?.['email'] ?? '').trim()
+        if (!email || !email.includes('@')) continue
+
+        const title   = String(w['title'] ?? 'Your warranty')
+        const expDate = expirationDate.toDate().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+        const subject = `${title} is expiring soon`
+        const body = [
+          `Hi ${w['customerName'] ?? ''},`,
+          '',
+          `This is a reminder that "${title}" is set to expire on ${expDate}.`,
+          'Reach out if you would like to discuss renewal or coverage options.',
+        ].join('\n')
+
+        await sendAutomationEmail(apiKey, companyId, customerId, email, subject, body)
+        await doc.ref.update({ lastReminderSentAt: FieldValue.serverTimestamp() })
+      } catch (err) {
+        console.error(`warrantyExpirationReminders: failed for warranty ${doc.id}:`, err)
+      }
+    }
+
+    return null
+  })
+
 // ── Sequence runner ────────────────────────────────────────────────────────────
 // Runs daily at 9 AM ET. For each active enrollment whose nextRunAt has passed,
 // executes the current step (add note or set follow-up), then advances or completes.
+// DISABLED 2026-08-28 (unused feature, removed to avoid an idle Cloud Scheduler job
+// while on Blaze). Uncomment and redeploy with `firebase deploy --only functions:runSequences`
+// to re-enable.
+/*
 export const runSequences = functions.pubsub
   .schedule('0 9 * * *').timeZone('America/New_York')
   .onRun(async () => {
@@ -1256,6 +1687,7 @@ export const runSequences = functions.pubsub
     }
     return null
   })
+*/
 
 // ── Automation Rules engine ─────────────────────────────────────────────────────
 // If/Then triggers authored in the `automationRules` collection. When a watched
@@ -1830,9 +2262,212 @@ export const onProposalResponse = functions.firestore
 // NOTE: this handler parses a best-guess shape for the inbound payload (Resend's
 // inbound email webhook is still evolving) — check functions logs after the first
 // real webhook fires and adjust field names below if they don't line up.
-export const emailInboundWebhook = functions
+// Keeps a top-level companyId lookup in sync whenever a company sets/changes
+// its Twilio "from" number in companies/{companyId}/settings/profile, so
+// smsInboundWebhook can resolve the owning company in a single doc read
+// (Firestore has no way to query "which company doc has this field value"
+// without a collection-group index, which this sidesteps entirely).
+export const onCompanyProfileWrite = functions.firestore
+  .document('companies/{companyId}/settings/profile')
+  .onWrite(async (change, context) => {
+    const { companyId } = context.params as { companyId: string }
+    const before = change.before.exists ? String(change.before.data()?.['smsNumber'] ?? '') : ''
+    const after  = change.after.exists  ? String(change.after.data()?.['smsNumber']  ?? '') : ''
+    if (before === after) return null
+
+    if (before) await db.collection('smsNumberIndex').doc(before).delete().catch(() => {})
+    if (after)  await db.collection('smsNumberIndex').doc(after).set({ companyId })
+    return null
+  })
+
+// Validates Twilio's X-Twilio-Signature header per Twilio's documented
+// algorithm: HMAC-SHA1 (auth token as key) over the full request URL with
+// each POST param's key+value appended in sorted-key order, base64-encoded.
+function validateTwilioSignature(
+  authToken: string, url: string, params: Record<string, unknown>, signature: string,
+): boolean {
+  let data = url
+  for (const key of Object.keys(params).sort()) {
+    data += key + String(params[key])
+  }
+  const expected = createHmac('sha1', authToken).update(Buffer.from(data, 'utf-8')).digest('base64')
+  return expected === signature
+}
+
+function lastTenDigits(s: string): string {
+  return s.replace(/\D/g, '').slice(-10)
+}
+
+// SMS opt-out registry, keyed by company + phone (not just customerId) so a
+// number that texts STOP stays blocked even if it's later linked to a
+// different or newly-created customer record. Carrier-standard keywords per
+// the CTIA/TCPA short-code guidelines.
+const SMS_STOP_KEYWORDS  = ['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']
+const SMS_START_KEYWORDS = ['start', 'unstop']
+
+function smsOptOutDocId(companyId: string, phone: string): string {
+  return `${companyId}_${lastTenDigits(phone)}`
+}
+
+export const smsInboundWebhook = functions
+  .runWith({ secrets: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'] })
   .https.onRequest(async (req, res) => {
     try {
+      const authToken = process.env.TWILIO_AUTH_TOKEN
+      const signature = req.get('X-Twilio-Signature') ?? ''
+      const url = `https://${req.get('host')}${req.originalUrl}`
+      const params = (req.body ?? {}) as Record<string, unknown>
+
+      if (!authToken || !validateTwilioSignature(authToken, url, params, signature)) {
+        console.error('smsInboundWebhook: signature verification failed')
+        res.status(403).send('forbidden')
+        return
+      }
+
+      const fromNumber = String(params['From'] ?? '')
+      const toNumber   = String(params['To'] ?? '')
+      const body       = String(params['Body'] ?? '')
+      const messageSid = String(params['MessageSid'] ?? '')
+
+      if (!fromNumber || !toNumber) {
+        res.status(200).send('<Response></Response>')
+        return
+      }
+
+      const indexSnap = await db.collection('smsNumberIndex').doc(toNumber).get()
+      const companyId = String(indexSnap.data()?.['companyId'] ?? '')
+      if (!companyId) {
+        console.error('smsInboundWebhook: no company configured for number', toNumber)
+        res.status(200).send('<Response></Response>')
+        return
+      }
+
+      // Exact match first (fast path for E.164-formatted records), falling
+      // back to a bounded scan comparing last-10-digits for free-text phone
+      // formats like "(555) 123-4567".
+      let customerId = ''
+      const exactSnap = await db.collection('Customers')
+        .where('companyId', '==', companyId)
+        .where('phone', '==', fromNumber)
+        .limit(1)
+        .get()
+      if (!exactSnap.empty) {
+        customerId = exactSnap.docs[0].id
+      } else {
+        const target = lastTenDigits(fromNumber)
+        const scanSnap = await db.collection('Customers')
+          .where('companyId', '==', companyId)
+          .limit(2000)
+          .get()
+        const match = scanSnap.docs.find(d => lastTenDigits(String(d.data()['phone'] ?? '')) === target)
+        if (match) customerId = match.id
+      }
+
+      await db.collection('smsMessages').add({
+        companyId, customerId,
+        direction: 'inbound',
+        fromNumber, toNumber, body,
+        status: 'received',
+        errorMessage: '',
+        twilioSid: messageSid,
+        createdAt: FieldValue.serverTimestamp(),
+        read: false,
+      })
+
+      const normalizedBody = body.trim().toLowerCase()
+      const accountSid = process.env.TWILIO_ACCOUNT_SID
+      const optOutRef = db.collection('smsOptOuts').doc(smsOptOutDocId(companyId, fromNumber))
+
+      if (SMS_STOP_KEYWORDS.includes(normalizedBody)) {
+        await optOutRef.set({ companyId, phone: lastTenDigits(fromNumber), optedOutAt: FieldValue.serverTimestamp() })
+        if (customerId) await db.collection('Customers').doc(customerId).update({ smsOptOut: true })
+        if (accountSid && authToken) {
+          await sendTwilioSms(accountSid, authToken, toNumber, fromNumber, 'You have been unsubscribed and will not receive further texts. Reply START to resubscribe.')
+        }
+      } else if (SMS_START_KEYWORDS.includes(normalizedBody)) {
+        await optOutRef.delete()
+        if (customerId) await db.collection('Customers').doc(customerId).update({ smsOptOut: false })
+        if (accountSid && authToken) {
+          await sendTwilioSms(accountSid, authToken, toNumber, fromNumber, 'You have been resubscribed to text messages.')
+        }
+      }
+
+      res.set('Content-Type', 'text/xml')
+      res.status(200).send('<Response></Response>')
+    } catch (err) {
+      console.error('smsInboundWebhook error:', err)
+      res.status(500).send('error')
+    }
+  })
+
+// Twilio's status callback for messages sent via sendSms — updates the
+// matching smsMessages doc (looked up by twilioSid) as it moves through
+// queued/sent/delivered/failed.
+export const smsStatusWebhook = functions
+  .runWith({ secrets: ['TWILIO_AUTH_TOKEN'] })
+  .https.onRequest(async (req, res) => {
+    try {
+      const authToken = process.env.TWILIO_AUTH_TOKEN
+      const signature = req.get('X-Twilio-Signature') ?? ''
+      const url = `https://${req.get('host')}${req.originalUrl}`
+      const params = (req.body ?? {}) as Record<string, unknown>
+
+      if (!authToken || !validateTwilioSignature(authToken, url, params, signature)) {
+        console.error('smsStatusWebhook: signature verification failed')
+        res.status(403).send('forbidden')
+        return
+      }
+
+      const messageSid = String(params['MessageSid'] ?? '')
+      const status      = String(params['MessageStatus'] ?? '')
+      const errorMessage = String(params['ErrorMessage'] ?? '')
+      if (!messageSid || !status) { res.status(200).send('ok'); return }
+
+      const matchSnap = await db.collection('smsMessages').where('twilioSid', '==', messageSid).limit(1).get()
+      if (!matchSnap.empty) {
+        await matchSnap.docs[0].ref.update({ status, ...(errorMessage ? { errorMessage } : {}) })
+      }
+
+      res.status(200).send('ok')
+    } catch (err) {
+      console.error('smsStatusWebhook error:', err)
+      res.status(500).send('error')
+    }
+  })
+
+// Verifies Resend's webhook signature, which follows the Standard Webhooks /
+// Svix scheme: HMAC-SHA256 (the "whsec_..." secret, base64-decoded, as key)
+// over "{svix-id}.{svix-timestamp}.{rawBody}", compared against any of the
+// space-separated "v1,<sig>" values in the svix-signature header.
+function validateResendWebhookSignature(
+  secret: string, svixId: string, svixTimestamp: string, svixSignature: string, rawBody: Buffer,
+): boolean {
+  const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64')
+  const signedContent = `${svixId}.${svixTimestamp}.${rawBody.toString('utf-8')}`
+  const expected = createHmac('sha256', key).update(signedContent).digest('base64')
+  return svixSignature.split(' ').some(part => part.split(',')[1] === expected)
+}
+
+export const emailInboundWebhook = functions
+  .runWith({ secrets: ['RESEND_WEBHOOK_SECRET'] })
+  .https.onRequest(async (req, res) => {
+    try {
+      const webhookSecret = process.env.RESEND_WEBHOOK_SECRET
+      if (webhookSecret) {
+        const svixId        = req.get('svix-id') ?? ''
+        const svixTimestamp = req.get('svix-timestamp') ?? ''
+        const svixSignature = req.get('svix-signature') ?? ''
+        const verified = svixId && svixTimestamp && svixSignature
+          && validateResendWebhookSignature(webhookSecret, svixId, svixTimestamp, svixSignature, req.rawBody)
+        if (!verified) {
+          console.error('emailInboundWebhook: signature verification failed')
+          res.status(403).send('forbidden')
+          return
+        }
+      } else {
+        console.warn('RESEND_WEBHOOK_SECRET not set — accepting inbound webhook without signature verification.')
+      }
+
       const payload = (req.body?.data ?? req.body ?? {}) as Record<string, unknown>
 
       const toRaw = payload['to']
@@ -1908,6 +2543,7 @@ function serializeInvoiceForApi(doc: DocumentSnapshot): Record<string, unknown> 
     issueDate: issueDate?.toDate?.().toISOString() ?? null,
     dueDate:   dueDate?.toDate?.().toISOString()   ?? null,
     lineItems: d['lineItems'] ?? [], taxRate: d['taxRate'] ?? 0,
+    currency: d['currency'] ?? 'USD',
   }
 }
 
