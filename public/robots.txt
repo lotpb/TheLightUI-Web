@@ -1,5 +1,3 @@
 # TheLight CRM — private application, no public content to index.
 User-agent: *
 Disallow: /
-
-Sitemap: https://thelightui.web.app/sitemap.xml
