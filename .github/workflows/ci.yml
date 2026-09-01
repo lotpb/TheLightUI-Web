@@ -20,6 +20,23 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  rules:
+    name: Firestore rules (multi-tenancy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      # The Firestore emulator is a Java process.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run test:rules
+
   functions:
     name: Cloud Functions (typecheck)
     runs-on: ubuntu-latest

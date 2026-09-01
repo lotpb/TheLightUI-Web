@@ -201,7 +201,8 @@ service cloud.firestore {
     match /referrals/{referralId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow list:   if hasCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
@@ -215,11 +216,13 @@ service cloud.firestore {
     match /timeEntries/{entryId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow list:   if hasCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId() && !isViewer()
-                    && resource.data.get('companyId', '') == claimedCompanyId();
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
@@ -283,18 +286,30 @@ service cloud.firestore {
       // viewer/salesman) to write an invite doc, bypassing inviteUser's
       // owner/admin check entirely. Team management is owner/admin only.
       allow create: if hasCompanyId() && canManageTeam();
-      allow update: if isSignedIn() && resource.data.used == false;
+      // Consuming an invite (inviteService.acceptInvite) is the only client
+      // update, so it may touch only the consumption fields. Without the
+      // hasOnly() constraint any signed-in user could rewrite an unused
+      // invite's role or companyId and grant themselves owner in a company
+      // they don't belong to.
+      allow update: if isSignedIn()
+                    && resource.data.used == false
+                    && request.resource.data.role == resource.data.role
+                    && request.resource.data.companyId == resource.data.companyId
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['used', 'usedBy', 'usedByEmail', 'usedByName', 'usedAt']);
       allow delete: if false;
     }
 
     match /catalog/{itemId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
-      allow list:   if hasCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId() && !isViewer()
-                    && resource.data.get('companyId', '') == claimedCompanyId();
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
@@ -315,6 +330,25 @@ service cloud.firestore {
     //   All CRUD scoped to the caller's companyId claim.
     //
     match /ServicePlans/{planId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Warranties ─────────────────────────────────────────────────────────────
+    //
+    //   Coverage-period tracking per customer, with expiration reminders sent
+    //   by the warrantyExpirationReminders scheduled Cloud Function.
+    //
+    match /Warranties/{warrantyId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
@@ -352,7 +386,8 @@ service cloud.firestore {
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId() && !isViewer()
-                    && resource.data.get('companyId', '') == claimedCompanyId();
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
@@ -362,6 +397,27 @@ service cloud.firestore {
     //   All CRUD scoped to the caller's companyId claim.
     //
     match /Invoices/{invoiceId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    // ── Dispatch Board ────────────────────────────────────────────────────────
+    //
+    //   Scheduled visits (techs assigned to a job/service request/service plan
+    //   on a given day). Written directly by staff from the client, unlike the
+    //   internal provider-credential collections above — full CRUD scoped to
+    //   the caller's companyId claim, same pattern as Invoices.
+    //
+    match /dispatchAssignments/{assignmentId} {
       allow get:    if hasCompanyId()
                     && resource.data.get('companyId', '') == claimedCompanyId();
       allow list:   if hasCompanyId()
@@ -485,8 +541,14 @@ service cloud.firestore {
       allow create: if true;
       allow read: if hasCompanyId()
                   && resource.data.get('companyId', '') == claimedCompanyId();
-      allow update, delete: if hasCompanyId() && !isViewer()
-                            && resource.data.get('companyId', '') == claimedCompanyId();
+      // update and delete are split so the update branch can also pin the
+      // incoming companyId — a combined rule cannot, because a delete has no
+      // request.resource to check.
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
     // ── Document Templates ────────────────────────────────────────────────────
@@ -537,7 +599,8 @@ service cloud.firestore {
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId() && !isViewer()
-                    && resource.data.get('companyId', '') == claimedCompanyId();
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
@@ -674,6 +737,143 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
+    // ── SMS number → company lookup (internal) ────────────────────────────────
+    //
+    //   Maps a Twilio "from" number to the owning companyId so
+    //   smsInboundWebhook can resolve tenancy without a collection-group
+    //   query. Read/written only by Cloud Functions via the admin SDK.
+    //
+    match /smsNumberIndex/{number} {
+      allow read, write: if false;
+    }
+
+    // ── SMS opt-out registry (internal) ───────────────────────────────────────
+    //
+    //   Keyed by company + phone (not customerId) so a number that texts
+    //   STOP stays blocked even if it's later linked to a different or
+    //   newly-created customer record. Read/written only by Cloud Functions
+    //   via the admin SDK.
+    //
+    match /smsOptOuts/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── QuickBooks OAuth (internal) ────────────────────────────────────────────
+    //
+    //   quickbooksTokens holds live access/refresh tokens per company;
+    //   oauthStates is a short-lived correlation doc for the OAuth redirect
+    //   round-trip. Both are read/written only by Cloud Functions via the
+    //   admin SDK — never exposed to the client.
+    //
+    match /quickbooksTokens/{companyId} {
+      allow read, write: if false;
+    }
+    match /oauthStates/{state} {
+      allow read, write: if false;
+    }
+
+    // ── Stripe Connect (internal) ─────────────────────────────────────────────
+    //
+    //   Maps a company to its own connected Stripe account so
+    //   createStripeCheckout can create sessions that pay out directly to
+    //   that company's bank account instead of the platform's. The account id
+    //   itself isn't secret (same class of identifier as QuickBooks' realmId),
+    //   but this doc is still Functions-only for consistency with the other
+    //   provider-credential collections. The client-visible mirror lives at
+    //   companies/{companyId}/settings/stripeConnectStatus.
+    //
+    match /stripeConnectAccounts/{companyId} {
+      allow read, write: if false;
+    }
+
+    // ── Facebook Lead Ads (internal) ──────────────────────────────────────────
+    //
+    //   facebookTokens holds the long-lived user token plus one access token
+    //   per connected Page — never exposed to the client, which instead reads
+    //   the sanitised mirror at companies/{companyId}/settings/facebookStatus
+    //   (Page names and ids only, no tokens).
+    //
+    //   facebookPageIndex maps a Facebook pageId to the owning companyId so
+    //   facebookLeadWebhook can resolve tenancy in a single doc read (same
+    //   reasoning as smsNumberIndex above); it also carries that Page's rate
+    //   limit counters. facebookLeadgenIds is the idempotency ledger that stops
+    //   Meta's webhook retries from creating duplicate leads.
+    //
+    match /facebookTokens/{companyId} {
+      allow read, write: if false;
+    }
+    match /facebookPageIndex/{pageId} {
+      allow read, write: if false;
+    }
+    match /facebookLeadgenIds/{leadgenId} {
+      allow read, write: if false;
+    }
+
+    // Per-lead ingestion failures, surfaced read-only in the CRM so an admin
+    // can see which leads didn't make it. Written only by Cloud Functions.
+    match /facebookLeadErrors/{errorId} {
+      allow get:   if hasCompanyId()
+                   && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:  if hasCompanyId()
+                   && resource.data.companyId == claimedCompanyId();
+      allow write: if false;
+    }
+
+    // ── AI usage counters (internal) ──────────────────────────────────────────
+    //
+    //   Per-company daily draftReply quota tracking (see AI_DRAFTS_PER_DAY in
+    //   functions/src/index.ts). Read/written only by Cloud Functions via the
+    //   admin SDK — a client-writable counter would defeat the point of it.
+    //
+    match /aiUsage/{companyId} {
+      allow read, write: if false;
+    }
+
+    // ── Financing (internal + staff-readable) ─────────────────────────────────
+    //
+    //   financingCredentials holds the per-company provider API key — a loan
+    //   payout goes to that specific company's own bank account, so unlike the
+    //   platform-wide Stripe key this cannot be shared across companies. Never
+    //   exposed to the client, which instead reads the sanitised mirror at
+    //   companies/{companyId}/settings/financingStatus.
+    //
+    //   financingApplications is staff-readable (the detail page shows status)
+    //   but write-only-via-Cloud-Function — createFinancingApplication and
+    //   financingWebhook both use the admin SDK. generateShareToken (client
+    //   SDK) also needs a `get` here to carry the apply link/status forward
+    //   onto a regenerated public snapshot.
+    //
+    match /financingCredentials/{companyId} {
+      allow read, write: if false;
+    }
+    match /financingApplications/{applicationId} {
+      allow get:   if hasCompanyId()
+                   && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:  if hasCompanyId()
+                   && resource.data.companyId == claimedCompanyId();
+      allow write: if false;
+    }
+
+    // ── SMS Messages (two-way text sync) ──────────────────────────────────────
+    //
+    //   Sent + received texts, threaded per customer. Written only by Cloud
+    //   Functions (sendSms, smsInboundWebhook, smsStatusWebhook) via the admin
+    //   SDK, which bypasses these rules — so create is locked down.
+    //
+    match /smsMessages/{messageId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if false;
+      // update is a shared "mark read" flag, same reasoning as notifications above.
+      allow update: if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
     // ── Custom Field Definitions ──────────────────────────────────────────────
     //
     //   Company-defined extra fields on Customer records. All CRUD scoped to
@@ -773,7 +973,8 @@ service cloud.firestore {
       allow create: if hasCompanyId() && !isViewer()
                     && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow update: if hasCompanyId() && !isViewer()
-                    && resource.data.get('companyId', '') == claimedCompanyId();
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
