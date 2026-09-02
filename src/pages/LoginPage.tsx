@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { usePageTitle } from '../hooks/usePageTitle'
+import { IDLE_SIGNOUT_KEY } from '../hooks/useIdleTimeout'
 
 export default function LoginPage() {
   usePageTitle('Sign In')
@@ -11,8 +12,20 @@ export default function LoginPage() {
   const [resetMode, setResetMode] = useState(false)
   const [resetSent, setResetSent] = useState(false)
 
+  const [idleSignOut, setIdleSignOut] = useState(false)
+
   const { signIn, resetPassword, loading, error, clearError, user } = useAuthStore()
   const navigate = useNavigate()
+
+  // Read-and-clear so the notice shows once, on the tab that timed out.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(IDLE_SIGNOUT_KEY) === '1') {
+        sessionStorage.removeItem(IDLE_SIGNOUT_KEY)
+        setIdleSignOut(true)
+      }
+    } catch { /* ignore */ }
+  }, [])
 
   useEffect(() => {
     if (user) {
@@ -48,6 +61,14 @@ export default function LoginPage() {
         </div>
 
         <div className="card p-6">
+          {idleSignOut && !resetSent && (
+            <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg px-3 py-2.5 mb-4">
+              <p className="text-amber-200 text-sm">
+                You were signed out after 30 minutes of inactivity. Please sign in again.
+              </p>
+            </div>
+          )}
+
           {resetSent ? (
             <div className="text-center py-4">
               <div className="text-3xl mb-3">✉</div>

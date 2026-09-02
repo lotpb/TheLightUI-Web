@@ -5,9 +5,11 @@ import { usePermissions } from '../hooks/usePermissions'
 import { useChatStore } from '../stores/chatStore'
 import { useReminders } from '../hooks/useReminders'
 import { useInstallPrompt } from '../hooks/useInstallPrompt'
+import { useIdleTimeout, IDLE_SIGNOUT_KEY } from '../hooks/useIdleTimeout'
 import { subscribeToNotifications, markNotificationRead, markAllNotificationsRead } from '../services/notificationService'
 import type { AppNotification } from '../models/notification'
 import GlobalSearch from './GlobalSearch'
+import IdleWarningModal from './IdleWarningModal'
 import RemindersPanel from './RemindersPanel'
 
 // ─── Nav data ─────────────────────────────────────────────────────────────────
@@ -186,6 +188,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     await signOut()
     navigate('/login', { replace: true })
   }
+
+  // Idle session timeout — flag the reason first so the login screen can
+  // explain itself rather than looking like a random sign-out.
+  const handleIdleExpire = useCallback(async () => {
+    try { sessionStorage.setItem(IDLE_SIGNOUT_KEY, '1') } catch { /* ignore */ }
+    await signOut()
+    navigate('/login', { replace: true })
+  }, [signOut, navigate])
+
+  const { msRemaining, stayActive } = useIdleTimeout(Boolean(user), handleIdleExpire)
 
   const moreIsActive = pathname === '/menu' || !mobileTabs.some(item => pathname.startsWith(item.to))
 
@@ -580,6 +592,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </NavLink>
         </nav>
       </div>
+
+      {/* Idle timeout warning */}
+      {msRemaining !== null && (
+        <IdleWarningModal
+          secondsLeft={Math.ceil(msRemaining / 1000)}
+          onStay={stayActive}
+          onSignOut={handleSignOut}
+        />
+      )}
 
       {/* Global search modal */}
       {showSearch && <GlobalSearch onClose={closeSearch} />}
