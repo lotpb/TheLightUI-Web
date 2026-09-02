@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToCustomers } from '../../services/customerService'
 import type { CustomerItem } from '../../models/customer'
@@ -98,12 +99,13 @@ export default function ReportsPage() {
 
   const [all, setAll]             = useState<CustomerItem[]>([])
   const [loading, setLoading]     = useState(true)
+  const [hitCap, setHitCap] = useState(false)
   const [period, setPeriod]       = useState<Period>('month')
   const [smSort, setSmSort]       = useState<SalesmanSort>('revenue')
 
   useEffect(() => {
     const unsub = subscribeToCustomers(
-      items => { setAll(items); setLoading(false) },
+      (items, cap) => { setAll(items); setHitCap(!!cap); setLoading(false) },
       () => setLoading(false),
     )
     return unsub
@@ -213,6 +215,7 @@ export default function ReportsPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+      {hitCap && <PartialDataBanner totals />}
 
       {/* Header */}
       <div className="flex items-center justify-between">

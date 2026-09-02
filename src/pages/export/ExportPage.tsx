@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { subscribeToCustomers } from '../../services/customerService'
+import { subscribeToCustomers, getAllCustomersOnce } from '../../services/customerService'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import { subscribeToInvoices } from '../../services/invoiceService'
 import { subscribeToExpenses } from '../../services/expenseService'
 import { CATEGORIES, fullName, formatCurrency, type CustomerItem } from '../../models/customer'
@@ -120,6 +121,8 @@ export default function ExportPage() {
 
   const [tab, setTab] = useState<Tab>('contacts')
   const [customers,  setCustomers]  = useState<CustomerItem[]>([])
+  const [hitCap, setHitCap] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [invoices,   setInvoices]   = useState<Invoice[]>([])
   const [expenses,   setExpenses]   = useState<Expense[]>([])
 
@@ -143,7 +146,7 @@ export default function ExportPage() {
   const [expReimburse, setExpReimburse] = useState<'all' | 'yes' | 'no'>('all')
 
   useEffect(() => {
-    const u1 = subscribeToCustomers(setCustomers, () => {})
+    const u1 = subscribeToCustomers((items, cap) => { setCustomers(items); setHitCap(!!cap) }, () => {})
     const u2 = subscribeToInvoices(setInvoices, () => {})
     const u3 = subscribeToExpenses(setExpenses, () => {})
     return () => { u1(); u2(); u3() }
@@ -156,16 +159,32 @@ export default function ExportPage() {
     return Array.from(s).sort()
   }, [customers])
 
-  // Filtered contacts
-  const filteredContacts = useMemo(() => {
-    return customers.filter(c => {
-      if (catFilter !== 'all' && c.category.toLowerCase() !== catFilter.toLowerCase()) return false
-      if (activeFilter === 'active' && !c.isActive) return false
-      if (activeFilter === 'inactive' && c.isActive) return false
-      if (repFilter !== 'all' && c.salesman !== repFilter) return false
-      return true
-    })
-  }, [customers, catFilter, activeFilter, repFilter])
+  // Filtered contacts. The predicate is shared with the export handlers below
+  // so the file can never disagree with the preview.
+  const matchesContactFilters = useCallback((c: CustomerItem) => {
+    if (catFilter !== 'all' && c.category.toLowerCase() !== catFilter.toLowerCase()) return false
+    if (activeFilter === 'active' && !c.isActive) return false
+    if (activeFilter === 'inactive' && c.isActive) return false
+    if (repFilter !== 'all' && c.salesman !== repFilter) return false
+    return true
+  }, [catFilter, activeFilter, repFilter])
+
+  const filteredContacts = useMemo(
+    () => customers.filter(matchesContactFilters),
+    [customers, matchesContactFilters],
+  )
+
+  /**
+   * Contacts to actually write out. The on-screen list comes from a capped
+   * realtime subscription, so exporting from it would silently truncate the
+   * file for a large company. getAllCustomersOnce pages through every record
+   * with a cursor, which is what an export needs.
+   */
+  async function contactsToExport(): Promise<CustomerItem[]> {
+    if (!hitCap) return filteredContacts
+    const all = await getAllCustomersOnce()
+    return all.filter(matchesContactFilters)
+  }
 
   // Filtered invoices
   const filteredInvoices = useMemo(() => {
@@ -205,18 +224,28 @@ export default function ExportPage() {
 
   // ── Export handlers ──────────────────────────────────────────────────────────
 
-  function exportContactsCSV() {
-    const fields = CONTACT_FIELDS.filter(f => selectedFields.has(f.key))
-    const headers = fields.map(f => f.label)
-    const rows = filteredContacts.map(c => fields.map(f => getContactValue(c, f.key)))
-    downloadCSV(`contacts_${new Date().toISOString().slice(0,10)}.csv`, buildCSV(headers, rows))
+  async function exportContactsCSV() {
+    setExporting(true)
+    try {
+      const fields = CONTACT_FIELDS.filter(f => selectedFields.has(f.key))
+      const headers = fields.map(f => f.label)
+      const rows = (await contactsToExport()).map(c => fields.map(f => getContactValue(c, f.key)))
+      downloadCSV(`contacts_${new Date().toISOString().slice(0,10)}.csv`, buildCSV(headers, rows))
+    } finally {
+      setExporting(false)
+    }
   }
 
-  function printContacts() {
-    const fields = CONTACT_FIELDS.filter(f => selectedFields.has(f.key))
-    const headers = fields.map(f => f.label)
-    const rows = filteredContacts.map(c => fields.map(f => getContactValue(c, f.key)))
-    printTable(`Contacts${catFilter !== 'all' ? ` — ${catFilter}s` : ''}`, headers, rows)
+  async function printContacts() {
+    setExporting(true)
+    try {
+      const fields = CONTACT_FIELDS.filter(f => selectedFields.has(f.key))
+      const headers = fields.map(f => f.label)
+      const rows = (await contactsToExport()).map(c => fields.map(f => getContactValue(c, f.key)))
+      printTable(`Contacts${catFilter !== 'all' ? ` — ${catFilter}s` : ''}`, headers, rows)
+    } finally {
+      setExporting(false)
+    }
   }
 
   function exportInvoicesCSV() {
@@ -375,14 +404,25 @@ export default function ExportPage() {
             </div>
           </div>
 
+          {/* The count comes from the capped subscription, but the export itself
+              pages through every record — so say which is which rather than
+              letting the number imply the file will match it. */}
+          {hitCap && (
+            <PartialDataBanner detail="The count below is partial, but exporting still writes every matching record." />
+          )}
+
           {/* Preview + export */}
           <ExportActions
             count={filteredContacts.length}
             label="contacts"
             onCSV={exportContactsCSV}
             onPrint={printContacts}
-            disabled={filteredContacts.length === 0 || selectedFields.size === 0}
-            extraInfo={selectedFields.size === 0 ? 'Select at least one column' : undefined}
+            disabled={exporting || filteredContacts.length === 0 || selectedFields.size === 0}
+            extraInfo={
+              exporting ? 'Collecting every matching record…'
+              : selectedFields.size === 0 ? 'Select at least one column'
+              : undefined
+            }
           />
         </div>
       )}

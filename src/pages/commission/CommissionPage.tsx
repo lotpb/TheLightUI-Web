@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToCustomers } from '../../services/customerService'
 import type { CustomerItem } from '../../models/customer'
@@ -310,6 +311,7 @@ export default function CommissionPage() {
 
   const [all, setAll]         = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [hitCap, setHitCap] = useState(false)
   const [period, setPeriod]   = useState<Period>('month')
 
   const [structure, setStructure]   = useState<CommissionStructure>(DEFAULT_STRUCTURE)
@@ -341,7 +343,7 @@ export default function CommissionPage() {
   useEffect(() => {
     setLoading(true)
     const unsub = subscribeToCustomers(
-      items => { setAll(items); setLoading(false) },
+      (items, cap) => { setAll(items); setHitCap(!!cap); setLoading(false) },
       ()    => setLoading(false),
     )
     return unsub
@@ -433,6 +435,7 @@ export default function CommissionPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+      {hitCap && <PartialDataBanner totals />}
 
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">

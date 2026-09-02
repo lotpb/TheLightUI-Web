@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToCustomers, mergeCustomers } from '../../services/customerService'
@@ -307,6 +308,7 @@ export default function DuplicatesPage() {
   const toast = useToast()
   const [all, setAll]         = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [hitCap, setHitCap] = useState(false)
   const [filter, setFilter]   = useState<FilterMode>('all')
   const [mergeTarget, setMergeTarget] = useState<DupePair | null>(null)
   const [merging, setMerging] = useState(false)
@@ -331,7 +333,7 @@ export default function DuplicatesPage() {
   useEffect(() => {
     setLoading(true)
     const unsub = subscribeToCustomers(
-      items => { setAll(items); setLoading(false) },
+      (items, cap) => { setAll(items); setHitCap(!!cap); setLoading(false) },
       ()    => setLoading(false),
     )
     return unsub
@@ -381,6 +383,7 @@ export default function DuplicatesPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+      {hitCap && <PartialDataBanner totals />}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

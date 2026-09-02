@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, type TooltipProps,
@@ -93,13 +94,14 @@ export default function ForecastPage() {
 
   const [customers, setCustomers] = useState<CustomerItem[]>([])
   const [loading, setLoading]     = useState(true)
+  const [hitCap, setHitCap] = useState(false)
   const [period, setPeriod]       = useState<Period>('12m')
   const [fwdMonths, setFwdMonths] = useState<ForecastMonths>(6)
   const [repFilter, setRepFilter] = useState('all')
 
   useEffect(() => {
     const unsub = subscribeToCustomers(
-      list => { setCustomers(list); setLoading(false) },
+      (list, cap) => { setCustomers(list); setHitCap(!!cap); setLoading(false) },
       ()   => setLoading(false),
     )
     return unsub
@@ -211,6 +213,7 @@ export default function ForecastPage() {
     if (first === 0) return null
     return (second - first) / first * 100
   }, [histKeys, historicalMap])
+      {hitCap && <PartialDataBanner totals />}
 
   // Pipeline value — leads with an amount set
   const pipelineRecords = useMemo(() =>
