@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useParams, useLocation } from 'react-router-dom'
+import { useParams, useLocation, Link } from 'react-router-dom'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import {
@@ -309,6 +309,14 @@ function MessageBubble({ message: m, isFromMe }: { message: ChatMessage; isFromM
             }`}
           >
             {m.text}
+            {m.leadId && (
+              <Link
+                to={`/records/${m.leadId}`}
+                className="block mt-1.5 text-xs font-semibold text-indigo-300 hover:text-indigo-200 underline"
+              >
+                View lead →
+              </Link>
+            )}
           </div>
         )}
         <span className="text-xs text-gray-500 px-1">{time}</span>

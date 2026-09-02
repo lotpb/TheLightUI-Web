@@ -140,3 +140,28 @@ export async function signDocument(
 export async function deleteSigningRequest(token: string): Promise<void> {
   await deleteDoc(doc(db, COL, token))
 }
+
+// Per-customer scope for the detail page's Related Records. See the equivalent
+// in serviceRequestService for why there is no orderBy.
+export function subscribeToCustomerSigningRequests(
+  customerId: string,
+  onData:  (items: SigningRequest[]) => void,
+  onError: (e: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onData([]); return () => {} }
+
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const items = snap.docs.map(d => toRequest(d.id, d.data()))
+      items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      onData(items)
+    },
+    onError,
+  )
+}

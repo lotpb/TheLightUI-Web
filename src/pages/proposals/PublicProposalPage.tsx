@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { getPublicProposal, respondToProposal, type PublicProposalSnapshot } from '../../services/publicProposalService'
 import { fmtCurrency, lineItemTotal } from '../../models/proposal'
+import { isSafeHttpUrl } from '../../utils/safeUrl'
 
 function subtotal(p: PublicProposalSnapshot) {
   return p.lineItems.reduce((s, l) => s + lineItemTotal(l), 0)
@@ -117,6 +118,16 @@ export default function PublicProposalPage() {
       )}
 
       <div className="no-print" style={{ maxWidth: 680, margin: '0 auto 16px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        {proposal.financingApplyUrl && isSafeHttpUrl(proposal.financingApplyUrl) && (
+          <a
+            href={proposal.financingApplyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #6366f1', background: 'white', color: '#4f46e5', fontSize: 13, textDecoration: 'none', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            💰 {proposal.financingStatus && proposal.financingStatus !== 'created' ? 'View financing application' : 'See financing options'}
+          </a>
+        )}
         <button
           onClick={() => window.print()}
           style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', color: '#475569', fontSize: 13, cursor: 'pointer', fontWeight: 500 }}

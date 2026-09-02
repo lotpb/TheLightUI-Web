@@ -5,7 +5,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   subscribeToTeam, setMemberRole, removeTeamMember,
   memberDisplayName, type TeamMember,
-  isSuperAdminEmail, fetchAllCompaniesTeam, callableErrorMessage,
+  isSuperAdminEmail, fetchAllCompaniesTeam, callableErrorMessage, deleteOrphanCompany,
   type AllTeamsResult, type CompanyTeamGroup, type AllTeamsMember,
 } from '../../services/teamService'
 import { useAuthStore } from '../../stores/authStore'
@@ -226,11 +226,12 @@ function AllCompanyMemberRow({
 }
 
 function AllCompanyGroup({
-  group, myUid, coloredAvatars,
+  group, myUid, coloredAvatars, onDeleteOrphan,
 }: {
   group: CompanyTeamGroup
   myUid: string | undefined
   coloredAvatars: boolean
+  onDeleteOrphan: (group: CompanyTeamGroup) => void
 }) {
   const kindBadge = GROUP_KIND_BADGE[group.kind]
   return (
@@ -252,7 +253,17 @@ function AllCompanyGroup({
       </div>
 
       {group.ownerMissing && (
-        <p className="text-xs text-yellow-300 mb-2">Owner {group.ownerEmail || group.ownerUid} has no user record.</p>
+        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+          <p className="text-xs text-yellow-300">Owner {group.ownerEmail || group.ownerUid} has no user record.</p>
+          {group.kind === 'company' && group.memberCount === 0 && (
+            <button
+              onClick={() => onDeleteOrphan(group)}
+              className="text-xs text-red-400 hover:text-red-300 font-semibold shrink-0"
+            >
+              Delete orphan
+            </button>
+          )}
+        </div>
       )}
 
       {group.members.length === 0 ? (
@@ -293,6 +304,8 @@ export default function TeamPage() {
   const [allTeams, setAllTeams]     = useState<AllTeamsResult | null>(null)
   const [allLoading, setAllLoading] = useState(false)
   const [allError, setAllError]     = useState<string | null>(null)
+  const [confirmDeleteCompany, setConfirmDeleteCompany] = useState<CompanyTeamGroup | null>(null)
+  const [deletingCompany, setDeletingCompany] = useState(false)
 
   useEffect(() => {
     const unsub = subscribeToTeam(
@@ -328,6 +341,20 @@ export default function TeamPage() {
       toast(`${memberDisplayName(member)} is now ${newRole}.`, 'success')
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Role update failed', 'error')
+    }
+  }
+
+  async function handleDeleteOrphanCompany(group: CompanyTeamGroup) {
+    setDeletingCompany(true)
+    try {
+      await deleteOrphanCompany(group.companyId)
+      toast(`Deleted orphaned company ${group.name || group.companyId}.`, 'success')
+      setConfirmDeleteCompany(null)
+      await loadAllTeams()
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Delete failed', 'error')
+    } finally {
+      setDeletingCompany(false)
     }
   }
 
@@ -513,7 +540,13 @@ export default function TeamPage() {
                     )}
                     <div className="divide-y divide-gray-700/50">
                       {otherGroups.map(g => (
-                        <AllCompanyGroup key={g.companyId || g.kind} group={g} myUid={user?.uid} coloredAvatars={coloredAvats} />
+                        <AllCompanyGroup
+                          key={g.companyId || g.kind}
+                          group={g}
+                          myUid={user?.uid}
+                          coloredAvatars={coloredAvats}
+                          onDeleteOrphan={setConfirmDeleteCompany}
+                        />
                       ))}
                     </div>
                   </div>
@@ -585,6 +618,36 @@ export default function TeamPage() {
                 className="flex-1 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-40 transition-colors"
               >
                 {removing ? 'Removing…' : 'Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm delete orphan company modal */}
+      {confirmDeleteCompany && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <p className="text-white font-semibold mb-2">
+              Delete {confirmDeleteCompany.name || confirmDeleteCompany.companyId}?
+            </p>
+            <p className="text-sm text-gray-400 mb-5">
+              This permanently deletes the company record. The server re-checks it still has
+              zero users and zero customer records before deleting — it will refuse otherwise.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDeleteCompany(null)}
+                className="flex-1 btn-secondary py-2 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteOrphanCompany(confirmDeleteCompany)}
+                disabled={deletingCompany}
+                className="flex-1 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-40 transition-colors"
+              >
+                {deletingCompany ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>

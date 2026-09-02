@@ -144,13 +144,14 @@ export default function ServicePlansPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.title.trim() || !form.nextDate) return
+    if (!form.title.trim() || !form.nextDate || !form.customerId) return
     setSaving(true)
     const nextDate = new Date(form.nextDate)
     try {
       if (editPlan) {
         await updateServicePlan(
-          editPlan.id, form.title.trim(), form.frequency,
+          editPlan.id, form.customerId, form.customerName.trim() || form.customerQuery.trim(),
+          form.title.trim(), form.frequency,
           nextDate, form.notes.trim(), form.salesman.trim(),
           true,
         )
@@ -176,7 +177,7 @@ export default function ServicePlansPage() {
   }
 
   async function handleDeactivate(plan: ServicePlan) {
-    await updateServicePlan(plan.id, plan.title, plan.frequency, plan.nextDate, plan.notes, plan.salesman, false)
+    await updateServicePlan(plan.id, plan.customerId, plan.customerName, plan.title, plan.frequency, plan.nextDate, plan.notes, plan.salesman, false)
   }
 
   async function handleDelete(plan: ServicePlan) {
@@ -262,6 +263,9 @@ export default function ServicePlansPage() {
                 ))}
               </div>
             )}
+            {!form.customerId && form.customerQuery && (
+              <p className="text-xs text-red-400 mt-1">Select a customer from the list — typing a name alone won't link it.</p>
+            )}
           </div>
 
           <div>
@@ -301,7 +305,7 @@ export default function ServicePlansPage() {
 
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" onClick={closeForm} className="btn-secondary text-sm px-4 py-1.5">Cancel</button>
-            <button type="submit" disabled={saving} className="btn-primary text-sm px-4 py-1.5">
+            <button type="submit" disabled={saving || !form.customerId} className="btn-primary text-sm px-4 py-1.5">
               {saving ? 'Saving…' : editPlan ? 'Save Changes' : 'Create Plan'}
             </button>
           </div>

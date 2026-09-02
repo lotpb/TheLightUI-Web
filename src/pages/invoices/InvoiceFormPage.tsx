@@ -7,7 +7,7 @@ import { subscribeToCatalog } from '../../services/catalogService'
 import { categoryMatches, fullName, type CustomerItem } from '../../models/customer'
 import type { CatalogItem } from '../../models/catalogItem'
 import {
-  fmtCurrency, generateInvoiceNumber, lineItemTotal,
+  fmtCurrency, generateInvoiceNumber, lineItemTotal, CURRENCY_CODES,
   type Invoice, type InvoiceLineItem, type RecurringInterval,
 } from '../../models/invoice'
 import { useAuthStore } from '../../stores/authStore'
@@ -68,6 +68,7 @@ export default function InvoiceFormPage() {
   const [dueDate,         setDueDate]         = useState(dateToInput(dueDefault()))
   const [lineItems,       setLineItems]       = useState<InvoiceLineItem[]>([emptyLine()])
   const [taxRate,         setTaxRate]         = useState(0)
+  const [currency,        setCurrency]        = useState('USD')
   const [notes,           setNotes]           = useState('')
   const [recurring,       setRecurring]       = useState<RecurringInterval | null>(null)
   const [nextRecurDate,   setNextRecurDate]   = useState(dateToInput(dueDefault()))
@@ -111,6 +112,7 @@ export default function InvoiceFormPage() {
       setDueDate(dateToInput(inv.dueDate))
       setLineItems(inv.lineItems.length ? inv.lineItems : [emptyLine()])
       setTaxRate(inv.taxRate)
+      setCurrency(inv.currency || 'USD')
       setNotes(inv.notes)
       setRecurring(inv.recurring ?? null)
       if (inv.nextRecurDate) setNextRecurDate(dateToInput(inv.nextRecurDate))
@@ -188,7 +190,12 @@ export default function InvoiceFormPage() {
   }
 
   function addFromCatalog(item: CatalogItem) {
-    setLineItems(prev => [...prev, { description: item.name + (item.description ? ` — ${item.description}` : ''), qty: 1, rate: item.price }])
+    setLineItems(prev => [...prev, {
+      description: item.name + (item.description ? ` — ${item.description}` : ''),
+      qty: 1,
+      rate: item.price,
+      catalogItemId: item.id,
+    }])
     setShowCatalog(false)
     setCatalogQuery('')
   }
@@ -229,6 +236,7 @@ export default function InvoiceFormPage() {
       lineItems,
       notes,
       taxRate,
+      currency,
       recurring,
       nextRecurDate: recurring ? inputToDate(nextRecurDate) : null,
     }
@@ -434,7 +442,7 @@ export default function InvoiceFormPage() {
                 className="input-field w-24 text-sm py-1.5 text-right"
               />
               <p className="w-20 text-sm font-medium text-gray-300 text-right shrink-0">
-                {fmtCurrency(lineItemTotal(item))}
+                {fmtCurrency(lineItemTotal(item), currency)}
               </p>
               <button
                 onClick={() => removeLine(idx)}
@@ -451,9 +459,19 @@ export default function InvoiceFormPage() {
 
         {/* Totals */}
         <div className="px-4 py-3 border-t border-gray-700/50 bg-gray-800/30 space-y-1.5">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-gray-400">Currency</span>
+            <select
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              className="input-field w-24 text-sm py-0.5"
+            >
+              {CURRENCY_CODES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
           <div className="flex justify-between text-sm text-gray-400">
             <span>Subtotal</span>
-            <span>{fmtCurrency(subtotal)}</span>
+            <span>{fmtCurrency(subtotal, currency)}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -470,11 +488,11 @@ export default function InvoiceFormPage() {
               />
               <span className="text-sm text-gray-500">%</span>
             </div>
-            <span className="text-sm text-gray-400">{fmtCurrency(taxAmt)}</span>
+            <span className="text-sm text-gray-400">{fmtCurrency(taxAmt, currency)}</span>
           </div>
           <div className="flex justify-between text-base font-bold text-white border-t border-gray-700/50 pt-1.5 mt-1">
             <span>Total</span>
-            <span>{fmtCurrency(total)}</span>
+            <span>{fmtCurrency(total, currency)}</span>
           </div>
         </div>
       </div>

@@ -18,6 +18,9 @@ export interface ChatMessage {
   text: string
   timestamp: Date
   messageType: ChatMessageType
+  // Set only on automated "lead assigned" system messages (onCustomerAssigned
+  // Cloud Function) — lets the chat UI render a direct link to the record.
+  leadId?: string
 }
 
 export interface RecentMessage {
@@ -67,6 +70,7 @@ export function chatMessageFromDoc(doc: QueryDocumentSnapshot): ChatMessage {
     text: s(d, 'text'),
     timestamp: ts(d['timestamp']),
     messageType: rawType === 'image' ? 'image' : 'text',
+    leadId: s(d, 'leadId') || undefined,
   }
 }
 

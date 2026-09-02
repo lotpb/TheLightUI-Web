@@ -27,6 +27,7 @@ export interface Proposal {
   respondedAt?: Date | null
   convertedInvoiceId?: string | null
   lastReminderSentAt?: Date | null
+  financingApplicationId?: string | null
 }
 
 export function lineItemTotal(item: ProposalLineItem): number {

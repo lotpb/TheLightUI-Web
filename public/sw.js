@@ -1,6 +1,6 @@
 // Bump this string whenever you want to force-evict old caches on next deploy.
 // The activate handler deletes every cache whose name is not CACHE.
-const CACHE = 'thelight-v3'
+const CACHE = 'thelight-v4'
 
 // ── Firebase Cloud Messaging (background push) ──────────────────────────────
 // This app registers its own sw.js (instead of the default firebase-messaging-sw.js),
@@ -24,12 +24,19 @@ firebase.messaging()
 
 self.addEventListener('notificationclick', event => {
   event.notification.close()
+  // onLeadCreated / onCustomerAssigned both put a leadId in the FCM payload's
+  // `data` field so the click can jump straight to the record instead of '/'.
+  const leadId = event.notification.data && event.notification.data.leadId
+  const path = leadId ? `/records/${leadId}` : '/'
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
       for (const client of clientList) {
+        if ('navigate' in client) {
+          return client.navigate(new URL(path, self.location.origin).href).then(c => c && c.focus())
+        }
         if ('focus' in client) return client.focus()
       }
-      if (self.clients.openWindow) return self.clients.openWindow('/')
+      if (self.clients.openWindow) return self.clients.openWindow(path)
     })
   )
 })

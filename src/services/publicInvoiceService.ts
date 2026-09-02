@@ -28,12 +28,15 @@ export interface PublicInvoiceSnapshot {
   lineItems: InvoiceLineItem[]
   notes: string
   taxRate: number
+  currency: string
   coName: string
   coAddress: string
   coPhone: string
   coEmail: string
   sharedAt: Date
   paymentLink: string | null
+  financingApplyUrl: string | null
+  financingStatus: string | null
 }
 
 function toDate(v: unknown): Date {
@@ -53,6 +56,21 @@ export async function generateShareToken(
 
   const token = invoice.shareToken ?? crypto.randomUUID()
 
+  // Re-sharing an invoice that already has a financing application must not
+  // wipe the apply link/status off the snapshot — setDoc below replaces the
+  // whole doc, so pull the current values forward from the application
+  // record rather than defaulting them to null on every regeneration.
+  let financingApplyUrl: string | null = null
+  let financingStatus: string | null = null
+  if (invoice.financingApplicationId) {
+    const appSnap = await getDoc(doc(db, 'financingApplications', invoice.financingApplicationId))
+    if (appSnap.exists()) {
+      const appData = appSnap.data()
+      financingApplyUrl = appData.applyUrl ? String(appData.applyUrl) : null
+      financingStatus   = appData.status   ? String(appData.status)   : null
+    }
+  }
+
   await setDoc(doc(db, PUBLIC_COL, token), {
     invoiceId:       invoice.id,
     companyId,
@@ -67,12 +85,15 @@ export async function generateShareToken(
     lineItems:       invoice.lineItems,
     notes:           invoice.notes,
     taxRate:         invoice.taxRate,
+    currency:        invoice.currency || 'USD',
     coName:          coInfo.name,
     coAddress:       coInfo.address,
     coPhone:         coInfo.phone,
     coEmail:         coInfo.email,
     sharedAt:        serverTimestamp(),
     paymentLink:     invoice.paymentLink ?? null,
+    financingApplyUrl,
+    financingStatus,
   })
 
   if (!invoice.shareToken) {
@@ -105,11 +126,14 @@ export async function getPublicInvoice(token: string): Promise<PublicInvoiceSnap
     })),
     notes:    String(d.notes    ?? ''),
     taxRate:  Number(d.taxRate  ?? 0),
+    currency: String(d.currency ?? 'USD'),
     coName:   String(d.coName   ?? ''),
     coAddress: String(d.coAddress ?? ''),
     coPhone:  String(d.coPhone  ?? ''),
     coEmail:  String(d.coEmail  ?? ''),
     sharedAt: toDate(d.sharedAt),
     paymentLink: d.paymentLink ? String(d.paymentLink) : null,
+    financingApplyUrl: d.financingApplyUrl ? String(d.financingApplyUrl) : null,
+    financingStatus:   d.financingStatus   ? String(d.financingStatus)   : null,
   }
 }

@@ -6,6 +6,7 @@ import {
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import type { Todo } from '../models/todo'
+import { warnIfCapped } from './realtimeCap'
 
 // Must match iOS ToDoFirestoreSchema.collection
 const COL = 'ToDoItems'
@@ -36,11 +37,13 @@ function docToTodo(id: string, data: Record<string, unknown>): Todo {
     createdAt:   toDate(data.createdAt),
     userId:      String(data.userId ?? ''),
     position:    typeof data.position === 'number' ? data.position : Date.now(),
+    customerId:   typeof data.customerId === 'string' ? data.customerId : null,
+    customerName: typeof data.customerName === 'string' ? data.customerName : null,
   }
 }
 
 export function subscribeToTodos(
-  onData: (todos: Todo[]) => void,
+  onData: (todos: Todo[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -51,9 +54,7 @@ export function subscribeToTodos(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(TODO_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === TODO_REALTIME_LIMIT) {
-        console.warn(`[subscribeToTodos] hit ${TODO_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('ToDoItems', snap.size, companyId, TODO_REALTIME_LIMIT)
       const todos: Todo[] = []
       for (const d of snap.docs) {
         try {
@@ -63,7 +64,7 @@ export function subscribeToTodos(
         }
       }
       todos.sort((a, b) => a.position - b.position)
-      onData(todos)
+      onData(todos, hitCap)
     },
     onError,
   )
@@ -75,6 +76,8 @@ export async function addTodo(
   priority: Todo['priority'],
   notes: string,
   dueDate: Date | null,
+  customerId: string | null = null,
+  customerName: string | null = null,
 ): Promise<void> {
   const companyId = getCompanyId()
   await addDoc(collection(db, COL), {
@@ -88,7 +91,42 @@ export async function addTodo(
     position:    Date.now(),
     lastUpdate:  serverTimestamp(),
     createdAt:   serverTimestamp(),
+    customerId,
+    customerName,
   })
+}
+
+export function subscribeToCustomerTodos(
+  customerId: string,
+  onData: (todos: Todo[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) {
+    onError(new Error('Not authenticated'))
+    return () => {}
+  }
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+      limit(TODO_REALTIME_LIMIT),
+    ),
+    snap => {
+      const todos: Todo[] = []
+      for (const d of snap.docs) {
+        try {
+          todos.push(docToTodo(d.id, d.data() as Record<string, unknown>))
+        } catch (e) {
+          console.warn('[Todos] skipping malformed doc', d.id, e)
+        }
+      }
+      todos.sort((a, b) => a.position - b.position)
+      onData(todos)
+    },
+    onError,
+  )
 }
 
 export async function getTodo(id: string): Promise<Todo | null> {

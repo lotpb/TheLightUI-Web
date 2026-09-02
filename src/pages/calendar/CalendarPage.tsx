@@ -164,10 +164,7 @@ export default function CalendarPage() {
   const [filterType, setFilterType] = useState<EventType | 'all'>('all')
   const [repFilter,  setRepFilter]  = useState('')
 
-  const [viewDate, setViewDate] = useState(() => {
-    const n = new Date()
-    return new Date(n.getFullYear(), n.getMonth(), 1)
-  })
+  const [viewDate, setViewDate] = useState(() => new Date())
   const [selectedKey, setSelectedKey] = useState<string>(TODAY_KEY)
 
   useEffect(() => {
@@ -240,8 +237,7 @@ export default function CalendarPage() {
     }
   }
   function goToday() {
-    const n = new Date()
-    setViewDate(new Date(n.getFullYear(), n.getMonth(), 1))
+    setViewDate(new Date())
     setSelectedKey(TODAY_KEY)
   }
 
@@ -408,9 +404,15 @@ export default function CalendarPage() {
                         className={[
                           'relative flex flex-col items-start p-1.5 min-h-[60px] border-b border-gray-800/40 text-left transition-colors',
                           !isLastInRow ? 'border-r border-gray-800/40' : '',
-                          isSelected ? 'bg-indigo-600/15' : 'hover:bg-gray-800/40',
+                          isToday ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/50' : '',
+                          isSelected ? 'bg-indigo-600/15' : !isToday ? 'hover:bg-gray-800/40' : '',
                         ].join(' ')}
                       >
+                        {isToday && (
+                          <span className="absolute top-1 right-1.5 text-[8px] font-bold text-indigo-400 uppercase tracking-wide">
+                            Today
+                          </span>
+                        )}
                         <span className={[
                           'inline-flex items-center justify-center w-6 h-6 text-xs font-semibold rounded-full mb-1 shrink-0',
                           isToday    ? 'bg-indigo-500 text-white' :
@@ -461,45 +463,87 @@ export default function CalendarPage() {
 
           {/* ── WEEK VIEW ───────────────────────────────────────────────────── */}
           {view === 'week' && (
-            <div className="card overflow-hidden">
-              <div className="grid grid-cols-7 border-b border-gray-700/50">
-                {weekDays.map((day, i) => {
-                  const isToday = sameDay(day, new Date())
-                  return (
-                    <div key={i} className={`py-3 text-center ${i > 0 ? 'border-l border-gray-700/50' : ''}`}>
-                      <p className="text-xs text-gray-500">{WEEKDAYS[day.getDay()]}</p>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold mx-auto mt-0.5 ${
-                        isToday ? 'bg-indigo-600 text-white' : 'text-gray-300'
-                      }`}>
-                        {day.getDate()}
+            <div className="flex flex-col md:flex-row gap-4">
+              <div className="card overflow-hidden flex-1 min-w-0">
+                <div className="grid grid-cols-7 border-b border-gray-700/50">
+                  {weekDays.map((day, i) => {
+                    const isToday = sameDay(day, new Date())
+                    return (
+                      <div key={i} className={`py-3 text-center ${i > 0 ? 'border-l border-gray-700/50' : ''}`}>
+                        <p className="text-xs text-gray-500">{WEEKDAYS[day.getDay()]}</p>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold mx-auto mt-0.5 ${
+                          isToday ? 'bg-indigo-600 text-white' : 'text-gray-300'
+                        }`}>
+                          {day.getDate()}
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
+                <div className="grid grid-cols-7">
+                  {weekDays.map((day, i) => {
+                    const key    = dateKey(day)
+                    const events = (eventMap.get(key) ?? []).filter(e => filterType === 'all' || e.type === filterType)
+                    return (
+                      <div key={i} className={`min-h-[180px] p-1.5 ${i > 0 ? 'border-l border-gray-700/50' : ''}`}>
+                        {events.map((e, j) => {
+                          const cfg = EVENT_CONFIG[e.type]
+                          return (
+                            <Link
+                              key={j}
+                              to={e.linkTo}
+                              className={`block p-1.5 rounded-lg mb-1 ${cfg.bg} hover:opacity-80 transition-opacity`}
+                            >
+                              <p className="text-[10px] font-semibold truncate">{e.name}</p>
+                              <p className="text-[9px] opacity-70">{e.sub ?? cfg.label}</p>
+                              {e.salesman && <p className="text-[9px] opacity-60 truncate">{e.salesman}</p>}
+                            </Link>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-              <div className="grid grid-cols-7">
-                {weekDays.map((day, i) => {
-                  const key    = dateKey(day)
-                  const events = (eventMap.get(key) ?? []).filter(e => filterType === 'all' || e.type === filterType)
-                  return (
-                    <div key={i} className={`min-h-[180px] p-1.5 ${i > 0 ? 'border-l border-gray-700/50' : ''}`}>
-                      {events.map((e, j) => {
-                        const cfg = EVENT_CONFIG[e.type]
-                        return (
-                          <Link
-                            key={j}
-                            to={e.linkTo}
-                            className={`block p-1.5 rounded-lg mb-1 ${cfg.bg} hover:opacity-80 transition-opacity`}
-                          >
-                            <p className="text-[10px] font-semibold truncate">{e.name}</p>
-                            <p className="text-[9px] opacity-70">{e.sub ?? cfg.label}</p>
-                            {e.salesman && <p className="text-[9px] opacity-60 truncate">{e.salesman}</p>}
-                          </Link>
-                        )
-                      })}
+
+              {/* Mini month overview — shows where the current week sits in the month */}
+              <div className="card md:w-[260px] shrink-0 p-3">
+                <p className="text-xs font-semibold text-gray-400 mb-2 text-center">
+                  {viewDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </p>
+                <div className="grid grid-cols-7 gap-y-1">
+                  {WEEKDAYS.map(w => (
+                    <div key={w} className="text-center text-[9px] font-semibold text-gray-600 uppercase">
+                      {w[0]}
                     </div>
-                  )
-                })}
+                  ))}
+                  {days.map((day, i) => {
+                    const key       = dateKey(day)
+                    const inMonth   = day.getMonth() === curMonth
+                    const isToday   = key === TODAY_KEY
+                    const inWeek    = weekDays.some(d => sameDay(d, day))
+                    const hasEvents = (eventMap.get(key) ?? []).some(e => filterType === 'all' || e.type === filterType)
+
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setViewDate(day)}
+                        title={day.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                        className={[
+                          'relative flex items-center justify-center aspect-square rounded-md text-[10px] transition-colors',
+                          isToday ? 'bg-indigo-500 text-white font-semibold' :
+                          inWeek  ? 'bg-indigo-600/20 text-indigo-200' :
+                          inMonth ? 'text-gray-300 hover:bg-gray-800/60' : 'text-gray-600 hover:bg-gray-800/40',
+                        ].join(' ')}
+                      >
+                        {day.getDate()}
+                        {hasEvents && (
+                          <span className={`absolute bottom-0.5 w-1 h-1 rounded-full ${isToday ? 'bg-white' : 'bg-indigo-400'}`} />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           )}

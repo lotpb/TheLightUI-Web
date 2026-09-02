@@ -6,6 +6,7 @@ import {
 import { db } from '../firebase/config'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { generateInvoiceNumber, invoiceTotal, type Invoice, type InvoiceLineItem, type RecurringInterval } from '../models/invoice'
+import { deductStockForLineItems } from './catalogService'
 
 const COL = 'Invoices'
 const CUSTOMERS_COL = 'Customers'
@@ -57,6 +58,7 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     description: String(item.description ?? ''),
     qty:  Number(item.qty  ?? 1),
     rate: Number(item.rate ?? 0),
+    catalogItemId: item.catalogItemId ? String(item.catalogItemId) : undefined,
   }))
   return {
     id,
@@ -82,6 +84,9 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     generatedFrom:   data.generatedFrom ? String(data.generatedFrom) : null,
     paymentLink:     data.paymentLink ? String(data.paymentLink) : null,
     lastReminderSentAt: data.lastReminderSentAt ? toDate(data.lastReminderSentAt) : null,
+    currency: String(data.currency ?? 'USD'),
+    quickbooksInvoiceId: data.quickbooksInvoiceId ? String(data.quickbooksInvoiceId) : null,
+    financingApplicationId: data.financingApplicationId ? String(data.financingApplicationId) : null,
   }
 }
 
@@ -140,6 +145,7 @@ export async function createInvoice(
     lineItems:  inv.lineItems,
     notes:      inv.notes,
     taxRate:    inv.taxRate,
+    currency:   inv.currency || 'USD',
     recurring:      inv.recurring     ?? null,
     nextRecurDate:  inv.nextRecurDate  ? Timestamp.fromDate(inv.nextRecurDate)  : null,
     generatedFrom:  inv.generatedFrom  ?? null,
@@ -147,6 +153,12 @@ export async function createInvoice(
     updatedAt:  serverTimestamp(),
     createdByName: getCurrentUserLabel().name,
   })
+
+  // Fires once, here, regardless of status — deducting on creation (not on a
+  // later status change) is the confirmed trigger, and avoids re-deducting if
+  // this invoice's line items are edited afterward.
+  await deductStockForLineItems(inv.lineItems)
+
   if (inv.status === 'paid') {
     await recomputeCustomerPaidTotal(inv.customerId)
     await promoteLeadToCustomer(inv.customerId)
@@ -178,6 +190,7 @@ export async function updateInvoice(
   if (fields.lineItems       !== undefined) updates.lineItems       = fields.lineItems
   if (fields.notes           !== undefined) updates.notes           = fields.notes
   if (fields.taxRate         !== undefined) updates.taxRate         = fields.taxRate
+  if (fields.currency        !== undefined) updates.currency        = fields.currency
   if (fields.recurring        !== undefined) updates.recurring        = fields.recurring ?? null
   if (fields.nextRecurDate    !== undefined) updates.nextRecurDate    = fields.nextRecurDate    ? Timestamp.fromDate(fields.nextRecurDate)    : null
   if (fields.lastGeneratedAt  !== undefined) updates.lastGeneratedAt  = fields.lastGeneratedAt  ? Timestamp.fromDate(fields.lastGeneratedAt)  : null
@@ -224,6 +237,7 @@ export async function generateNextInvoice(template: Invoice): Promise<string> {
     lineItems:       template.lineItems,
     notes:           template.notes,
     taxRate:         template.taxRate,
+    currency:        template.currency,
     recurring:       null,
     nextRecurDate:   null,
     lastGeneratedAt: null,
@@ -246,4 +260,31 @@ export async function deleteInvoice(id: string): Promise<void> {
   await updateDoc(doc(db, COL, id), { lastEditedByName: getCurrentUserLabel().name })
   await deleteDoc(doc(db, COL, id))
   if (customerId) await recomputeCustomerPaidTotal(customerId)
+}
+
+// Per-customer scope for the detail page. Two equality filters need no
+// composite index; the client-side sort avoids one that orderBy would require.
+export function subscribeToCustomerInvoices(
+  customerId: string,
+  onData: (items: Invoice[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const items: Invoice[] = []
+      for (const d of snap.docs) {
+        try { items.push(docToInvoice(d.id, d.data() as Record<string, unknown>)) } catch { }
+      }
+      items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      onData(items)
+    },
+    onError,
+  )
 }

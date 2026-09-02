@@ -11,6 +11,12 @@ import {
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { subscribeToCompanyProfile } from '../../services/companyProfileService'
+import { isSafeHttpUrl } from '../../utils/safeUrl'
+import {
+  subscribeToFinancingStatus, createFinancingApplication, subscribeToFinancingApplication,
+  type FinancingApplication,
+} from '../../services/financingService'
+import { usePermissions } from '../../hooks/usePermissions'
 
 export default function ProposalDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -24,6 +30,33 @@ export default function ProposalDetailPage() {
   const [deleting, setDeleting] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [converting, setConverting] = useState(false)
+  const { canEdit } = usePermissions()
+
+  // Financing
+  const [financingConnected, setFinancingConnected] = useState(false)
+  const [financingApp, setFinancingApp] = useState<FinancingApplication | null>(null)
+  const [requestingFinancing, setRequestingFinancing] = useState(false)
+
+  useEffect(() => subscribeToFinancingStatus(s => setFinancingConnected(s.connected), () => {}), [])
+  useEffect(() => {
+    if (!proposal?.financingApplicationId) { setFinancingApp(null); return }
+    return subscribeToFinancingApplication(proposal.financingApplicationId, setFinancingApp, () => {})
+  }, [proposal?.financingApplicationId])
+
+  async function handleGetFinancingLink() {
+    if (!proposal) return
+    setRequestingFinancing(true)
+    try {
+      const result = await createFinancingApplication('proposal', proposal.id)
+      setProposal(prev => prev ? { ...prev, financingApplicationId: result.applicationId } : prev)
+      toast('Financing link created', 'success')
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not create a financing link'
+      toast(message, 'error')
+    } finally {
+      setRequestingFinancing(false)
+    }
+  }
 
   // Company info — shared across the team via Firestore (companyProfileService)
   const [coName,  setCoName]  = useState('')
@@ -235,6 +268,62 @@ export default function ProposalDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Financing — hidden when printing */}
+      {financingConnected && (
+        <div className="no-print card overflow-hidden">
+          <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Financing</p>
+              {financingApp && (
+                <span className="text-xs bg-indigo-500/15 text-indigo-400 px-2 py-0.5 rounded-full font-medium capitalize">
+                  {financingApp.status.replace(/_/g, ' ')}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            {financingApp ? (
+              <div className="flex items-center gap-2">
+                {isSafeHttpUrl(financingApp.applyUrl) ? (
+                  <a
+                    href={financingApp.applyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors truncate flex-1"
+                  >
+                    {financingApp.applyUrl}
+                  </a>
+                ) : (
+                  <span className="text-xs text-red-400 truncate flex-1">⚠️ Financing link is misconfigured</span>
+                )}
+                <button
+                  onClick={() => navigator.clipboard.writeText(financingApp.applyUrl).then(() => toast('Copied!', 'success'))}
+                  className="text-xs text-gray-500 hover:text-gray-200 shrink-0 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                >
+                  Copy
+                </button>
+              </div>
+            ) : canEdit ? (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-gray-600 italic">
+                  Offer a payment plan for this proposal's full amount.
+                  {!proposal.shareToken && ' Generate a share link first so the customer can see it.'}
+                </p>
+                <button
+                  onClick={handleGetFinancingLink}
+                  disabled={requestingFinancing}
+                  className="btn-secondary text-xs px-3 py-1.5 shrink-0"
+                >
+                  {requestingFinancing ? 'Creating…' : 'Get Financing Link'}
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-600 italic">No financing application yet.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── PROPOSAL DOCUMENT ──────────────────────────────── */}
       <div className="bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">

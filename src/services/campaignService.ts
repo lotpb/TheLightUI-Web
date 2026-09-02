@@ -175,3 +175,24 @@ export function subscribeToRecipients(
     onError,
   )
 }
+
+// Which campaigns a single customer has received — shown on the customer
+// record's Email tab so a rep can see blast history alongside 1:1 email.
+export function subscribeToRecipientsByCustomer(
+  customerId: string,
+  onData:  (items: CampaignRecipient[]) => void,
+  onError: (e: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId || !customerId) { onData([]); return () => {} }
+  const q = query(
+    collection(db, RCPT_COL),
+    where('companyId', '==', companyId),
+    where('customerId', '==', customerId),
+  )
+  return onSnapshot(
+    q,
+    snap => onData(snap.docs.map(d => toRecipient(d.id, d.data()))),
+    onError,
+  )
+}

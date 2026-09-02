@@ -1,0 +1,193 @@
+/*
+ * Self-contained styling for the Facebook Leads page.
+ *
+ * The shared index.css light-mode system works by remapping CSS variables
+ * for the gray/white scale, plus a whitelist of specific colored Tailwind
+ * classes (text-yellow-300, text-green-400, etc.) that gets extended
+ * piecemeal as pages need new colors. That whitelist is incomplete and
+ * actively being edited elsewhere, so this page defines its own explicit
+ * light/dark colors instead of depending on it.
+ *
+ * Convention: every rule's default (unprefixed) declaration is dark mode —
+ * matching :root's default elsewhere in this app — and every light-mode
+ * value is declared as an `html.light-mode` override directly below it.
+ * Never the other way around, so the cascade direction stays predictable.
+ */
+
+.fb-callout {
+    border-radius: 0.75rem;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(180, 83, 9, 0.4);
+    background: rgba(120, 53, 15, 0.2);
+}
+html.light-mode .fb-callout {
+    border-color: #b45309;
+    background: #fef3c7;
+}
+
+.fb-callout-text {
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: #fde68a;
+}
+html.light-mode .fb-callout-text {
+    color: #78350f;
+}
+
+.fb-callout-code {
+    margin: 0 0.25rem;
+    padding: 0.125rem 0.25rem;
+    border-radius: 0.25rem;
+    font-family: ui-monospace, monospace;
+    background: #1f2937;
+    color: #fde68a;
+}
+html.light-mode .fb-callout-code {
+    background: #fffbeb;
+    color: #92400e;
+}
+
+.fb-callout-secondary {
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+    color: #fcd34d;
+}
+html.light-mode .fb-callout-secondary {
+    color: #92400e;
+}
+
+.fb-reauth-card {
+    border-radius: 0.75rem;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(217, 119, 6, 0.4);
+    background: rgba(120, 53, 15, 0.2);
+}
+html.light-mode .fb-reauth-card {
+    border-color: #d97706;
+    background: #fffbeb;
+}
+
+.fb-reauth-heading {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fcd34d;
+}
+html.light-mode .fb-reauth-heading {
+    color: #92400e;
+}
+
+.fb-reauth-body {
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    color: #d1d5db;
+}
+html.light-mode .fb-reauth-body {
+    color: #57534e;
+}
+
+.fb-reauth-error {
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+    font-family: ui-monospace, monospace;
+    color: #9ca3af;
+}
+html.light-mode .fb-reauth-error {
+    color: #78716c;
+}
+
+.fb-status-connected {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #4ade80;
+}
+html.light-mode .fb-status-connected {
+    color: #15803d;
+}
+
+.fb-status-reauth {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fcd34d;
+}
+html.light-mode .fb-status-reauth {
+    color: #92400e;
+}
+
+.fb-status-active {
+    font-size: 0.75rem;
+    color: #4ade80;
+}
+html.light-mode .fb-status-active {
+    color: #15803d;
+}
+
+.fb-status-inactive {
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+html.light-mode .fb-status-inactive {
+    color: #57534e;
+}
+
+.fb-dot-connected {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: #16a34a;
+}
+.fb-dot-reauth {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: #d97706;
+}
+
+/* Buttons deliberately don't use the shared .btn-primary/.btn-secondary/
+   .btn-danger classes from index.css — those are being edited by a separate
+   in-flight task, and duplicating the styles here (rather than depending on
+   them) means this page can't be broken by that edit landing mid-way. */
+.fb-btn-primary {
+    background: #4f46e5;
+    color: #ffffff;
+    font-weight: 500;
+    border-radius: 0.5rem;
+    transition: background-color 0.15s;
+}
+.fb-btn-primary:hover:not(:disabled) { background: #4338ca; }
+.fb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.fb-btn-secondary {
+    background: #374151;
+    color: #f3f4f6;
+    font-weight: 500;
+    border-radius: 0.5rem;
+    border: 1px solid #4b5563;
+    transition: background-color 0.15s;
+}
+html.light-mode .fb-btn-secondary {
+    background: #e2e8f0;
+    color: #1e293b;
+    border-color: #cbd5e1;
+}
+.fb-btn-secondary:hover:not(:disabled) { background: #4b5563; }
+html.light-mode .fb-btn-secondary:hover:not(:disabled) { background: #cbd5e1; }
+.fb-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.fb-btn-danger {
+    background: rgba(220, 38, 38, 0.2);
+    color: #f87171;
+    font-weight: 500;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(185, 28, 28, 0.3);
+    transition: background-color 0.15s;
+}
+html.light-mode .fb-btn-danger {
+    background: #fee2e2;
+    color: #b91c1c;
+    border-color: #fca5a5;
+}
+.fb-btn-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.3); }
+html.light-mode .fb-btn-danger:hover:not(:disabled) { background: #fecaca; }
+.fb-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -33,6 +33,8 @@ export interface PublicProposalSnapshot {
   coPhone: string
   coEmail: string
   sharedAt: Date
+  financingApplyUrl: string | null
+  financingStatus: string | null
 }
 
 function toDate(v: unknown): Date {
@@ -51,6 +53,19 @@ export async function generateShareToken(
   if (!companyId) throw new Error('Not authenticated')
 
   const token = proposal.shareToken ?? crypto.randomUUID()
+
+  // See publicInvoiceService.generateShareToken for why this pulls forward
+  // rather than defaulting to null on every re-share.
+  let financingApplyUrl: string | null = null
+  let financingStatus: string | null = null
+  if (proposal.financingApplicationId) {
+    const appSnap = await getDoc(doc(db, 'financingApplications', proposal.financingApplicationId))
+    if (appSnap.exists()) {
+      const appData = appSnap.data()
+      financingApplyUrl = appData.applyUrl ? String(appData.applyUrl) : null
+      financingStatus   = appData.status   ? String(appData.status)   : null
+    }
+  }
 
   await setDoc(doc(db, PUBLIC_COL, token), {
     proposalId:      proposal.id,
@@ -71,6 +86,8 @@ export async function generateShareToken(
     coPhone:     coInfo.phone,
     coEmail:     coInfo.email,
     sharedAt:    serverTimestamp(),
+    financingApplyUrl,
+    financingStatus,
   })
 
   if (!proposal.shareToken) {
@@ -108,6 +125,8 @@ export async function getPublicProposal(token: string): Promise<PublicProposalSn
     coPhone:   String(d.coPhone   ?? ''),
     coEmail:   String(d.coEmail   ?? ''),
     sharedAt: toDate(d.sharedAt),
+    financingApplyUrl: d.financingApplyUrl ? String(d.financingApplyUrl) : null,
+    financingStatus:   d.financingStatus   ? String(d.financingStatus)   : null,
   }
 }
 

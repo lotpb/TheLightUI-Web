@@ -7,16 +7,28 @@ export interface CompanyProfile {
   address: string
   phone: string
   email: string
+  smsNumber?: string
+  reviewLink?: string
+  /** 0 or unset means "no limit configured" — every day shown as open on the portal picker. */
+  maxVisitsPerDay?: number
 }
 
-export const EMPTY_PROFILE: CompanyProfile = { name: '', address: '', phone: '', email: '' }
-
-const LOCAL_KEYS: Record<keyof CompanyProfile, string> = {
-  name:    'thelight.co.name',
-  address: 'thelight.co.address',
-  phone:   'thelight.co.phone',
-  email:   'thelight.co.email',
+export const EMPTY_PROFILE: CompanyProfile = {
+  name: '', address: '', phone: '', email: '', smsNumber: '', reviewLink: '', maxVisitsPerDay: 0,
 }
+
+// maxVisitsPerDay is numeric, unlike every other field here, so it's handled
+// separately from this string-keyed map rather than forcing it into the same
+// shape as the text fields.
+const LOCAL_KEYS: Record<Exclude<keyof CompanyProfile, 'maxVisitsPerDay'>, string> = {
+  name:       'thelight.co.name',
+  address:    'thelight.co.address',
+  phone:      'thelight.co.phone',
+  email:      'thelight.co.email',
+  smsNumber:  'thelight.co.smsNumber',
+  reviewLink: 'thelight.co.reviewLink',
+}
+const LOCAL_KEY_MAX_VISITS = 'thelight.co.maxVisitsPerDay'
 
 // Company name/address/phone/email used to live only in localStorage, so
 // every browser/device showed different (or blank) info on the same
@@ -26,10 +38,13 @@ const LOCAL_KEYS: Record<keyof CompanyProfile, string> = {
 // for the whole team.
 function localFallback(): CompanyProfile {
   return {
-    name:    localStorage.getItem(LOCAL_KEYS.name)    ?? '',
-    address: localStorage.getItem(LOCAL_KEYS.address) ?? '',
-    phone:   localStorage.getItem(LOCAL_KEYS.phone)   ?? '',
-    email:   localStorage.getItem(LOCAL_KEYS.email)   ?? '',
+    name:       localStorage.getItem(LOCAL_KEYS.name)       ?? '',
+    address:    localStorage.getItem(LOCAL_KEYS.address)    ?? '',
+    phone:      localStorage.getItem(LOCAL_KEYS.phone)      ?? '',
+    email:      localStorage.getItem(LOCAL_KEYS.email)      ?? '',
+    smsNumber:  localStorage.getItem(LOCAL_KEYS.smsNumber)  ?? '',
+    reviewLink: localStorage.getItem(LOCAL_KEYS.reviewLink) ?? '',
+    maxVisitsPerDay: Number(localStorage.getItem(LOCAL_KEY_MAX_VISITS)) || 0,
   }
 }
 
@@ -51,10 +66,13 @@ export function subscribeToCompanyProfile(
       if (!snap.exists()) { onData(localFallback()); return }
       const d = snap.data() as Record<string, unknown>
       onData({
-        name:    typeof d.name    === 'string' ? d.name    : '',
-        address: typeof d.address === 'string' ? d.address : '',
-        phone:   typeof d.phone   === 'string' ? d.phone   : '',
-        email:   typeof d.email   === 'string' ? d.email   : '',
+        name:       typeof d.name       === 'string' ? d.name       : '',
+        address:    typeof d.address    === 'string' ? d.address    : '',
+        phone:      typeof d.phone      === 'string' ? d.phone      : '',
+        email:      typeof d.email      === 'string' ? d.email      : '',
+        smsNumber:  typeof d.smsNumber  === 'string' ? d.smsNumber  : '',
+        reviewLink: typeof d.reviewLink === 'string' ? d.reviewLink : '',
+        maxVisitsPerDay: typeof d.maxVisitsPerDay === 'number' ? d.maxVisitsPerDay : 0,
       })
     },
     onError,

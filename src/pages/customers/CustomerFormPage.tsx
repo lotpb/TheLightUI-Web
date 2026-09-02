@@ -4,6 +4,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '../../firebase/config'
 import { getCustomer, createCustomer, updateCustomer, getAllCustomersOnce } from '../../services/customerService'
 import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
+import { fetchSalesmenForCompany, memberDisplayName, type TeamMember } from '../../services/teamService'
 import { emptyCustomer, fullName, type CustomerItem } from '../../models/customer'
 import type { CustomFieldDef } from '../../models/customField'
 import { useDebounce } from '../../hooks/useDebounce'
@@ -433,7 +434,12 @@ export default function CustomerFormPage() {
               <tr>
                 <td style={{ width: '50%', paddingRight: '6px', paddingBottom: '12px', verticalAlign: 'top' }}>
                   {isLeadOrCustomer
-                    ? <PickerInput label={labels.salesman} value={form.salesman} options={lists.salesman} onChange={v => set('salesman', v)} />
+                    ? <SalesmanAssigneeInput
+                        label={labels.salesman}
+                        value={form.salesman}
+                        assignedToUid={form.assignedToUid}
+                        onChange={(uid, name) => { set('assignedToUid', uid); set('salesman', name) }}
+                      />
                     : <PickerInput label={labels.job} value={form.job} options={lists.job} onChange={v => set('job', v)} />}
                 </td>
                 <td style={{ width: '50%', paddingLeft: '6px', paddingBottom: '12px', verticalAlign: 'top' }}>
@@ -843,6 +849,47 @@ function PickerInput({
       <datalist id={listId}>
         {(options ?? []).filter(Boolean).map(o => <option key={o} value={o} />)}
       </datalist>
+    </div>
+  )
+}
+
+// Real user picker for Lead/Customer records. Writes both a uid (assignedToUid,
+// used by the onCustomerAssigned Cloud Function to notify the salesman) and a
+// display name (salesman, for existing UI/reports). Falls back to showing the
+// legacy free-text name as a disabled placeholder if it doesn't match a team member.
+function SalesmanAssigneeInput({
+  label, value, assignedToUid, onChange,
+}: {
+  label: string
+  value: string
+  assignedToUid: string
+  onChange: (uid: string, displayName: string) => void
+}) {
+  const [salesmen, setSalesmen] = useState<TeamMember[] | null>(null)
+
+  useEffect(() => {
+    fetchSalesmenForCompany().then(setSalesmen).catch(() => setSalesmen([]))
+  }, [])
+
+  const matchedUid = salesmen?.some(m => m.uid === assignedToUid) ? assignedToUid : ''
+
+  return (
+    <div>
+      <label className="form-label">{label}</label>
+      <select
+        className="select-field"
+        value={matchedUid}
+        onChange={e => {
+          const uid = e.target.value
+          const match = (salesmen ?? []).find(m => m.uid === uid)
+          onChange(uid, match ? memberDisplayName(match) : '')
+        }}
+      >
+        <option value="">{!matchedUid && value ? `${value} (unlinked)` : '— Unassigned —'}</option>
+        {(salesmen ?? []).map(m => (
+          <option key={m.uid} value={m.uid}>{memberDisplayName(m)}</option>
+        ))}
+      </select>
     </div>
   )
 }

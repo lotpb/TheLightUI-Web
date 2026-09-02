@@ -5,6 +5,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
+import { warnIfCapped } from './realtimeCap'
 
 const COL = 'timeEntries'
 
@@ -12,6 +13,12 @@ const COL = 'timeEntries'
 // REALTIME_LIMIT. Clock-in/out entries accumulate fast (one per employee per
 // shift), so this is one of the higher-risk collections for hitting scale.
 const TIME_ENTRY_REALTIME_LIMIT = 5_000
+
+export interface GeoPoint {
+  lat: number
+  lng: number
+  accuracy: number
+}
 
 export interface TimeEntry {
   id: string
@@ -24,6 +31,15 @@ export interface TimeEntry {
   clockOut: Date | null
   notes: string
   durationMinutes: number | null
+  clockInLocation: GeoPoint | null
+  clockOutLocation: GeoPoint | null
+}
+
+function toGeoPoint(v: unknown): GeoPoint | null {
+  if (!v || typeof v !== 'object') return null
+  const g = v as Record<string, unknown>
+  if (typeof g.lat !== 'number' || typeof g.lng !== 'number') return null
+  return { lat: g.lat, lng: g.lng, accuracy: typeof g.accuracy === 'number' ? g.accuracy : 0 }
 }
 
 function toDate(v: unknown): Date {
@@ -43,11 +59,13 @@ function docToEntry(id: string, d: Record<string, unknown>): TimeEntry {
     clockOut:      d.clockOut ? toDate(d.clockOut) : null,
     notes:         String(d.notes         ?? ''),
     durationMinutes: d.durationMinutes != null ? Number(d.durationMinutes) : null,
+    clockInLocation:  toGeoPoint(d.clockInLocation),
+    clockOutLocation: toGeoPoint(d.clockOutLocation),
   }
 }
 
 export function subscribeToTimeEntries(
-  onData: (entries: TimeEntry[]) => void,
+  onData: (entries: TimeEntry[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -55,15 +73,13 @@ export function subscribeToTimeEntries(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(TIME_ENTRY_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === TIME_ENTRY_REALTIME_LIMIT) {
-        console.warn(`[subscribeToTimeEntries] hit ${TIME_ENTRY_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('timeEntries', snap.size, companyId, TIME_ENTRY_REALTIME_LIMIT)
       const entries: TimeEntry[] = []
       for (const s of snap.docs) {
         try { entries.push(docToEntry(s.id, s.data() as Record<string, unknown>)) } catch { }
       }
       entries.sort((a, b) => b.clockIn.getTime() - a.clockIn.getTime())
-      onData(entries)
+      onData(entries, hitCap)
     },
     onError,
   )
@@ -75,6 +91,7 @@ export async function clockIn(params: {
   workerName: string
   workerId: string
   notes: string
+  location: GeoPoint | null
 }): Promise<string> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
@@ -88,19 +105,49 @@ export async function clockIn(params: {
     clockOut:      null,
     notes:         params.notes,
     durationMinutes: null,
+    clockInLocation:  params.location,
+    clockOutLocation: null,
   })
   return ref.id
 }
 
-export async function clockOut(entry: TimeEntry): Promise<void> {
+export async function clockOut(entry: TimeEntry, location: GeoPoint | null): Promise<void> {
   const now = new Date()
   const minutes = Math.round((now.getTime() - entry.clockIn.getTime()) / 60_000)
   await updateDoc(doc(db, COL, entry.id), {
     clockOut: Timestamp.fromDate(now),
     durationMinutes: minutes,
+    clockOutLocation: location,
   })
 }
 
 export async function deleteTimeEntry(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+// Per-customer scope for the detail page's Related Records. Two equality
+// filters need no composite index; sorting client-side avoids one.
+export function subscribeToCustomerTimeEntries(
+  customerId: string,
+  onData: (entries: TimeEntry[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const entries: TimeEntry[] = []
+      for (const s of snap.docs) {
+        try { entries.push(docToEntry(s.id, s.data() as Record<string, unknown>)) } catch { }
+      }
+      entries.sort((a, b) => b.clockIn.getTime() - a.clockIn.getTime())
+      onData(entries)
+    },
+    onError,
+  )
 }

@@ -11,6 +11,8 @@ import {
   triggerFieldsFor, actionFieldsFor, actionTypesFor, ACTION_TYPE_LABELS, ENTITY_TYPE_LABELS,
   describeTrigger, describeAction,
 } from '../../models/automationRule'
+import { subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
+import { useToast } from '../../components/Toast'
 
 function emptyTrigger(): AutomationTrigger {
   return { entityType: 'customer', field: 'category', type: 'changes_to', value: 'Customer' }
@@ -20,8 +22,12 @@ function emptyAction(entityType: AutomationEntityType): AutomationAction {
   return { type: actionTypesFor(entityType)[0] }
 }
 
+const REVIEW_PRESET_MESSAGE =
+  "Thanks for choosing us, {first}! If you have a minute, we'd really appreciate a quick review: {reviewlink}"
+
 export default function AutomationsPage() {
   usePageTitle('Automation Rules')
+  const toast = useToast()
 
   const [rules, setRules] = useState<AutomationRule[]>([])
   const [log, setLog]     = useState<AutomationLogEntry[]>([])
@@ -35,11 +41,42 @@ export default function AutomationsPage() {
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AutomationRule | null>(null)
 
+  const [profile, setProfile] = useState<CompanyProfile>(EMPTY_PROFILE)
+  const [reviewLink, setReviewLink] = useState('')
+  const [savingReviewLink, setSavingReviewLink] = useState(false)
+
   useEffect(() => {
     const u1 = subscribeToAutomationRules(items => { setRules(items); setLoading(false) }, () => setLoading(false))
     const u2 = subscribeToAutomationLog(setLog, () => {})
-    return () => { u1(); u2() }
+    const u3 = subscribeToCompanyProfile(p => { setProfile(p); setReviewLink(p.reviewLink ?? '') }, () => {})
+    return () => { u1(); u2(); u3() }
   }, [])
+
+  async function handleSaveReviewLink() {
+    setSavingReviewLink(true)
+    try {
+      // saveCompanyProfile writes every field on the object (merge:true only
+      // skips fields absent from it) — passing just {reviewLink} would blank
+      // out the company's name/address/phone/email, so the rest of the
+      // last-loaded profile has to come along for the write.
+      await saveCompanyProfile({ ...profile, reviewLink: reviewLink.trim() })
+      toast('Review link saved', 'success')
+    } catch {
+      toast('Could not save the review link', 'error')
+    } finally {
+      setSavingReviewLink(false)
+    }
+  }
+
+  // Prefills the new-rule modal with a ready-to-go "text on invoice paid"
+  // review request — the admin still reviews and saves it via the normal
+  // flow, this just removes the tedium of picking trigger/action fields by hand.
+  function openReviewPreset() {
+    setName('Request a review')
+    setTrigger({ entityType: 'invoice', field: 'status', type: 'changes_to', value: 'paid' })
+    setActions([{ type: 'send_sms', text: REVIEW_PRESET_MESSAGE }])
+    setEditId('new')
+  }
 
   const isNew = editId === 'new'
   const editingRule = useMemo(() => rules.find(r => r.id === editId) ?? null, [rules, editId])
@@ -121,6 +158,38 @@ export default function AutomationsPage() {
         <button onClick={openCreate} className="btn-primary text-sm px-4 py-2 shrink-0">
           + New Rule
         </button>
+      </div>
+
+      {/* Review link + suggested rule */}
+      <div className="card p-4 mb-6 space-y-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">Review Link</p>
+          <div className="flex items-center gap-2">
+            <input
+              value={reviewLink}
+              onChange={e => setReviewLink(e.target.value)}
+              placeholder="https://g.page/r/.../review or your Yelp review link"
+              className="input-field text-sm flex-1"
+            />
+            <button
+              onClick={handleSaveReviewLink}
+              disabled={savingReviewLink}
+              className="btn-secondary text-sm px-3 py-1.5 shrink-0"
+            >
+              {savingReviewLink ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-600 mt-1.5">
+            Fills the <code className="px-1 py-0.5 rounded bg-gray-800">{'{reviewlink}'}</code> tag in any rule's
+            email or text message.
+          </p>
+        </div>
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-800">
+          <p className="text-sm text-gray-400">Ask customers for a review automatically when an invoice is paid.</p>
+          <button onClick={openReviewPreset} className="btn-secondary text-sm px-3 py-1.5 shrink-0 whitespace-nowrap">
+            Suggested: Request a review
+          </button>
+        </div>
       </div>
 
       {/* Rules list */}
@@ -414,7 +483,7 @@ export default function AutomationsPage() {
                         <input
                           value={action.subject ?? ''}
                           onChange={e => updateAction(i, { subject: e.target.value })}
-                          placeholder="Email subject — supports {first} {lastname} {city} {salesman}"
+                          placeholder="Email subject — supports {first} {lastname} {city} {salesman} {reviewlink}"
                           className="input-field text-sm w-full"
                         />
                         <textarea
@@ -425,6 +494,16 @@ export default function AutomationsPage() {
                           className="input-field text-sm w-full resize-none"
                         />
                       </div>
+                    )}
+
+                    {action.type === 'send_sms' && (
+                      <textarea
+                        value={action.text ?? ''}
+                        onChange={e => updateAction(i, { text: e.target.value })}
+                        placeholder="Text message — supports {first} {lastname} {city} {salesman} {reviewlink}"
+                        rows={3}
+                        className="input-field text-sm w-full resize-none"
+                      />
                     )}
                   </div>
                 ))}

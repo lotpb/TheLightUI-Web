@@ -138,6 +138,8 @@ html.light-mode .bg-orange-500,
 html.light-mode .bg-orange-600,
 html.light-mode .bg-sky-600,
 html.light-mode .bg-teal-600,
+html.light-mode .bg-green-700\/70,
+html.light-mode .bg-red-700\/70,
 html.light-mode .btn-primary {
   color: rgb(255 255 255) !important;
 }
@@ -150,6 +152,35 @@ html.light-mode .text-indigo-300 { color: #4f46e5 !important; } /* role badges *
 html.light-mode .text-teal-300   { color: #0f766e !important; }
 html.light-mode .text-yellow-300 { color: #a16207 !important; }
 html.light-mode .text-red-400    { color: #b91c1c !important; }
+html.light-mode .text-gray-600   { color: #000 !important; } /* was near-invisible pale gray meant for borders, not text (e.g. filter panel section headers) */
+
+/* Soft-pill action buttons (translucent bg-X-600/20 + text-X-400/300 + border-X-700/30)
+   read fine in dark mode but the diluted tint background pushes contrast below ~4:1
+   in light mode; darken the text further only for this exact combo so unrelated
+   single-class usages (badges, links) keep their own overrides above. */
+html.light-mode .bg-green-600\/20.text-green-400.border-green-700\/30   { color: #14532d !important; }
+html.light-mode .bg-indigo-600\/20.text-indigo-300.border-indigo-700\/30 { color: #312e81 !important; }
+html.light-mode .bg-red-600\/20.text-red-400.border-red-700\/30         { color: #7f1d1d !important; }
+html.light-mode .bg-emerald-600\/20.text-emerald-300.border-emerald-700\/30 { color: #064e3b !important; }
+html.light-mode .bg-amber-600\/20.text-amber-400.border-amber-700\/30   { color: #78350f !important; }
+
+/* Todo priority pills (bg-X-500/20 + text-X-400 + border-X-600/40): plain black
+   reads better than a tinted shade against these very pale pastel backgrounds. */
+html.light-mode .bg-yellow-500\/20.text-yellow-400.border-yellow-600\/40 { color: #000 !important; }
+html.light-mode .bg-red-500\/20.text-red-400.border-red-600\/40         { color: #000 !important; }
+/* Anchored with ^= (start of string) and *=" " (after a space) so this only
+   matches a standalone bg-gray-X/NN class — NOT hover:bg-gray-X/NN, which
+   contains the same substring but has no background until actually hovered
+   (this previously forced white text on transparent/white resting buttons,
+   e.g. the Common Filters sidebar quick-filter buttons). */
+html.light-mode [class^="bg-gray-500/"][class*="text-gray-400"],
+html.light-mode [class*=" bg-gray-500/"][class*="text-gray-400"],
+html.light-mode [class^="bg-gray-600/"][class*="text-gray-400"],
+html.light-mode [class*=" bg-gray-600/"][class*="text-gray-400"],
+html.light-mode [class^="bg-gray-700/"][class*="text-gray-400"],
+html.light-mode [class*=" bg-gray-700/"][class*="text-gray-400"],
+html.light-mode [class^="bg-gray-800/"][class*="text-gray-400"],
+html.light-mode [class*=" bg-gray-800/"][class*="text-gray-400"] { color: #fff !important; }
 
 /* ─────────────────────────────────────────────────────────────────────── */
 

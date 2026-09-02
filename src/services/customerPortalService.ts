@@ -2,6 +2,7 @@ import {
   doc, setDoc, getDoc, addDoc, collection,
   Timestamp, serverTimestamp,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import type { CustomerItem } from '../models/customer'
@@ -10,6 +11,7 @@ import type { Invoice } from '../models/invoice'
 import { invoiceTotal } from '../models/invoice'
 import type { ServicePlan } from '../models/servicePlan'
 import { getSignedDocumentsForCustomer } from './signingRequestService'
+import { setPortalToken } from './customerService'
 
 export interface PortalInvoiceSummary {
   id: string
@@ -59,8 +61,12 @@ export async function generatePortalLink(
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
 
-  // Use the customer's existing portal token or generate a new one
-  const token = (customer as CustomerItem & { portalToken?: string }).portalToken ?? makeToken()
+  // Reuse this customer's existing snapshot when there is one. Minting a fresh
+  // token on every click would leave the previous snapshot orphaned and — since
+  // customerPortals allows unauthenticated `get` by token — permanently
+  // readable, so "regenerate the link" would revoke nothing.
+  const existing = customer.portalToken
+  const token = existing || makeToken()
 
   const invoiceSummaries: PortalInvoiceSummary[] = invoices
     .filter(inv => inv.customerId === customer.id && inv.status !== 'paid')
@@ -121,6 +127,9 @@ export async function generatePortalLink(
     })),
     updatedAt: serverTimestamp(),
   })
+
+  // Persist the token on first generation so the next call reuses this snapshot.
+  if (!existing) await setPortalToken(customer.id, token)
 
   return `https://thelightui.web.app/portal/${token}`
 }
@@ -201,4 +210,33 @@ export async function submitServiceRequest(
     status:        'new',
     createdAt:     serverTimestamp(),
   })
+}
+
+export interface DayAvailability {
+  count: number
+  full: boolean
+}
+
+/**
+ * Day-level scheduling availability for the portal's service-request date
+ * picker. Computed live server-side (getPortalDayAvailability) rather than
+ * read from a cached collection — see that function's comment for why. Never
+ * throws: a stale/invalid token or a network hiccup resolves to "no data",
+ * which the picker treats as every day being open rather than blocking the form.
+ */
+export async function getDayAvailability(
+  token: string,
+  startDate: string,
+  endDate: string,
+): Promise<Record<string, DayAvailability>> {
+  try {
+    const fn = httpsCallable<
+      { token: string; startDate: string; endDate: string },
+      { availability: Record<string, DayAvailability> }
+    >(getFunctions(), 'getPortalDayAvailability')
+    const result = await fn({ token, startDate, endDate })
+    return result.data.availability
+  } catch {
+    return {}
+  }
 }

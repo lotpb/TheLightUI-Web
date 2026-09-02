@@ -263,6 +263,22 @@
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     }
+    ,{
+      "collectionGroup": "Warranties",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "expirationDate", "order": "ASCENDING" }
+      ]
+    }
+    ,{
+      "collectionGroup": "dispatchAssignments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "startAt", "order": "ASCENDING" }
+      ]
+    }
   ],
   "fieldOverrides": []
 }

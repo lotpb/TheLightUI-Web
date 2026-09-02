@@ -26,11 +26,11 @@ export default function MenuPage() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.08),transparent_60%)] pointer-events-none" />
         <div className="relative px-4 sm:px-6 pt-4 pb-4 max-w-5xl mx-auto flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-widest mb-1.5">{dateStr}</p>
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-widest mb-1.5">{dateStr}</p>
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
               {greeting}, {firstName}
             </h1>
-            <p className="text-sm text-gray-500 mt-1.5">
+            <p className="text-sm text-gray-400 mt-1.5">
               {NAV_GROUPS.length} categories &middot; {totalFeatures} features
             </p>
           </div>

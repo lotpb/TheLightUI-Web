@@ -106,6 +106,21 @@ export async function deactivateCustomer(id: string, extraFields: Record<string,
   await updateDoc(doc(db, COLLECTION, id), { active: '0', ...extraFields })
 }
 
+export async function setPaymentStatus(id: string, paymentStatus: string): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { paymentStatus })
+}
+
+export async function setEmployeeStatus(id: string, employeeStatus: string): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { employeeStatus })
+}
+
+// Records which customerPortals snapshot belongs to this customer, so
+// regenerating a portal link refreshes that one snapshot instead of minting a
+// new permanently-public token every time (see generatePortalLink).
+export async function setPortalToken(id: string, portalToken: string): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { portalToken })
+}
+
 // Merge two records: apply partial field updates to the primary, deactivate the secondary.
 // The caller is responsible for computing which fields to copy over.
 export async function mergeCustomers(
@@ -134,6 +149,8 @@ export async function bulkDeactivate(ids: string[]): Promise<void> {
   }
 }
 
+// Free-text assignment — used for Vendor/Employee categories where the `salesman`
+// field is repurposed (Callback / "is a salesperson" flags), not a real user link.
 export async function bulkAssignSalesman(ids: string[], salesman: string): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
@@ -141,6 +158,22 @@ export async function bulkAssignSalesman(ids: string[], salesman: string): Promi
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
       batch.update(doc(db, COLLECTION, id), { salesman })
+    }
+    await batch.commit()
+  }
+}
+
+// Real user assignment — used for Lead/Customer categories. Stamps assignedToUid
+// so the onCustomerAssigned Cloud Function can look up the salesman's account and
+// notify them, plus keeps `salesman` as the display name for existing UI/reports.
+export async function bulkAssignSalesmanUser(ids: string[], uid: string, displayName: string): Promise<void> {
+  if (!getCompanyId()) throw new Error('Not authenticated')
+  const BATCH_SIZE = 500
+  const lastEditedByName = getCurrentUserLabel().name
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc(db, COLLECTION, id), { salesman: displayName, assignedToUid: uid, lastEditedByName })
     }
     await batch.commit()
   }
@@ -203,6 +236,10 @@ export async function setFollowUpDate(id: string, date: Date | null): Promise<vo
   await updateDoc(doc(db, COLLECTION, id), {
     followUpDate: date ? Timestamp.fromDate(date) : null,
   })
+}
+
+export async function setContactAttempts(id: string, attempts: number): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { contactAttempts: attempts })
 }
 
 // Requires a Firestore composite index: companyId ASC + followUpDate ASC.
@@ -437,6 +474,9 @@ export async function importCustomersFromJSON(
         paymentStatus: r.paymentStatus ?? '',
         customFields: {},
         pipelineStage: '',
+        smsOptOut: false,
+        assignedToUid: '',
+        portalToken: '',
       }
       const data = { ...customerToFirestore(item, userId), companyId }
       const ref = r.id

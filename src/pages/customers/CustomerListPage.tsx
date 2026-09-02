@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, REALTIME_LIMIT } from '../../services/customerService'
+import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, bulkAssignSalesmanUser, setPaymentStatus, setEmployeeStatus, REALTIME_LIMIT } from '../../services/customerService'
+import { fetchSalesmenForCompany, memberDisplayName, type TeamMember } from '../../services/teamService'
 import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
 import { useAuthStore } from '../../stores/authStore'
@@ -17,7 +18,7 @@ import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
 import { scoreLead } from '../../utils/leadScore'
-import { calculateHealthScoreLight } from '../../utils/customerHealth'
+import { calculateHealthScoreLight, type HealthLabel } from '../../utils/customerHealth'
 import CSVImportModal from '../../components/CSVImportModal'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
 import type { SavedView } from '../../models/savedView'
@@ -44,6 +45,12 @@ const PATH_TO_CATEGORY: Record<string, CustomerCategory> = {
   '/employees': 'Employee',
 }
 
+// Only Lead/Customer use `salesman` as a real assignee — Vendor repurposes it as
+// a Callback flag and Employee as an "is a salesperson" flag (see CustomerFormPage).
+function isLeadOrCustomer(cat: CustomerCategory): boolean {
+  return cat === 'Lead' || cat === 'Customer'
+}
+
 function useClickOutside(
   ref: React.RefObject<HTMLElement>,
   onClose: () => void,
@@ -59,11 +66,27 @@ function useClickOutside(
   }, [active, ref, onClose])
 }
 
+function QuickFilterButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full text-left px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+        active ? 'bg-indigo-600/20 text-indigo-300' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+      }`}
+    >
+      {label}
+    </button>
+  )
+}
+
 export default function CustomerListPage() {
   const { pathname } = useLocation()
   const cat: CustomerCategory = PATH_TO_CATEGORY[pathname] ?? 'Lead'
+  const hasQuickFilterSidebar = cat === 'Employee' || cat === 'Lead' || cat === 'Customer' || cat === 'Vendor'
   usePageTitle(CATEGORY_LABELS[cat])
   const companyId = useAuthStore(s => s.companyId)
+  const user = useAuthStore(s => s.user)
   const labels = usePickerStore(s => s.labels)
   const toast = useToast()
   const perms = usePermissions()
@@ -100,6 +123,19 @@ export default function CustomerListPage() {
   const [filterDateTo, setFilterDateTo]     = useState('')
   const [filterAmtMin, setFilterAmtMin]     = useState('')
   const [filterAmtMax, setFilterAmtMax]     = useState('')
+  // Quick filters (right-hand sidebar) — not part of saved views yet.
+  const [filterLeadStatus, setFilterLeadStatus] = useState('')
+  const [filterQuality, setFilterQuality]       = useState<'' | 'hot' | 'stale'>('')
+  const [filterAssignment, setFilterAssignment] = useState<'' | 'mine' | 'unassigned'>('')
+  const [filterHealth, setFilterHealth]         = useState<'' | HealthLabel>('')
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState('')
+  // `salesman` is repurposed as a plain Yes/No flag for Employee ("is a
+  // salesperson") and Vendor ("has callback") — a different field from the
+  // generic `callback` ("was contacted") used by the Lead/Customer filter.
+  const [filterSalesmanFlag, setFilterSalesmanFlag] = useState<'' | 'yes' | 'no'>('')
+  const [filterProfession, setFilterProfession] = useState('')
+  const [filterRating, setFilterRating]         = useState('')
+  const [filterManager, setFilterManager]       = useState('')
 
   // Saved views
   const [savedViews, setSavedViews] = useState<SavedView[]>([])
@@ -134,12 +170,25 @@ export default function CustomerListPage() {
     setFilterDateTo('')
     setFilterAmtMin('')
     setFilterAmtMax('')
+    setFilterLeadStatus('')
+    setFilterQuality('')
+    setFilterAssignment('')
+    setFilterHealth('')
+    setFilterPaymentStatus('')
+    setFilterSalesmanFlag('')
+    setFilterProfession('')
+    setFilterRating('')
+    setFilterManager('')
   }
 
   useEffect(() => subscribeToSavedViews(cat, setSavedViews, () => {}), [cat])
 
   function applySavedView(view: SavedView) {
     const f = view.filters
+    // Reset first: saved views don't carry the quick filters yet, so without
+    // this any that happen to be active stay applied and silently intersect
+    // with the view — meaning the view doesn't reproduce what was saved.
+    clearAdvancedFilters()
     setSearch(f.search)
     setShowInactive(f.showInactive)
     localStorage.setItem('thelight.showInactive', String(f.showInactive))
@@ -244,6 +293,21 @@ export default function CustomerListPage() {
     }
   }
 
+  async function handleBulkAssignUser(uid: string, displayName: string) {
+    const ids = [...selectedIds]
+    setAssignOpen(false)
+    setBulkWorking(true)
+    try {
+      await bulkAssignSalesmanUser(ids, uid, displayName)
+      toast(`Assigned ${ids.length} record${ids.length !== 1 ? 's' : ''} to ${displayName}.`, 'success')
+      clearSelection()
+    } catch {
+      toast('Bulk assign failed.', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
   async function handleBulkExport() {
     const toExport = filtered.filter(c => selectedIds.has(c.id))
     await exportCustomersJSON(toExport)
@@ -332,6 +396,38 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
+  const uniqueLeadStatuses = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.leadStatus.trim()).forEach(c => set.add(c.leadStatus.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const uniquePaymentStatuses = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.paymentStatus.trim()).forEach(c => set.add(c.paymentStatus.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  // Vendor-only fields: `profession` (trade), `rate` (1-5 star rating), and
+  // `callback` (repurposed to hold the manager's name for Vendor records).
+  const uniqueProfessions = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.profession.trim()).forEach(c => set.add(c.profession.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
+  const uniqueRatings = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.rate.trim()).forEach(c => set.add(c.rate.trim()))
+    return [...set].sort((a, b) => Number(b) - Number(a))
+  }, [all, cat])
+
+  const uniqueManagers = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.callback.trim()).forEach(c => set.add(c.callback.trim()))
+    return [...set].sort()
+  }, [all, cat])
+
   const uniqueProducts = useMemo<string[]>(() => {
     const set = new Set<string>()
     all.filter(c => categoryMatches(c.category, cat) && c.product.trim()).forEach(c => set.add(c.product.trim()))
@@ -341,6 +437,8 @@ export default function CustomerListPage() {
   const activeFilterCount = [
     filterSalesman, filterState, filterLeadSource, filterProduct,
     filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+    filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
+    filterSalesmanFlag, filterProfession, filterRating, filterManager,
   ].filter(Boolean).length
 
   const filtered = useMemo(() => {
@@ -364,6 +462,21 @@ export default function CustomerListPage() {
     if (filterProduct)  items = items.filter(c => c.product === filterProduct)
     if (filterCallback === 'yes') items = items.filter(c => c.callback.toLowerCase() === 'yes')
     else if (filterCallback === 'no') items = items.filter(c => c.callback.toLowerCase() !== 'yes')
+    if (filterLeadStatus) items = items.filter(c => c.leadStatus === filterLeadStatus)
+    if (filterQuality === 'hot') items = items.filter(c => scoreLead(c).label === 'Hot')
+    else if (filterQuality === 'stale') items = items.filter(c => dealAgeDays(c) >= 30)
+    if (filterAssignment === 'mine') items = items.filter(c => c.assignedToUid === user?.uid)
+    else if (filterAssignment === 'unassigned') items = items.filter(c => !c.assignedToUid)
+    if (filterHealth) items = items.filter(c => calculateHealthScoreLight(c).label === filterHealth)
+    if (filterPaymentStatus) items = items.filter(c => c.paymentStatus === filterPaymentStatus)
+    // "No" has to mean "not yes" rather than literally 'no', the same way
+    // filterCallback above treats it: on records where the flag was never set
+    // `salesman` is empty, and those belong in the No bucket.
+    if (filterSalesmanFlag === 'yes') items = items.filter(c => c.salesman.toLowerCase() === 'yes')
+    else if (filterSalesmanFlag === 'no') items = items.filter(c => c.salesman.toLowerCase() !== 'yes')
+    if (filterProfession) items = items.filter(c => c.profession === filterProfession)
+    if (filterRating) items = items.filter(c => c.rate === filterRating)
+    if (filterManager) items = items.filter(c => c.callback === filterManager)
     if (filterDateFrom) {
       const from = new Date(filterDateFrom)
       items = items.filter(c => c.creationDate >= from)
@@ -377,25 +490,34 @@ export default function CustomerListPage() {
     if (filterAmtMax) items = items.filter(c => c.amount <= Number(filterAmtMax))
 
     const dir = sortDir === 'asc' ? 1 : -1
+    // Score is derived, not stored, so precompute it once per record instead of
+    // recomputing inside the comparator — that ran it O(n log n) times.
+    const scores = sortField === 'score'
+      ? new Map(items.map(c => [c.id, scoreLead(c).score]))
+      : null
     items = [...items].sort((a, b) => {
       switch (sortField) {
         case 'name':     return dir * fullName(a).localeCompare(fullName(b))
         case 'date':     return dir * (a.creationDate.getTime() - b.creationDate.getTime())
         case 'location': return dir * (a.city || '').localeCompare(b.city || '')
         case 'active':   return dir * (Number(b.isActive) - Number(a.isActive))
-        case 'score':    return dir * (scoreLead(a).score - scoreLead(b).score)
+        case 'score':    return dir * ((scores!.get(a.id) ?? 0) - (scores!.get(b.id) ?? 0))
         default:         return 0
       }
     })
     return items
   }, [all, cat, debouncedSearch, showInactive, tagFilter, sortField, sortDir,
       filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
-      filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
+      filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+      filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus, user,
+      filterSalesmanFlag, filterProfession, filterRating, filterManager])
 
   // Reset to page 1 whenever anything changes the filtered set
   useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
     filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
-    filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax])
+    filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+    filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
+    filterSalesmanFlag, filterProfession, filterRating, filterManager])
 
   const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
@@ -406,6 +528,22 @@ export default function CustomerListPage() {
   const allFilteredIds  = useMemo(() => new Set(filtered.map(c => c.id)), [filtered])
   const allPageSelected = paginated.length > 0 && paginated.every(c => selectedIds.has(c.id))
   const someSelected    = selectedIds.size > 0
+
+  // Keep the selection inside the visible set. The clear-on-change effect above
+  // only watches category/showInactive/search, so narrowing any of the ~18
+  // advanced or quick filters used to leave hidden rows selected — and the bulk
+  // actions disagreed about what that meant: Deactivate/Assign/Email read
+  // selectedIds directly (acting on rows no longer on screen), while Export
+  // intersects with `filtered` (silently exporting fewer than the count shown).
+  // Pruning rather than clearing keeps a partial selection usable across a
+  // filter tweak.
+  useEffect(() => {
+    setSelectedIds(prev => {
+      if (prev.size === 0) return prev
+      const next = new Set([...prev].filter(id => allFilteredIds.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [allFilteredIds])
 
   function handlePrint() {
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -493,7 +631,7 @@ export default function CustomerListPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6">
+    <div className={hasQuickFilterSidebar ? 'max-w-5xl mx-auto px-4 py-6' : 'max-w-3xl mx-auto px-4 py-6'}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
         <h1 className="text-2xl font-bold text-white">{CATEGORY_LABELS[cat]}</h1>
@@ -563,7 +701,7 @@ export default function CustomerListPage() {
                       onClick={() => { closeMenu(); setCsvImportOpen(true) }}
                       className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2.5"
                     >
-                      <span className="text-base">📥</span>
+                      <span className="text-base">↑</span>
                       Import CSV
                     </button>
                   </>
@@ -574,7 +712,7 @@ export default function CustomerListPage() {
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
                 >
                   <span className="text-base">↓</span>
-                  Export
+                  Export JSON
                 </button>
                 <div className="border-t border-gray-700/60" />
                 <button
@@ -940,7 +1078,9 @@ export default function CustomerListPage() {
             </button>
             {assignOpen && (
               <div className="absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                {labels && (
+                {isLeadOrCustomer(cat) ? (
+                  <UserAssignInput onAssign={handleBulkAssignUser} />
+                ) : labels && (
                   <AssignInput onAssign={handleBulkAssign} salesmanList={usePickerStore.getState().lists.salesman} />
                 )}
               </div>
@@ -973,6 +1113,8 @@ export default function CustomerListPage() {
         )
       )}
 
+      <div className={hasQuickFilterSidebar ? 'flex gap-4 items-start' : ''}>
+      <div className={hasQuickFilterSidebar ? 'flex-1 min-w-0' : ''}>
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
         {/* Select-all checkbox row — hidden for roles without bulk actions */}
         {!loading && filtered.length > 0 && perms.canBulkAction && (
@@ -1053,6 +1195,227 @@ export default function CustomerListPage() {
             </button>
           </div>
         )}
+      </div>
+      </div>
+      {cat === 'Employee' && (
+        <div className="w-52 shrink-0 card p-3 space-y-1">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+          <QuickFilterButton
+            label="Active Employees"
+            active={!showInactive}
+            onClick={() => { setShowInactive(false); localStorage.setItem('thelight.showInactive', 'false') }}
+          />
+          <QuickFilterButton
+            label="All Employees"
+            active={showInactive}
+            onClick={() => { setShowInactive(true); localStorage.setItem('thelight.showInactive', 'true') }}
+          />
+          <QuickFilterButton
+            label="Salesperson"
+            active={filterSalesmanFlag === 'yes'}
+            onClick={() => setFilterSalesmanFlag(filterSalesmanFlag === 'yes' ? '' : 'yes')}
+          />
+          <QuickFilterButton
+            label="Not a Salesperson"
+            active={filterSalesmanFlag === 'no'}
+            onClick={() => setFilterSalesmanFlag(filterSalesmanFlag === 'no' ? '' : 'no')}
+          />
+          {uniqueStates.map(s => (
+            <QuickFilterButton
+              key={s}
+              label={`State: ${s}`}
+              active={filterState === s}
+              onClick={() => setFilterState(filterState === s ? '' : s)}
+            />
+          ))}
+        </div>
+      )}
+      {cat === 'Lead' && (
+        <div className="w-52 shrink-0 card p-3 space-y-1">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+
+          <QuickFilterButton
+            label="Active Leads"
+            active={!showInactive}
+            onClick={() => { setShowInactive(false); localStorage.setItem('thelight.showInactive', 'false') }}
+          />
+          <QuickFilterButton
+            label="All Leads"
+            active={showInactive}
+            onClick={() => { setShowInactive(true); localStorage.setItem('thelight.showInactive', 'true') }}
+          />
+
+          <QuickFilterButton
+            label="My Leads"
+            active={filterAssignment === 'mine'}
+            onClick={() => setFilterAssignment(filterAssignment === 'mine' ? '' : 'mine')}
+          />
+          <QuickFilterButton
+            label="Unassigned"
+            active={filterAssignment === 'unassigned'}
+            onClick={() => setFilterAssignment(filterAssignment === 'unassigned' ? '' : 'unassigned')}
+          />
+
+          <QuickFilterButton
+            label="Hot Leads"
+            active={filterQuality === 'hot'}
+            onClick={() => setFilterQuality(filterQuality === 'hot' ? '' : 'hot')}
+          />
+          <QuickFilterButton
+            label="Stale (30+ Days)"
+            active={filterQuality === 'stale'}
+            onClick={() => setFilterQuality(filterQuality === 'stale' ? '' : 'stale')}
+          />
+
+          {uniqueLeadStatuses.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Status</p>
+              {uniqueLeadStatuses.map(s => (
+                <QuickFilterButton
+                  key={s}
+                  label={s}
+                  active={filterLeadStatus === s}
+                  onClick={() => setFilterLeadStatus(filterLeadStatus === s ? '' : s)}
+                />
+              ))}
+            </>
+          )}
+
+          {uniqueLeadSources.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Source</p>
+              {uniqueLeadSources.map(s => (
+                <QuickFilterButton
+                  key={s}
+                  label={s}
+                  active={filterLeadSource === s}
+                  onClick={() => setFilterLeadSource(filterLeadSource === s ? '' : s)}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      {cat === 'Customer' && (
+        <div className="w-52 shrink-0 card p-3 space-y-1">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+
+          <QuickFilterButton
+            label="Active Customers"
+            active={!showInactive}
+            onClick={() => { setShowInactive(false); localStorage.setItem('thelight.showInactive', 'false') }}
+          />
+          <QuickFilterButton
+            label="All Customers"
+            active={showInactive}
+            onClick={() => { setShowInactive(true); localStorage.setItem('thelight.showInactive', 'true') }}
+          />
+
+          <QuickFilterButton
+            label="My Customers"
+            active={filterAssignment === 'mine'}
+            onClick={() => setFilterAssignment(filterAssignment === 'mine' ? '' : 'mine')}
+          />
+          <QuickFilterButton
+            label="Unassigned"
+            active={filterAssignment === 'unassigned'}
+            onClick={() => setFilterAssignment(filterAssignment === 'unassigned' ? '' : 'unassigned')}
+          />
+
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Health</p>
+          {(['Excellent', 'Good', 'Fair', 'At Risk'] as HealthLabel[]).map(h => (
+            <QuickFilterButton
+              key={h}
+              label={h}
+              active={filterHealth === h}
+              onClick={() => setFilterHealth(filterHealth === h ? '' : h)}
+            />
+          ))}
+
+          {uniquePaymentStatuses.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Payment Status</p>
+              {uniquePaymentStatuses.map(s => (
+                <QuickFilterButton
+                  key={s}
+                  label={s}
+                  active={filterPaymentStatus === s}
+                  onClick={() => setFilterPaymentStatus(filterPaymentStatus === s ? '' : s)}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      {cat === 'Vendor' && (
+        <div className="w-52 shrink-0 card p-3 space-y-1">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+
+          <QuickFilterButton
+            label="Active Vendors"
+            active={!showInactive}
+            onClick={() => { setShowInactive(false); localStorage.setItem('thelight.showInactive', 'false') }}
+          />
+          <QuickFilterButton
+            label="All Vendors"
+            active={showInactive}
+            onClick={() => { setShowInactive(true); localStorage.setItem('thelight.showInactive', 'true') }}
+          />
+
+          <QuickFilterButton
+            label="Callback: Yes"
+            active={filterSalesmanFlag === 'yes'}
+            onClick={() => setFilterSalesmanFlag(filterSalesmanFlag === 'yes' ? '' : 'yes')}
+          />
+          <QuickFilterButton
+            label="Callback: No"
+            active={filterSalesmanFlag === 'no'}
+            onClick={() => setFilterSalesmanFlag(filterSalesmanFlag === 'no' ? '' : 'no')}
+          />
+
+          {uniqueRatings.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Rating</p>
+              {uniqueRatings.map(r => (
+                <QuickFilterButton
+                  key={r}
+                  label={`${r} ★`}
+                  active={filterRating === r}
+                  onClick={() => setFilterRating(filterRating === r ? '' : r)}
+                />
+              ))}
+            </>
+          )}
+
+          {uniqueProfessions.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Profession</p>
+              {uniqueProfessions.map(s => (
+                <QuickFilterButton
+                  key={s}
+                  label={s}
+                  active={filterProfession === s}
+                  onClick={() => setFilterProfession(filterProfession === s ? '' : s)}
+                />
+              ))}
+            </>
+          )}
+
+          {uniqueManagers.length > 0 && (
+            <>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Manager</p>
+              {uniqueManagers.map(s => (
+                <QuickFilterButton
+                  key={s}
+                  label={s}
+                  active={filterManager === s}
+                  onClick={() => setFilterManager(filterManager === s ? '' : s)}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      )}
       </div>
       {csvImportOpen && (
         <CSVImportModal
@@ -1159,11 +1522,13 @@ function CustomerRow({
           </div>
           <p className="text-sm text-gray-400 truncate">
             {[c.city, c.state].filter(Boolean).join(', ')}
-            {c.category.toLowerCase() !== 'vendor' && c.salesman ? ` · ${c.salesman}` : ''}
+            {c.category.toLowerCase() !== 'vendor' && c.category.toLowerCase() !== 'employee' && c.salesman ? ` · ${c.salesman}` : ''}
+            {c.category.toLowerCase() === 'vendor' && c.profession ? ` · ${c.profession}` : ''}
+            {c.category.toLowerCase() === 'employee' && c.adNo ? ` · ${c.adNo}` : ''}
           </p>
         </div>
-        <div className="shrink-0 text-right flex flex-col items-end gap-1">
-          {c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
+        <div className="shrink-0 text-right flex flex-col items-end gap-1 self-start">
+          {c.category.toLowerCase() !== 'customer' && c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
           {c.category.toLowerCase() === 'lead' && (
             <div className="flex items-center gap-1.5">
               {(() => {
@@ -1185,17 +1550,93 @@ function CustomerRow({
               })()}
             </div>
           )}
-          {c.category.toLowerCase() === 'customer' && (() => {
-            const hs = calculateHealthScoreLight(c)
-            return (
+        </div>
+      </Link>
+      {c.category.toLowerCase() === 'customer' && (() => {
+        const hs = calculateHealthScoreLight(c)
+        return (
+          <div className="shrink-0 flex flex-col items-end gap-1 self-start">
+            {c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
+            <div className="flex items-center gap-1.5">
+              {c.paymentStatus !== 'Paid' && (
+                <button
+                  type="button"
+                  onClick={() => { void setPaymentStatus(c.id, 'Paid') }}
+                  title="Mark payment status as Paid"
+                  className="shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-md bg-green-600/20 text-green-400 border border-green-700/30 hover:bg-green-600/30 transition-colors"
+                >
+                  $ Paid
+                </button>
+              )}
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${hs.badgeClass}`}>
                 <span className={`w-1 h-1 rounded-full ${hs.dotClass}`} />
                 {hs.label}
               </span>
-            )
-          })()}
-        </div>
-      </Link>
+            </div>
+          </div>
+        )
+      })()}
+      {c.category.toLowerCase() === 'employee' && (
+        <button
+          type="button"
+          onClick={() => { void setEmployeeStatus(c.id, nextEmployeeStatus(c.employeeStatus)) }}
+          title="Click to advance employee status"
+          className={`shrink-0 self-start text-[10px] leading-none px-1.5 py-1 rounded-md border transition-colors ${employeeStatusClasses(c.employeeStatus)}`}
+        >
+          {c.employeeStatus || 'Active'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+const EMPLOYEE_STATUS_CYCLE = ['Active', 'On Leave', 'Inactive']
+
+function nextEmployeeStatus(current: string): string {
+  const i = EMPLOYEE_STATUS_CYCLE.indexOf(current)
+  return EMPLOYEE_STATUS_CYCLE[(i + 1) % EMPLOYEE_STATUS_CYCLE.length]
+}
+
+function employeeStatusClasses(status: string): string {
+  switch (status) {
+    case 'On Leave': return 'bg-amber-600/20 text-amber-400 border-amber-700/30 hover:bg-amber-600/30'
+    case 'Inactive':  return 'bg-gray-600/20 text-gray-400 border-gray-700/30 hover:bg-gray-600/30'
+    default:          return 'bg-green-600/20 text-green-400 border-green-700/30 hover:bg-green-600/30'
+  }
+}
+
+function UserAssignInput({
+  onAssign,
+}: {
+  onAssign: (uid: string, displayName: string) => void
+}) {
+  const [salesmen, setSalesmen] = useState<TeamMember[] | null>(null)
+
+  useEffect(() => {
+    fetchSalesmenForCompany().then(setSalesmen).catch(() => setSalesmen([]))
+  }, [])
+
+  if (salesmen === null) {
+    return <div className="p-3 text-xs text-gray-500">Loading team…</div>
+  }
+  if (salesmen.length === 0) {
+    return (
+      <div className="p-3 text-xs text-gray-500">
+        No salesmen on your team yet. Invite one from Team settings.
+      </div>
+    )
+  }
+  return (
+    <div className="p-2 space-y-1">
+      {salesmen.map(m => (
+        <button
+          key={m.uid}
+          onClick={() => onAssign(m.uid, memberDisplayName(m))}
+          className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 rounded-lg transition-colors"
+        >
+          {memberDisplayName(m)}
+        </button>
+      ))}
     </div>
   )
 }

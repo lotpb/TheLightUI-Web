@@ -64,6 +64,16 @@ export interface CustomerItem {
   // never dragged since the custom-stages feature shipped — effectiveStageId()
   // in models/pipelineStage.ts falls back to the legacy derived stage for those.
   pipelineStage: string
+  smsOptOut: boolean
+  // uid of the users/ doc for the assigned salesman (Lead/Customer only). Empty
+  // when unassigned or when `salesman` was set to a legacy free-text name that
+  // doesn't correspond to a real team-member account.
+  assignedToUid: string
+  // Token of this customer's portal snapshot (customerPortals/{token}).
+  // Read-only here: it is deliberately NOT written by customerToFirestore, so
+  // an ordinary customer edit can never clear it. setPortalToken() is the only
+  // writer. Empty until a portal link has been generated.
+  portalToken: string
 }
 
 export const emptyCustomer = (): CustomerItem => ({
@@ -116,6 +126,9 @@ export const emptyCustomer = (): CustomerItem => ({
   paymentStatus: '',
   customFields: {},
   pipelineStage: '',
+  smsOptOut: false,
+  assignedToUid: '',
+  portalToken: '',
 })
 
 // Mirrors the defensive parsing in CustomerFirestore.swift
@@ -215,6 +228,9 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     paymentStatus: str(d, 'paymentStatus'),
     customFields: parseCustomFields(d['customFields']),
     pipelineStage: str(d, 'pipelineStage'),
+    smsOptOut: d['smsOptOut'] === true,
+    assignedToUid: str(d, 'assignedToUid'),
+    portalToken: str(d, 'portalToken'),
   }
 }
 
@@ -275,6 +291,7 @@ export function customerToFirestore(c: CustomerItem, userId?: string): Record<st
     leadSource: c.leadSource,
     paymentStatus: c.paymentStatus,
     customFields: c.customFields ?? {},
+    assignedToUid: c.assignedToUid,
   }
   if (userId) data['uid'] = userId
   if (c.category) data['category'] = c.category
@@ -285,8 +302,8 @@ export function categoryMatches(stored: string, category: CustomerCategory): boo
   return stored.toLowerCase() === category.toLowerCase()
 }
 
-export function formatCurrency(cents: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents)
+export function formatCurrency(cents: number, currency: string = 'USD'): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(cents)
 }
 
 export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'> & { category?: string }): string {

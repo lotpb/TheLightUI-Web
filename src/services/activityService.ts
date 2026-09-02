@@ -6,6 +6,7 @@ import {
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import type { Activity, ActivityType } from '../models/activity'
+import { warnIfCapped } from './realtimeCap'
 
 const COL = 'Activities'
 
@@ -30,7 +31,7 @@ function docToActivity(id: string, data: Record<string, unknown>): Activity {
 
 // Company-wide feed — single companyId filter, no composite index needed
 export function subscribeToAllActivities(
-  onData: (items: Activity[]) => void,
+  onData: (items: Activity[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -38,15 +39,13 @@ export function subscribeToAllActivities(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(ACTIVITY_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === ACTIVITY_REALTIME_LIMIT) {
-        console.warn(`[subscribeToAllActivities] hit ${ACTIVITY_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('Activities', snap.size, companyId, ACTIVITY_REALTIME_LIMIT)
       const items: Activity[] = []
       for (const d of snap.docs) {
         try { items.push(docToActivity(d.id, d.data() as Record<string, unknown>)) } catch { /* skip */ }
       }
       items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )

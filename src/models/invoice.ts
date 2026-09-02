@@ -5,6 +5,8 @@ export interface InvoiceLineItem {
   description: string
   qty: number
   rate: number
+  /** Set when this line item was added from the catalog — used to deduct stock on invoice creation. */
+  catalogItemId?: string
 }
 
 export interface Invoice {
@@ -31,7 +33,16 @@ export interface Invoice {
   generatedFrom?: string | null
   paymentLink?: string | null
   lastReminderSentAt?: Date | null
+  currency: string
+  quickbooksInvoiceId?: string | null
+  financingApplicationId?: string | null
 }
+
+// Common ISO 4217 codes for the invoice currency picker. Aggregate totals
+// elsewhere (Dashboard, Forecast, Commission) still sum raw amounts assuming
+// a single company currency — mixing currencies across invoices in those
+// rollups isn't converted, only each invoice's own display respects this field.
+export const CURRENCY_CODES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'MXN'] as const
 
 export function lineItemTotal(item: InvoiceLineItem): number {
   return item.qty * item.rate
@@ -69,8 +80,8 @@ export function statusClasses(s: InvoiceStatus): string {
   }
 }
 
-export function fmtCurrency(n: number): string {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+export function fmtCurrency(n: number, currency: string = 'USD'): string {
+  return n.toLocaleString('en-US', { style: 'currency', currency, minimumFractionDigits: 2 })
 }
 
 export function generateInvoiceNumber(): string {

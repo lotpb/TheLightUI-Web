@@ -5,6 +5,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
+import { warnIfCapped } from './realtimeCap'
 
 const COL = 'referrals'
 
@@ -32,7 +33,7 @@ function toDate(v: unknown): Date {
 }
 
 export function subscribeToReferrals(
-  onData: (items: Referral[]) => void,
+  onData: (items: Referral[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -40,9 +41,7 @@ export function subscribeToReferrals(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(REFERRAL_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === REFERRAL_REALTIME_LIMIT) {
-        console.warn(`[subscribeToReferrals] hit ${REFERRAL_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('referrals', snap.size, companyId, REFERRAL_REALTIME_LIMIT)
       const items: Referral[] = snap.docs.map(d => {
         const r = d.data() as Record<string, unknown>
         return {
@@ -58,7 +57,7 @@ export function subscribeToReferrals(
         }
       })
       items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )
@@ -89,4 +88,53 @@ export async function addReferral(params: {
 
 export async function deleteReferral(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+function toReferral(id: string, r: Record<string, unknown>): Referral {
+  return {
+    id,
+    companyId:      String(r.companyId     ?? ''),
+    referrerId:     String(r.referrerId    ?? ''),
+    referrerName:   String(r.referrerName  ?? ''),
+    referredId:     String(r.referredId    ?? ''),
+    referredName:   String(r.referredName  ?? ''),
+    referredAmount: Number(r.referredAmount ?? 0),
+    notes:          String(r.notes         ?? ''),
+    createdAt:      toDate(r.createdAt),
+  }
+}
+
+/**
+ * Referrals touching one customer, for the detail page's Related Records.
+ *
+ * A customer can be either side of a referral and Firestore has no OR across
+ * two different fields, so this runs both queries and merges. Each side is
+ * reported separately because the UI labels them differently ("Referred: X"
+ * vs "Referred by: Y").
+ */
+export function subscribeToCustomerReferrals(
+  customerId: string,
+  onData: (referredByThem: Referral[], referredToThem: Referral[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
+
+  let asReferrer: Referral[] = []
+  let asReferred: Referral[] = []
+  const byDateDesc = (a: Referral, b: Referral) => b.createdAt.getTime() - a.createdAt.getTime()
+  const emit = () => onData([...asReferrer].sort(byDateDesc), [...asReferred].sort(byDateDesc))
+
+  const unsubReferrer = onSnapshot(
+    query(collection(db, COL), where('companyId', '==', companyId), where('referrerId', '==', customerId)),
+    snap => { asReferrer = snap.docs.map(d => toReferral(d.id, d.data() as Record<string, unknown>)); emit() },
+    onError,
+  )
+  const unsubReferred = onSnapshot(
+    query(collection(db, COL), where('companyId', '==', companyId), where('referredId', '==', customerId)),
+    snap => { asReferred = snap.docs.map(d => toReferral(d.id, d.data() as Record<string, unknown>)); emit() },
+    onError,
+  )
+
+  return () => { unsubReferrer(); unsubReferred() }
 }

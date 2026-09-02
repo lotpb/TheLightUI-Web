@@ -34,7 +34,7 @@ const PREF_KEY = 'thelight.showInactive'
 
 export default function SettingsPage() {
   const { lists, labels: storedLabels, fetch } = usePickerStore()
-  const { companyId, role, notifyNewLeads, notifyChatMessages } = useAuthStore()
+  const { companyId, role, notifyNewLeads, notifyChatMessages, notifyAssignment, notifyAssignmentEmail } = useAuthStore()
   const { coloredAvatars, setColoredAvatars } = usePrefStore()
   const toast = useToast()
 
@@ -56,6 +56,7 @@ export default function SettingsPage() {
     setLightMode(next)
     localStorage.setItem('thelight.lightMode', String(next))
     document.documentElement.classList.toggle('light-mode', next)
+    document.documentElement.style.colorScheme = next ? 'light' : 'dark'
   }
 
   const [local, setLocal] = useState<PickerLists>({
@@ -74,28 +75,6 @@ export default function SettingsPage() {
   // Invite state
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviting, setInviting] = useState(false)
-  const [fixingRole, setFixingRole] = useState(false)
-
-  async function handleFixRole() {
-    setFixingRole(true)
-    try {
-      const fns = getFunctions()
-      const fixRole = httpsCallable<object, { role: string }>(fns, 'fixRole')
-      const result = await fixRole({})
-      // Force token refresh so the corrected role is picked up immediately
-      const { auth: fbAuth } = await import('../firebase/config')
-      await fbAuth.currentUser?.getIdToken(true)
-      const tokenResult = await fbAuth.currentUser?.getIdTokenResult()
-      const newRole = tokenResult?.claims['role'] as string | undefined
-      useAuthStore.setState({ role: newRole ?? result.data.role })
-      toast(`Role corrected to "${result.data.role}". Please refresh if needed.`, 'success')
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Fix failed', 'error')
-    } finally {
-      setFixingRole(false)
-    }
-  }
-
 
   // Data management state
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -345,17 +324,7 @@ return (
           </div>
           <div className="flex justify-between items-center text-sm">
             <span className="text-gray-400">Your role</span>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-300 capitalize">{role ?? '—'}</span>
-              <button
-                onClick={handleFixRole}
-                disabled={fixingRole}
-                title="Fix incorrect role"
-                className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-40 transition-colors"
-              >
-                {fixingRole ? '…' : 'Fix'}
-              </button>
-            </div>
+            <span className="text-gray-300 capitalize">{role ?? '—'}</span>
           </div>
 
           {/* Invite */}
@@ -483,6 +452,42 @@ return (
             >
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                 notifyChatMessages ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+          <div className="border-t border-gray-700/40 pt-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-200">Lead assignment alerts</p>
+              <p className="text-xs text-gray-500 mt-0.5">Get a push notification when a lead or customer is assigned to you</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNotificationPref('notifyAssignment', !notifyAssignment)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                notifyAssignment ? 'bg-indigo-600' : 'bg-gray-600'
+              }`}
+              aria-label="Toggle lead assignment alerts"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                notifyAssignment ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+          <div className="border-t border-gray-700/40 pt-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-200">Lead assignment emails</p>
+              <p className="text-xs text-gray-500 mt-0.5">Get an email when a lead or customer is assigned to you</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNotificationPref('notifyAssignmentEmail', !notifyAssignmentEmail)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                notifyAssignmentEmail ? 'bg-indigo-600' : 'bg-gray-600'
+              }`}
+              aria-label="Toggle lead assignment emails"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                notifyAssignmentEmail ? 'translate-x-6' : 'translate-x-1'
               }`} />
             </button>
           </div>

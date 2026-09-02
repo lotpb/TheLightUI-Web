@@ -21,6 +21,7 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     lineItems: [{ description: 'Widget', qty: 2, rate: 50 }],
     notes: '',
     taxRate: 0,
+    currency: 'USD',
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,

@@ -6,6 +6,7 @@ import {
 import { db } from '../firebase/config'
 import { expenseFromDoc, expenseToFirestore, type Expense } from '../models/expense'
 import { getCompanyId } from '../stores/authStore'
+import { warnIfCapped } from './realtimeCap'
 
 const COL = 'Expenses'
 
@@ -14,7 +15,7 @@ const COL = 'Expenses'
 const EXPENSE_REALTIME_LIMIT = 5_000
 
 export function subscribeToExpenses(
-  onData: (items: Expense[]) => void,
+  onData: (items: Expense[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -25,15 +26,13 @@ export function subscribeToExpenses(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(EXPENSE_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === EXPENSE_REALTIME_LIMIT) {
-        console.warn(`[subscribeToExpenses] hit ${EXPENSE_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('Expenses', snap.size, companyId, EXPENSE_REALTIME_LIMIT)
       const items: Expense[] = []
       for (const d of snap.docs) {
         try { items.push(expenseFromDoc(d)) } catch { /* skip malformed */ }
       }
       items.sort((a, b) => b.date.getTime() - a.date.getTime())
-      onData(items)
+      onData(items, hitCap)
     },
     onError,
   )

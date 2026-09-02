@@ -6,6 +6,7 @@ import {
   clockOut as doClockOut,
   deleteTimeEntry,
   type TimeEntry,
+  type GeoPoint,
 } from '../../services/timeTrackingService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { categoryMatches, fullName, type CustomerItem } from '../../models/customer'
@@ -44,6 +45,23 @@ function fmtDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+// Best-effort GPS capture — resolves to null (never rejects) on denial,
+// timeout, or an unsupported browser, so clock-in/out never blocks on it.
+function getCurrentLocation(): Promise<GeoPoint | null> {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) { resolve(null); return }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    )
+  })
+}
+
+function mapsUrl(loc: GeoPoint): string {
+  return `https://www.google.com/maps?q=${loc.lat},${loc.lng}`
+}
+
 function periodStart(period: string): Date {
   const now = new Date()
   if (period === 'today') {
@@ -78,7 +96,15 @@ function ActiveCard({ entry, now, onClockOut }: { entry: TimeEntry; now: number;
       <div className="w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-teal-300 truncate">{entry.customerName}</p>
-        <p className="text-xs text-teal-500 truncate">{entry.clockedInBy} · clocked in {fmtTime(entry.clockIn)}</p>
+        <p className="text-xs text-teal-500 truncate">
+          {entry.clockedInBy} · clocked in {fmtTime(entry.clockIn)}
+          {entry.clockInLocation && (
+            <a href={mapsUrl(entry.clockInLocation)} target="_blank" rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()} className="ml-1.5 text-teal-400 hover:underline">
+              📍
+            </a>
+          )}
+        </p>
         {entry.notes && <p className="text-xs text-gray-500 truncate mt-0.5">{entry.notes}</p>}
       </div>
       <div className="text-right shrink-0">
@@ -271,7 +297,8 @@ export default function TimeTrackingPage() {
   async function handleClockIn(customerId: string, customerName: string, notes: string) {
     const workerName = user?.displayName || user?.email || 'Unknown'
     const workerId   = user?.uid ?? ''
-    await doClockIn({ customerId, customerName, workerName, workerId, notes })
+    const location = await getCurrentLocation()
+    await doClockIn({ customerId, customerName, workerName, workerId, notes, location })
     setShowForm(false)
     toast(`Clocked in on ${customerName}`, 'success')
   }
@@ -279,7 +306,8 @@ export default function TimeTrackingPage() {
   async function handleClockOut(entry: TimeEntry) {
     setClockingOut(entry.id)
     try {
-      await doClockOut(entry)
+      const location = await getCurrentLocation()
+      await doClockOut(entry, location)
       toast('Clocked out', 'success')
     } catch {
       toast('Could not clock out', 'error')
@@ -419,7 +447,16 @@ export default function TimeTrackingPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-200 truncate">{e.customerName}</p>
                       <p className="text-xs text-gray-500 truncate mt-0.5">
-                        {e.clockedInBy} · {fmtTime(e.clockIn)}–{e.clockOut ? fmtTime(e.clockOut) : '?'}
+                        {e.clockedInBy} · {fmtTime(e.clockIn)}
+                        {e.clockInLocation && (
+                          <a href={mapsUrl(e.clockInLocation)} target="_blank" rel="noopener noreferrer"
+                            className="ml-1 hover:underline">📍</a>
+                        )}
+                        {'–'}{e.clockOut ? fmtTime(e.clockOut) : '?'}
+                        {e.clockOutLocation && (
+                          <a href={mapsUrl(e.clockOutLocation)} target="_blank" rel="noopener noreferrer"
+                            className="ml-1 hover:underline">📍</a>
+                        )}
                         {e.notes && ` · ${e.notes}`}
                       </p>
                     </div>

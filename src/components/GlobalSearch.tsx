@@ -1,20 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { subscribeToCustomers } from '../services/customerService'
-import { subscribeToInvoices } from '../services/invoiceService'
-import { subscribeToProposals } from '../services/proposalService'
-import { subscribeToTodos } from '../services/todoService'
-import { subscribeToExpenses } from '../services/expenseService'
+import { useSharedCustomers } from '../hooks/useSharedCustomers'
+import {
+  useSharedInvoices, useSharedProposals, useSharedTodos, useSharedExpenses,
+} from '../hooks/useSharedCollections'
 import { fullName, type CustomerItem, type CustomerCategory, CATEGORY_LABELS } from '../models/customer'
-import { fmtCurrency, type Invoice } from '../models/invoice'
-import type { Proposal } from '../models/proposal'
-import type { Todo } from '../models/todo'
-import type { Expense } from '../models/expense'
-import { useAuthStore } from '../stores/authStore'
+import { fmtCurrency } from '../models/invoice'
 import { useDebounce } from '../hooks/useDebounce'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { ALL_ITEMS } from '../config/navigation'
 
 const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Employee']
 const MAX_PER_GROUP = 4
@@ -25,29 +21,24 @@ interface Props {
 
 export default function GlobalSearch({ onClose }: Props) {
   const navigate       = useNavigate()
-  const companyId      = useAuthStore(s => s.companyId)
-  const user           = useAuthStore(s => s.user)
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const inputRef       = useRef<HTMLInputElement>(null)
   const panelRef       = useRef<HTMLDivElement>(null)
   useFocusTrap(panelRef)
 
-  const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
-  const [allInvoices,  setAllInvoices]  = useState<Invoice[]>([])
-  const [allProposals, setAllProposals] = useState<Proposal[]>([])
-  const [allTodos,     setAllTodos]     = useState<Todo[]>([])
-  const [allExpenses,  setAllExpenses]  = useState<Expense[]>([])
+  // Shared listeners: the palette mounts and unmounts on every open/close, so
+  // owning five raw subscriptions here meant five teardown/recreate cycles per
+  // toggle — the churn that trips the Firestore SDK's "INTERNAL ASSERTION
+  // FAILED: Unexpected state". These reuse whatever the rest of the app already
+  // has open and stay warm briefly after close.
+  const { items: allCustomers } = useSharedCustomers()
+  const { items: allInvoices }  = useSharedInvoices()
+  const { items: allProposals } = useSharedProposals()
+  const { items: allTodos }     = useSharedTodos()
+  const { items: allExpenses }  = useSharedExpenses()
+
   const [query, setQuery] = useState('')
   const debouncedQuery    = useDebounce(query, 150)
-
-  useEffect(() => {
-    const u1 = subscribeToCustomers(setAllCustomers, () => {})
-    const u2 = subscribeToInvoices(setAllInvoices,   () => {})
-    const u3 = subscribeToTodos(items => setAllTodos(items), () => {})
-    const u4 = subscribeToExpenses(setAllExpenses,   () => {})
-    const u5 = subscribeToProposals(setAllProposals, () => {})
-    return () => { u1(); u2(); u3(); u4(); u5() }
-  }, [companyId, user])
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
@@ -60,6 +51,11 @@ export default function GlobalSearch({ onClose }: Props) {
   }, [onClose])
 
   const q = debouncedQuery.trim().toLowerCase()
+
+  const pageResults = useMemo(() => {
+    if (!q) return []
+    return ALL_ITEMS.filter(item => item.label.toLowerCase().includes(q))
+  }, [q])
 
   const customerResults = useMemo(() => {
     if (!q) return []
@@ -117,7 +113,7 @@ export default function GlobalSearch({ onClose }: Props) {
     return CATEGORY_ORDER.map(cat => ({ cat, items: map.get(cat)! })).filter(g => g.items.length > 0)
   }, [customerResults])
 
-  const totalResults = customerResults.length + invoiceResults.length + proposalResults.length + todoResults.length + expenseResults.length
+  const totalResults = pageResults.length + customerResults.length + invoiceResults.length + proposalResults.length + todoResults.length + expenseResults.length
 
   function go(path: string) {
     navigate(path)
@@ -147,7 +143,7 @@ export default function GlobalSearch({ onClose }: Props) {
             type="search"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search records, invoices, tasks, expenses…"
+            placeholder="Search pages, records, invoices, tasks, expenses…"
             className="flex-1 bg-transparent text-white placeholder-gray-500 outline-none text-sm"
           />
           <kbd className="hidden sm:inline text-xs text-gray-500 bg-gray-800 border border-gray-700 px-1.5 py-0.5 rounded font-mono">Esc</kbd>
@@ -157,7 +153,7 @@ export default function GlobalSearch({ onClose }: Props) {
         <div className="overflow-y-auto flex-1">
           {!q ? (
             <div className="px-4 py-8 text-center">
-              <p className="text-sm text-gray-500">Search across records, invoices, tasks, and expenses</p>
+              <p className="text-sm text-gray-500">Search pages, records, invoices, tasks, and expenses</p>
               <p className="text-xs text-gray-600 mt-1">Tip: press <kbd className="bg-gray-800 border border-gray-700 px-1 rounded font-mono">⌘K</kbd> anytime to open</p>
             </div>
           ) : totalResults === 0 ? (
@@ -167,6 +163,25 @@ export default function GlobalSearch({ onClose }: Props) {
           ) : (
             <>
               <p className="px-4 pt-3 pb-1 text-xs text-gray-500">{totalResults} result{totalResults !== 1 ? 's' : ''}</p>
+
+              {/* ── Pages ── */}
+              {pageResults.length > 0 && (
+                <div>
+                  <SectionHeader label="Pages" />
+                  {pageResults.slice(0, MAX_PER_GROUP).map(item => (
+                    <button
+                      key={item.to}
+                      onClick={() => go(item.to)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800 transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-gray-700/60 flex items-center justify-center shrink-0">
+                        {item.icon('w-4 h-4 text-gray-300')}
+                      </div>
+                      <p className="text-sm font-medium text-gray-100 truncate">{item.label}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* ── Customer groups ── */}
               {grouped.map(({ cat, items }) => {

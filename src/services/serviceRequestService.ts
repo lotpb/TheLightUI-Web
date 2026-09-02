@@ -1,5 +1,5 @@
 import {
-  collection, doc, updateDoc, deleteDoc,
+  collection, doc, getDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy, limit, serverTimestamp,
   Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
@@ -63,6 +63,12 @@ export function subscribeToServiceRequests(
   )
 }
 
+export async function getServiceRequest(id: string): Promise<ServiceRequest | null> {
+  const snap = await getDoc(doc(db, COL, id))
+  if (!snap.exists()) return null
+  return toRequest(snap.id, snap.data())
+}
+
 export async function updateServiceRequestStatus(request: ServiceRequest, status: ServiceRequestStatus): Promise<void> {
   const updates: Record<string, unknown> = { status }
   if (!request.firstContactedAt && status !== 'new') {
@@ -79,4 +85,30 @@ export async function updateServiceRequestStatus(request: ServiceRequest, status
 
 export async function deleteServiceRequest(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+// Per-customer scope for the detail page's Related Records. Two equality
+// filters need no composite index; the client-side sort avoids one that
+// orderBy would require, and avoids dropping docs missing createdAt.
+export function subscribeToCustomerServiceRequests(
+  customerId: string,
+  onData:  (items: ServiceRequest[]) => void,
+  onError: (e: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onData([]); return () => {} }
+
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const items = snap.docs.map(d => toRequest(d.id, d.data()))
+      items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      onData(items)
+    },
+    onError,
+  )
 }

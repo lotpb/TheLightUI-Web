@@ -20,6 +20,8 @@ interface AuthState {
   firstName: string | null
   notifyNewLeads: boolean
   notifyChatMessages: boolean
+  notifyAssignment: boolean
+  notifyAssignmentEmail: boolean
   loading: boolean
   error: string | null
   initialized: boolean  // true once auth state is known (logged in or out)
@@ -38,6 +40,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   firstName: null,
   notifyNewLeads: true,
   notifyChatMessages: true,
+  notifyAssignment: true,
+  notifyAssignmentEmail: true,
   loading: false,
   error: null,
   initialized: false,
@@ -112,7 +116,7 @@ export function getCurrentUserLabel(): { uid: string; name: string } {
 // Functions that send push notifications (onLeadCreated, onNewChatMessage)
 // can honor it. Updates local state immediately for a responsive UI.
 export async function setNotificationPref(
-  key: 'notifyNewLeads' | 'notifyChatMessages',
+  key: 'notifyNewLeads' | 'notifyChatMessages' | 'notifyAssignment' | 'notifyAssignmentEmail',
   value: boolean,
 ): Promise<void> {
   const { user } = useAuthStore.getState()
@@ -247,6 +251,8 @@ onAuthStateChanged(auth, async (user) => {
         // Absence means opted in — these fields are only written when a user turns a toggle off.
         const fsNotifyNewLeads      = d['notifyNewLeads']      !== false
         const fsNotifyChatMessages  = d['notifyChatMessages']  !== false
+        const fsNotifyAssignment    = d['notifyAssignment']    !== false
+        const fsNotifyAssignmentEmail = d['notifyAssignmentEmail'] !== false
         const state = useAuthStore.getState()
         if (fsRole && fsRole !== state.role) {
           useAuthStore.setState({ role: fsRole })
@@ -257,8 +263,16 @@ onAuthStateChanged(auth, async (user) => {
         if (fsFirstName !== state.firstName) {
           useAuthStore.setState({ firstName: fsFirstName })
         }
-        if (fsNotifyNewLeads !== state.notifyNewLeads || fsNotifyChatMessages !== state.notifyChatMessages) {
-          useAuthStore.setState({ notifyNewLeads: fsNotifyNewLeads, notifyChatMessages: fsNotifyChatMessages })
+        if (fsNotifyNewLeads !== state.notifyNewLeads
+            || fsNotifyChatMessages !== state.notifyChatMessages
+            || fsNotifyAssignment !== state.notifyAssignment
+            || fsNotifyAssignmentEmail !== state.notifyAssignmentEmail) {
+          useAuthStore.setState({
+            notifyNewLeads: fsNotifyNewLeads,
+            notifyChatMessages: fsNotifyChatMessages,
+            notifyAssignment: fsNotifyAssignment,
+            notifyAssignmentEmail: fsNotifyAssignmentEmail,
+          })
         }
       },
       () => {}

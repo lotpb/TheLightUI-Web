@@ -1,9 +1,21 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  getPortalSnapshot, submitServiceRequest,
-  type CustomerPortalSnapshot, type PortalServiceRequest,
+  getPortalSnapshot, submitServiceRequest, getDayAvailability,
+  type CustomerPortalSnapshot, type PortalServiceRequest, type DayAvailability,
 } from '../../services/customerPortalService'
+
+const AVAILABILITY_WINDOW_DAYS = 14
+
+// Local calendar-day string (not toISOString, which is UTC and can shift the
+// date near midnight) — matches how every other date picker in this app
+// already works off local Date components.
+function toYMD(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 function fmtDate(d: Date) {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -31,6 +43,8 @@ export default function CustomerPortalPage() {
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState<PortalServiceRequest>({ name: '', phone: '', email: '', description: '', preferredDate: '' })
   const [formErr, setFormErr] = useState('')
+  const [availability, setAvailability] = useState<Record<string, DayAvailability>>({})
+  const [availabilityLoading, setAvailabilityLoading] = useState(false)
 
   useEffect(() => {
     document.title = 'Customer Portal'
@@ -45,6 +59,19 @@ export default function CustomerPortalPage() {
       })
       .finally(() => setLoading(false))
   }, [token])
+
+  // Fetched once when the request form opens, not on every keystroke — a
+  // day that turns out full by the time staff reviews it just gets
+  // reassigned on the Dispatch board, same as any other over-capacity day.
+  useEffect(() => {
+    if (!showRequest || !token) return
+    const start = new Date()
+    const end = new Date(start.getTime() + AVAILABILITY_WINDOW_DAYS * 86_400_000)
+    setAvailabilityLoading(true)
+    getDayAvailability(token, toYMD(start), toYMD(end))
+      .then(setAvailability)
+      .finally(() => setAvailabilityLoading(false))
+  }, [showRequest, token])
 
   async function handleSubmitRequest(e: React.FormEvent) {
     e.preventDefault()
@@ -130,15 +157,18 @@ export default function CustomerPortalPage() {
                 <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Your Name</label>
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required style={inputStyle} placeholder="Full name" />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Phone</label>
-                  <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} style={inputStyle} placeholder="(555) 555-5555" />
-                </div>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Preferred Date</label>
-                  <input type="date" value={form.preferredDate} onChange={e => setForm(f => ({ ...f, preferredDate: e.target.value }))} style={inputStyle} />
-                </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Phone</label>
+                <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} style={inputStyle} placeholder="(555) 555-5555" />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 6 }}>Preferred Date</label>
+                <DayPicker
+                  value={form.preferredDate ?? ''}
+                  onChange={dateStr => setForm(f => ({ ...f, preferredDate: dateStr }))}
+                  availability={availability}
+                  loading={availabilityLoading}
+                />
               </div>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>What do you need? *</label>
@@ -251,4 +281,66 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
   outline: 'none',
   fontFamily: 'system-ui, sans-serif',
+}
+
+// Day-strip picker for the service-request form's "Preferred Date" — shows
+// the next AVAILABILITY_WINDOW_DAYS days, dimming/disabling any the server
+// reports as full. Deliberately day-only, no times and no tech names — the
+// customer never sees the real schedule, only open/full per day.
+function DayPicker({
+  value, onChange, availability, loading,
+}: {
+  value: string
+  onChange: (dateStr: string) => void
+  availability: Record<string, DayAvailability>
+  loading: boolean
+}) {
+  const days = Array.from({ length: AVAILABILITY_WINDOW_DAYS }, (_, i) => {
+    const d = new Date()
+    d.setDate(d.getDate() + i)
+    return d
+  })
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+        {days.map(d => {
+          const dateStr = toYMD(d)
+          const full = !loading && availability[dateStr]?.full === true
+          const selected = value === dateStr
+          return (
+            <button
+              key={dateStr}
+              type="button"
+              disabled={full}
+              onClick={() => onChange(dateStr)}
+              style={{
+                flex: '0 0 auto',
+                minWidth: 52,
+                padding: '8px 6px',
+                borderRadius: 8,
+                border: selected ? '2px solid #4f46e5' : '1px solid #e2e8f0',
+                background: full ? '#f1f5f9' : selected ? '#eef2ff' : 'white',
+                color: full ? '#94a3b8' : '#1e293b',
+                cursor: full ? 'not-allowed' : 'pointer',
+                textAlign: 'center',
+                fontFamily: 'system-ui, sans-serif',
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
+                {d.toLocaleDateString('en-US', { weekday: 'short' })}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{d.getDate()}</div>
+              {full && <div style={{ fontSize: 9, color: '#dc2626', marginTop: 2 }}>Full</div>}
+            </button>
+          )
+        })}
+      </div>
+      {value && (
+        <p style={{ fontSize: 12, color: '#64748b', margin: '6px 0 0' }}>
+          Selected: {new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+        </p>
+      )}
+    </div>
+  )
 }

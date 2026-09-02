@@ -12,6 +12,8 @@ import {
   STATUS_LABELS, STATUS_COLORS, poTotal, lineItemTotal, fmtCurrency,
 } from '../../models/purchaseOrder'
 import { fullName, categoryMatches, type CustomerItem } from '../../models/customer'
+import { subscribeToCatalog } from '../../services/catalogService'
+import type { CatalogItem } from '../../models/catalogItem'
 
 function fmtDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -67,15 +69,22 @@ export default function PurchaseOrdersPage() {
   const vendorRef = useRef<HTMLDivElement>(null)
   const jobRef = useRef<HTMLDivElement>(null)
 
+  const [catalog, setCatalog] = useState<CatalogItem[]>([])
+  const [showCatalog, setShowCatalog] = useState(false)
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const catalogRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => subscribeToPurchaseOrders(
     items => { setPOs(items); setLoading(false) },
     () => setLoading(false),
   ), [])
 
   useEffect(() => subscribeToCustomers(setCustomers, () => {}), [])
+  useEffect(() => subscribeToCatalog(setCatalog, () => {}), [])
 
   useClickOutside(vendorRef, () => setShowVendorList(false), showVendorList)
   useClickOutside(jobRef, () => setShowJobList(false), showJobList)
+  useClickOutside(catalogRef, () => setShowCatalog(false), showCatalog)
 
   const vendors = useMemo(() => customers.filter(c => categoryMatches(c.category, 'Vendor')), [customers])
   const jobCandidates = useMemo(() => customers.filter(c =>
@@ -145,6 +154,29 @@ export default function PurchaseOrdersPage() {
   }
   function removeLineItem(i: number) {
     setLineItems(prev => prev.filter((_, idx) => idx !== i))
+  }
+
+  const catalogSuggestions = useMemo(() => {
+    const q = catalogQuery.trim().toLowerCase()
+    if (!q) return catalog.slice(0, 20)
+    return catalog.filter(i =>
+      i.name.toLowerCase().includes(q) ||
+      i.description.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q),
+    ).slice(0, 20)
+  }, [catalog, catalogQuery])
+
+  // Stamps catalogItemId so marking this PO 'received' later knows which
+  // catalog item to restock — see updatePurchaseOrder's restock logic.
+  function addFromCatalog(item: CatalogItem) {
+    setLineItems(prev => [...prev, {
+      description: item.name + (item.description ? ` — ${item.description}` : ''),
+      qty: 1,
+      unitCost: item.price,
+      catalogItemId: item.id,
+    }])
+    setShowCatalog(false)
+    setCatalogQuery('')
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -298,7 +330,58 @@ export default function PurchaseOrdersPage() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="form-label mb-0">Line Items</label>
-              <button type="button" onClick={addLineItem} className="text-xs text-indigo-400 hover:text-indigo-300">+ Add item</button>
+              <div className="flex items-center gap-3">
+                {catalog.length > 0 && (
+                  <div className="relative" ref={catalogRef}>
+                    <button
+                      type="button"
+                      onClick={() => { setShowCatalog(v => !v); setCatalogQuery('') }}
+                      className="text-xs text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1"
+                    >
+                      📦 Catalog
+                    </button>
+                    {showCatalog && (
+                      <div className="absolute right-0 top-full mt-1 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">
+                        <div className="p-2 border-b border-gray-700/50">
+                          <input
+                            autoFocus
+                            type="text"
+                            value={catalogQuery}
+                            onChange={e => setCatalogQuery(e.target.value)}
+                            placeholder="Search catalog…"
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div className="max-h-64 overflow-y-auto">
+                          {catalogSuggestions.length === 0 ? (
+                            <p className="px-4 py-3 text-sm text-gray-500">No items found</p>
+                          ) : (
+                            catalogSuggestions.map(item => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => addFromCatalog(item)}
+                                className="w-full text-left px-4 py-2.5 hover:bg-gray-700/50 transition-colors flex items-center justify-between gap-3"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-gray-200 truncate">{item.name}</p>
+                                  {item.description && (
+                                    <p className="text-xs text-gray-500 truncate">{item.description}</p>
+                                  )}
+                                </div>
+                                <span className="text-sm font-semibold text-green-400 shrink-0">
+                                  ${item.price.toFixed(2)}/{item.unit}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button type="button" onClick={addLineItem} className="text-xs text-indigo-400 hover:text-indigo-300">+ Add item</button>
+              </div>
             </div>
             <div className="space-y-2">
               {lineItems.map((li, i) => (

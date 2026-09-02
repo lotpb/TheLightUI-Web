@@ -12,6 +12,12 @@ import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { isSafeHttpUrl } from '../../utils/safeUrl'
 import { subscribeToCompanyProfile, saveCompanyProfile } from '../../services/companyProfileService'
+import { subscribeToQuickBooksStatus, pushInvoiceToQuickBooks } from '../../services/quickbooksService'
+import {
+  subscribeToFinancingStatus, createFinancingApplication, subscribeToFinancingApplication,
+  type FinancingApplication,
+} from '../../services/financingService'
+import { usePermissions } from '../../hooks/usePermissions'
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -24,6 +30,40 @@ export default function InvoiceDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [qbConnected, setQbConnected] = useState(false)
+  const [syncingQb, setSyncingQb] = useState(false)
+  const { canEdit } = usePermissions()
+
+  useEffect(() => subscribeToQuickBooksStatus(s => setQbConnected(s.connected), () => {}), [])
+
+  // Financing
+  const [financingConnected, setFinancingConnected] = useState(false)
+  const [financingApp, setFinancingApp] = useState<FinancingApplication | null>(null)
+  const [requestingFinancing, setRequestingFinancing] = useState(false)
+
+  useEffect(() => subscribeToFinancingStatus(s => setFinancingConnected(s.connected), () => {}), [])
+  useEffect(() => {
+    if (!invoice?.financingApplicationId) { setFinancingApp(null); return }
+    return subscribeToFinancingApplication(invoice.financingApplicationId, setFinancingApp, () => {})
+  }, [invoice?.financingApplicationId])
+
+  async function handleGetFinancingLink() {
+    if (!invoice) return
+    setRequestingFinancing(true)
+    try {
+      const result = await createFinancingApplication('invoice', invoice.id)
+      // getInvoice() was a one-time fetch, not a live subscription, so the
+      // new financingApplicationId (set server-side) has to be merged in
+      // locally or the status subscription below never starts.
+      setInvoice(prev => prev ? { ...prev, financingApplicationId: result.applicationId } : prev)
+      toast('Financing link created', 'success')
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not create a financing link'
+      toast(message, 'error')
+    } finally {
+      setRequestingFinancing(false)
+    }
+  }
 
   // Company info — shared across the team via Firestore (companyProfileService)
   const [coName,  setCoName]  = useState('')
@@ -70,6 +110,20 @@ export default function InvoiceDetailPage() {
       toast('Could not generate share link', 'error')
     } finally {
       setSharing(false)
+    }
+  }
+
+  async function handleSyncQb() {
+    if (!invoice) return
+    setSyncingQb(true)
+    try {
+      const qbId = await pushInvoiceToQuickBooks(invoice.id)
+      setInvoice({ ...invoice, quickbooksInvoiceId: qbId })
+      toast('Synced to QuickBooks', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not sync to QuickBooks', 'error')
+    } finally {
+      setSyncingQb(false)
     }
   }
 
@@ -153,8 +207,8 @@ export default function InvoiceDetailPage() {
       <tr>
         <td>${item.description || '—'}</td>
         <td class="center">${item.qty}</td>
-        <td class="right">${fmtCurrency(item.rate)}</td>
-        <td class="right bold">${fmtCurrency(lineItemTotal(item))}</td>
+        <td class="right">${fmtCurrency(item.rate, invoice.currency)}</td>
+        <td class="right bold">${fmtCurrency(lineItemTotal(item), invoice.currency)}</td>
       </tr>`).join('')
 
     const html = `<!DOCTYPE html>
@@ -246,9 +300,9 @@ export default function InvoiceDetailPage() {
 
   <div class="totals">
     <div class="totals-inner">
-      <div class="subtotal-line"><span>Subtotal</span><span>${fmtCurrency(subtotal)}</span></div>
-      ${invoice.taxRate > 0 ? `<div class="subtotal-line"><span>Tax (${invoice.taxRate}%)</span><span>${fmtCurrency(taxAmt)}</span></div>` : ''}
-      <div class="total-line"><span>Total</span><span>${fmtCurrency(total)}</span></div>
+      <div class="subtotal-line"><span>Subtotal</span><span>${fmtCurrency(subtotal, invoice.currency)}</span></div>
+      ${invoice.taxRate > 0 ? `<div class="subtotal-line"><span>Tax (${invoice.taxRate}%)</span><span>${fmtCurrency(taxAmt, invoice.currency)}</span></div>` : ''}
+      <div class="total-line"><span>Total</span><span>${fmtCurrency(total, invoice.currency)}</span></div>
     </div>
   </div>
 
@@ -312,6 +366,16 @@ export default function InvoiceDetailPage() {
           >
             🖨️ Print
           </button>
+          {qbConnected && (
+            <button
+              onClick={handleSyncQb}
+              disabled={syncingQb}
+              title={invoice?.quickbooksInvoiceId ? 'Re-sync this invoice to QuickBooks' : 'Push this invoice to QuickBooks'}
+              className="btn-secondary text-sm px-3 py-1.5"
+            >
+              {syncingQb ? '…' : invoice?.quickbooksInvoiceId ? '✓ Synced' : 'Sync to QuickBooks'}
+            </button>
+          )}
           <button
             onClick={() => setConfirmDelete(true)}
             disabled={deleting}
@@ -367,7 +431,7 @@ export default function InvoiceDetailPage() {
           )}
           {invoice.customerEmail && (
             <a
-              href={`mailto:${invoice.customerEmail}?subject=Invoice ${invoice.invoiceNumber}&body=Hi ${invoice.customerName},%0A%0APlease find attached invoice ${invoice.invoiceNumber} for ${fmtCurrency(total)}, due ${fmtDate(invoice.dueDate)}.%0A%0AThank you for your business.`}
+              href={`mailto:${invoice.customerEmail}?subject=Invoice ${invoice.invoiceNumber}&body=Hi ${invoice.customerName},%0A%0APlease find attached invoice ${invoice.invoiceNumber} for ${fmtCurrency(total, invoice.currency)}, due ${fmtDate(invoice.dueDate)}.%0A%0AThank you for your business.`}
               className="text-xs px-3 py-1.5 rounded-xl bg-indigo-600/20 text-indigo-300 border border-indigo-700/30 hover:bg-indigo-600/30 transition-colors"
             >
               ✉️ Email Customer
@@ -463,6 +527,11 @@ export default function InvoiceDetailPage() {
                   Copy
                 </button>
               </div>
+              <p className="text-xs text-gray-500 pt-1 border-t border-gray-700/50">
+                By default these Checkout Sessions pay into the platform's own Stripe account. Connect your company's
+                own account on the <Link to="/stripe-connect" className="text-indigo-400 hover:underline">Stripe Connect</Link>{' '}
+                page so customer payments land directly in your bank account instead.
+              </p>
             </div>
             <div className="flex gap-2">
               <button onClick={savePaymentLink} disabled={savingLink} className="btn-primary text-xs px-4 py-1.5 disabled:opacity-40">
@@ -516,6 +585,62 @@ export default function InvoiceDetailPage() {
         )}
       </div>
 
+      {/* Financing — hidden when printing */}
+      {financingConnected && (
+        <div className="no-print card overflow-hidden">
+          <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Financing</p>
+              {financingApp && (
+                <span className="text-xs bg-indigo-500/15 text-indigo-400 px-2 py-0.5 rounded-full font-medium capitalize">
+                  {financingApp.status.replace(/_/g, ' ')}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            {financingApp ? (
+              <div className="flex items-center gap-2">
+                {isSafeHttpUrl(financingApp.applyUrl) ? (
+                  <a
+                    href={financingApp.applyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors truncate flex-1"
+                  >
+                    {financingApp.applyUrl}
+                  </a>
+                ) : (
+                  <span className="text-xs text-red-400 truncate flex-1">⚠️ Financing link is misconfigured</span>
+                )}
+                <button
+                  onClick={() => navigator.clipboard.writeText(financingApp.applyUrl).then(() => toast('Copied!', 'success'))}
+                  className="text-xs text-gray-500 hover:text-gray-200 shrink-0 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                >
+                  Copy
+                </button>
+              </div>
+            ) : canEdit ? (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-gray-600 italic">
+                  Offer a payment plan for this invoice's full amount.
+                  {!invoice.shareToken && ' Generate a share link first so the customer can see it.'}
+                </p>
+                <button
+                  onClick={handleGetFinancingLink}
+                  disabled={requestingFinancing}
+                  className="btn-secondary text-xs px-3 py-1.5 shrink-0"
+                >
+                  {requestingFinancing ? 'Creating…' : 'Get Financing Link'}
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-600 italic">No financing application yet.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── INVOICE DOCUMENT ──────────────────────────────── */}
       <div className="print-doc bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">
 
@@ -568,8 +693,8 @@ export default function InvoiceDetailPage() {
                 <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
                   <td style={{ padding: '10px 0', fontSize: '14px', color: '#111827' }}>{item.description || '—'}</td>
                   <td style={{ padding: '10px 0', fontSize: '14px', color: '#374151', textAlign: 'center' }}>{item.qty}</td>
-                  <td style={{ padding: '10px 0', fontSize: '14px', color: '#374151', textAlign: 'right' }}>{fmtCurrency(item.rate)}</td>
-                  <td style={{ padding: '10px 0', fontSize: '14px', fontWeight: 500, color: '#111827', textAlign: 'right' }}>{fmtCurrency(lineItemTotal(item))}</td>
+                  <td style={{ padding: '10px 0', fontSize: '14px', color: '#374151', textAlign: 'right' }}>{fmtCurrency(item.rate, invoice.currency)}</td>
+                  <td style={{ padding: '10px 0', fontSize: '14px', fontWeight: 500, color: '#111827', textAlign: 'right' }}>{fmtCurrency(lineItemTotal(item), invoice.currency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -581,17 +706,17 @@ export default function InvoiceDetailPage() {
           <div style={{ minWidth: '220px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', color: '#6b7280', fontSize: '14px' }}>
               <span>Subtotal</span>
-              <span>{fmtCurrency(subtotal)}</span>
+              <span>{fmtCurrency(subtotal, invoice.currency)}</span>
             </div>
             {invoice.taxRate > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', color: '#6b7280', fontSize: '14px' }}>
                 <span>Tax ({invoice.taxRate}%)</span>
-                <span>{fmtCurrency(taxAmt)}</span>
+                <span>{fmtCurrency(taxAmt, invoice.currency)}</span>
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #111827', paddingTop: '8px', marginTop: '4px', fontWeight: 700, fontSize: '18px', color: '#111827' }}>
               <span>Total</span>
-              <span>{fmtCurrency(total)}</span>
+              <span>{fmtCurrency(total, invoice.currency)}</span>
             </div>
           </div>
         </div>

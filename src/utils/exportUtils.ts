@@ -223,6 +223,9 @@ export async function importCustomersJSON(
     paymentStatus:   r.paymentStatus   ?? '',
     customFields:    {},
     pipelineStage:   '',
+    smsOptOut:       false,
+    assignedToUid:   '',
+    portalToken:     '',
   }))
 }
 

@@ -8,4 +8,6 @@ export interface Todo {
   createdAt: Date
   userId: string
   position: number
+  customerId: string | null
+  customerName: string | null
 }

@@ -4,6 +4,8 @@ export interface PurchaseOrderLineItem {
   description: string
   qty: number
   unitCost: number
+  /** Set when this line item was added from the catalog — used to restock on receiving. */
+  catalogItemId?: string
 }
 
 export interface PurchaseOrder {

@@ -6,6 +6,7 @@ import {
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import { advanceByFrequency, type ServicePlan, type ServicePlanFrequency } from '../models/servicePlan'
+import { warnIfCapped } from './realtimeCap'
 
 const COL = 'ServicePlans'
 
@@ -43,7 +44,7 @@ function docToPlan(id: string, data: Record<string, unknown>): ServicePlan {
 }
 
 export function subscribeToServicePlans(
-  onData: (plans: ServicePlan[]) => void,
+  onData: (plans: ServicePlan[], hitCap?: boolean) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
   const companyId = getCompanyId()
@@ -54,16 +55,14 @@ export function subscribeToServicePlans(
   return onSnapshot(
     query(collection(db, COL), where('companyId', '==', companyId), limit(PLAN_REALTIME_LIMIT)),
     snap => {
-      if (snap.size === PLAN_REALTIME_LIMIT) {
-        console.warn(`[subscribeToServicePlans] hit ${PLAN_REALTIME_LIMIT}-document cap for company ${companyId}.`)
-      }
+      const hitCap = warnIfCapped('ServicePlans', snap.size, companyId, PLAN_REALTIME_LIMIT)
       const plans: ServicePlan[] = []
       for (const d of snap.docs) {
         try { plans.push(docToPlan(d.id, d.data() as Record<string, unknown>)) }
         catch (e) { console.warn('[ServicePlans] skipping malformed doc', d.id, e) }
       }
       plans.sort((a, b) => a.nextDate.getTime() - b.nextDate.getTime())
-      onData(plans)
+      onData(plans, hitCap)
     },
     onError,
   )
@@ -90,6 +89,8 @@ export async function addServicePlan(
 
 export async function updateServicePlan(
   id: string,
+  customerId: string,
+  customerName: string,
   title: string,
   frequency: ServicePlanFrequency,
   nextDate: Date,
@@ -98,7 +99,7 @@ export async function updateServicePlan(
   isActive: boolean,
 ): Promise<void> {
   await updateDoc(doc(db, COL, id), {
-    title, frequency, nextDate, notes, salesman, isActive,
+    customerId, customerName, title, frequency, nextDate, notes, salesman, isActive,
   })
 }
 
@@ -113,4 +114,30 @@ export async function completeServicePlan(plan: ServicePlan): Promise<void> {
 
 export async function deleteServicePlan(id: string): Promise<void> {
   await deleteDoc(doc(db, COL, id))
+}
+
+// Per-customer scope for the detail page. See subscribeToCustomerInvoices.
+export function subscribeToCustomerServicePlans(
+  customerId: string,
+  onData: (items: ServicePlan[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const plans: ServicePlan[] = []
+      for (const d of snap.docs) {
+        try { plans.push(docToPlan(d.id, d.data() as Record<string, unknown>)) } catch { }
+      }
+      plans.sort((a, b) => a.nextDate.getTime() - b.nextDate.getTime())
+      onData(plans)
+    },
+    onError,
+  )
 }

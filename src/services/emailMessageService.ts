@@ -3,6 +3,7 @@ import {
   onSnapshot, query, where, orderBy, limit,
   Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import type { EmailMessage, EmailDirection } from '../models/emailMessage'
@@ -77,4 +78,24 @@ export function subscribeToInboundInbox(
 
 export async function markEmailRead(id: string): Promise<void> {
   await updateDoc(doc(db, COL, id), { read: true })
+}
+
+// Sends a single email to one customer.
+//
+// Deliberately reuses the bulkSendEmail callable with a one-element recipient
+// list rather than adding a near-duplicate function: that path already sets the
+// per-company reply_to (so replies thread back) and logs an outbound
+// emailMessages doc, which is what makes the sent message show up in the thread.
+export async function sendEmail(customerId: string, subject: string, body: string): Promise<void> {
+  const fn = httpsCallable<
+    { customerIds: string[]; subject: string; body: string },
+    { sent: number; skipped: number }
+  >(getFunctions(), 'bulkSendEmail')
+
+  const result = await fn({ customerIds: [customerId], subject, body })
+  // bulkSendEmail reports per-recipient outcomes instead of throwing, so a
+  // skipped send (missing/invalid address) would otherwise look like success.
+  if (result.data.sent < 1) {
+    throw new Error('Email was not sent — check that this customer has a valid email address.')
+  }
 }

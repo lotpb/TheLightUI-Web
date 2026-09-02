@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, query, where, setDoc,
+  collection, doc, getDocs, onSnapshot, query, where, setDoc,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
@@ -79,6 +79,34 @@ export function subscribeToTeam(
 export function memberDisplayName(m: { firstName: string; lastName: string; email: string }): string {
   const full = `${m.firstName} ${m.lastName}`.trim()
   return full || m.email.split('@')[0]
+}
+
+// One-off fetch (not a live subscription) of the company's salesman-role users,
+// for lead-assignment pickers. Used instead of subscribeToTeam because assign
+// UIs are short-lived popovers, not screens that need to track role changes live.
+export async function fetchSalesmenForCompany(): Promise<TeamMember[]> {
+  const companyId = getCompanyId()
+  if (!companyId) return []
+  const snap = await getDocs(
+    query(collection(db, COL), where('companyId', '==', companyId), where('role', '==', 'salesman')),
+  )
+  const members: TeamMember[] = snap.docs.map(d => {
+    const r = d.data() as Record<string, unknown>
+    return {
+      uid:             d.id,
+      email:           s(r, 'email'),
+      firstName:       s(r, 'firstName'),
+      lastName:        s(r, 'lastName'),
+      profileImageUrl: s(r, 'profileImageUrl'),
+      companyId:       s(r, 'companyId'),
+      role:            typeof r['role'] === 'string' ? r['role'] : null,
+      createdAt:       toDate(r['createdAt']),
+      isOnline:        typeof r['isOnline'] === 'boolean' ? r['isOnline'] : false,
+      lastSeen:        toDate(r['lastSeen']),
+    }
+  })
+  members.sort(compareMembers)
+  return members
 }
 
 // Calls the inviteUser Cloud Function (already exists in backend)
@@ -209,6 +237,12 @@ export async function fetchAllCompaniesTeam(): Promise<AllTeamsResult> {
   }
 }
 
+export async function deleteOrphanCompany(companyId: string): Promise<void> {
+  const fns = getFunctions()
+  const fn = httpsCallable<{ companyId: string }, { success: boolean }>(fns, 'adminDeleteOrphanCompany')
+  await fn({ companyId })
+}
+
 export function callableErrorMessage(e: unknown): string {
   const code = (e as { code?: string } | null)?.code
   switch (code) {
@@ -216,5 +250,47 @@ export function callableErrorMessage(e: unknown): string {
     case 'functions/unauthenticated':   return 'Please sign in again.'
     case 'functions/resource-exhausted': return 'Too many requests — try again in a minute.'
     default: return 'Could not load companies. Check that adminListAllTeams is deployed.'
+  }
+}
+
+/**
+ * The team member whose account email matches `email`, or null.
+ *
+ * Used by the customer detail page to show an Employee record's live user role
+ * and last login. Queries by email rather than downloading every team member
+ * and matching client-side — two equality filters, so no composite index.
+ * Email is stored as entered, so the comparison is done on a normalised copy
+ * of the stored value as a fallback when the exact match misses.
+ */
+export async function findMemberByEmail(email: string): Promise<TeamMember | null> {
+  const companyId = getCompanyId()
+  const target = email.trim().toLowerCase()
+  if (!companyId || !target) return null
+
+  const exact = await getDocs(query(
+    collection(db, COL),
+    where('companyId', '==', companyId),
+    where('email', '==', target),
+  ))
+  if (!exact.empty) return toMember(exact.docs[0].id, exact.docs[0].data() as Record<string, unknown>)
+
+  // Stored with different casing — fall back to a company-scoped scan.
+  const all = await getDocs(query(collection(db, COL), where('companyId', '==', companyId)))
+  const match = all.docs.find(d => s(d.data() as Record<string, unknown>, 'email').trim().toLowerCase() === target)
+  return match ? toMember(match.id, match.data() as Record<string, unknown>) : null
+}
+
+function toMember(uid: string, d: Record<string, unknown>): TeamMember {
+  return {
+    uid,
+    email:           s(d, 'email'),
+    firstName:       s(d, 'firstName'),
+    lastName:        s(d, 'lastName'),
+    profileImageUrl: s(d, 'profileImageUrl'),
+    companyId:       s(d, 'companyId'),
+    role:            s(d, 'role') || null,
+    createdAt:       toDate(d['createdAt']),
+    isOnline:        d['isOnline'] === true,
+    lastSeen:        toDate(d['lastSeen']),
   }
 }

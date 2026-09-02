@@ -30,6 +30,7 @@ const GoalsPage          = lazy(() => import('./pages/goals/GoalsPage'))
 const TodoPage           = lazy(() => import('./pages/todo/TodoPage'))
 const TodoEditPage       = lazy(() => import('./pages/todo/TodoEditPage'))
 const JobsPage           = lazy(() => import('./pages/jobs/JobsPage'))
+const DispatchBoardPage  = lazy(() => import('./pages/dispatch/DispatchBoardPage'))
 const CommissionPage     = lazy(() => import('./pages/commission/CommissionPage'))
 const DuplicatesPage     = lazy(() => import('./pages/duplicates/DuplicatesPage'))
 const QuotePage          = lazy(() => import('./pages/quote/QuotePage'))
@@ -54,6 +55,7 @@ const FollowUpsPage      = lazy(() => import('./pages/followups/FollowUpsPage'))
 const ForecastPage       = lazy(() => import('./pages/forecast/ForecastPage'))
 const BatchPage          = lazy(() => import('./pages/batch/BatchPage'))
 const ServicePlansPage   = lazy(() => import('./pages/serviceplans/ServicePlansPage'))
+const WarrantiesPage     = lazy(() => import('./pages/warranties/WarrantiesPage'))
 const LeaderboardPage    = lazy(() => import('./pages/leaderboard/LeaderboardPage'))
 const CatalogPage        = lazy(() => import('./pages/catalog/CatalogPage'))
 const PublicInvoicePage   = lazy(() => import('./pages/invoices/PublicInvoicePage'))
@@ -77,12 +79,18 @@ const ExportPage            = lazy(() => import('./pages/export/ExportPage'))
 const AutomationsPage       = lazy(() => import('./pages/automations/AutomationsPage'))
 const ServiceRequestsPage   = lazy(() => import('./pages/servicerequests/ServiceRequestsPage'))
 const EmailInboxPage        = lazy(() => import('./pages/emailinbox/EmailInboxPage'))
+const SmsInboxPage          = lazy(() => import('./pages/smsinbox/SmsInboxPage'))
 const AuditLogPage          = lazy(() => import('./pages/auditlog/AuditLogPage'))
 const PurchaseOrdersPage    = lazy(() => import('./pages/purchaseorders/PurchaseOrdersPage'))
 const CustomerHealthPage    = lazy(() => import('./pages/health/CustomerHealthPage'))
 const VendorScorecardsPage  = lazy(() => import('./pages/vendorscorecards/VendorScorecardsPage'))
 const WebhooksPage          = lazy(() => import('./pages/webhooks/WebhooksPage'))
 const ApiKeysPage           = lazy(() => import('./pages/apikeys/ApiKeysPage'))
+const QuickBooksPage        = lazy(() => import('./pages/quickbooks/QuickBooksPage'))
+const PrivacyPolicyPage     = lazy(() => import('./pages/PrivacyPolicyPage'))
+const FacebookLeadsPage     = lazy(() => import('./pages/facebook/FacebookLeadsPage'))
+const FinancingSettingsPage = lazy(() => import('./pages/financing/FinancingSettingsPage'))
+const StripeConnectPage     = lazy(() => import('./pages/stripeconnect/StripeConnectPage'))
 
 function PageLoader() {
   return (
@@ -123,6 +131,7 @@ const router = createBrowserRouter(
       <Route path="/p/:token"      element={<PublicProposalPage />} />
       <Route path="/portal/:token" element={<CustomerPortalPage />} />
       <Route path="/join"    element={<JoinPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/" element={<Protected><Navigate to="/menu" replace /></Protected>} />
 
       <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
@@ -153,6 +162,7 @@ const router = createBrowserRouter(
       <Route path="/todo"              element={<Protected><TodoPage /></Protected>} />
       <Route path="/todo/:id/edit"     element={<Protected><TodoEditPage /></Protected>} />
       <Route path="/jobs"              element={<Protected><JobsPage /></Protected>} />
+      <Route path="/dispatch"          element={<Protected><DispatchBoardPage /></Protected>} />
       <Route path="/commission"        element={<Protected><CommissionPage /></Protected>} />
       <Route path="/duplicates"        element={<Protected><DuplicatesPage /></Protected>} />
       <Route path="/callback"          element={<Protected><CallbackQueuePage /></Protected>} />
@@ -178,6 +188,7 @@ const router = createBrowserRouter(
       <Route path="/forecast"          element={<Protected><ForecastPage /></Protected>} />
       <Route path="/batch"             element={<Protected><BatchPage /></Protected>} />
       <Route path="/service-plans"     element={<Protected><ServicePlansPage /></Protected>} />
+      <Route path="/warranties"        element={<Protected><WarrantiesPage /></Protected>} />
       <Route path="/time-tracking"     element={<Protected><TimeTrackingPage /></Protected>} />
       <Route path="/referrals"         element={<Protected><ReferralsPage /></Protected>} />
       <Route path="/templates"                          element={<Protected><TemplatesPage /></Protected>} />
@@ -194,12 +205,17 @@ const router = createBrowserRouter(
       <Route path="/automations"                         element={<Protected><AutomationsPage /></Protected>} />
       <Route path="/service-requests"                    element={<Protected><ServiceRequestsPage /></Protected>} />
       <Route path="/email-inbox"                         element={<Protected><EmailInboxPage /></Protected>} />
+      <Route path="/sms-inbox"                           element={<Protected><SmsInboxPage /></Protected>} />
       <Route path="/audit-log"                           element={<Protected><AuditLogPage /></Protected>} />
       <Route path="/purchase-orders"                     element={<Protected><PurchaseOrdersPage /></Protected>} />
       <Route path="/customer-health"                     element={<Protected><CustomerHealthPage /></Protected>} />
       <Route path="/vendor-scorecards"                   element={<Protected><VendorScorecardsPage /></Protected>} />
       <Route path="/webhooks"                            element={<Protected><WebhooksPage /></Protected>} />
       <Route path="/api-keys"                            element={<Protected><ApiKeysPage /></Protected>} />
+      <Route path="/quickbooks"                          element={<Protected><QuickBooksPage /></Protected>} />
+      <Route path="/facebook-leads"                      element={<Protected><FacebookLeadsPage /></Protected>} />
+      <Route path="/financing"                           element={<Protected><FinancingSettingsPage /></Protected>} />
+      <Route path="/stripe-connect"                      element={<Protected><StripeConnectPage /></Protected>} />
       <Route path="/team"              element={<Protected><TeamPage /></Protected>} />
       <Route path="/leaderboard"       element={<Protected><LeaderboardPage /></Protected>} />
       <Route path="/catalog"           element={<Protected><CatalogPage /></Protected>} />

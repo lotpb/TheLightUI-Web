@@ -49,6 +49,7 @@ function docToProposal(id: string, data: Record<string, unknown>): Proposal {
     respondedAt:        data.respondedAt ? toDate(data.respondedAt) : null,
     convertedInvoiceId: data.convertedInvoiceId ? String(data.convertedInvoiceId) : null,
     lastReminderSentAt: data.lastReminderSentAt ? toDate(data.lastReminderSentAt) : null,
+    financingApplicationId: data.financingApplicationId ? String(data.financingApplicationId) : null,
   }
 }
 
@@ -163,9 +164,36 @@ export async function convertProposalToInvoice(p: Proposal): Promise<string> {
     lineItems: p.lineItems,
     notes:     p.notes,
     taxRate:   p.taxRate,
+    currency:  'USD',
     generatedFrom: p.id,
   })
 
   await updateProposal(p.id, { convertedInvoiceId: invoiceId })
   return invoiceId
+}
+
+// Per-customer scope for the detail page. See subscribeToCustomerInvoices.
+export function subscribeToCustomerProposals(
+  customerId: string,
+  onData: (items: Proposal[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onError(new Error('Not authenticated')); return () => {} }
+  return onSnapshot(
+    query(
+      collection(db, COL),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    ),
+    snap => {
+      const items: Proposal[] = []
+      for (const d of snap.docs) {
+        try { items.push(docToProposal(d.id, d.data() as Record<string, unknown>)) } catch { }
+      }
+      items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      onData(items)
+    },
+    onError,
+  )
 }

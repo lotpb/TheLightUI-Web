@@ -138,6 +138,16 @@ export default function PublicInvoicePage() {
             {paying ? '⏳ Redirecting…' : '💳 Pay Now'}
           </button>
         )}
+        {!isPaid && invoice.financingApplyUrl && isSafeHttpUrl(invoice.financingApplyUrl) && (
+          <a
+            href={invoice.financingApplyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #6366f1', background: 'white', color: '#4f46e5', fontSize: 13, textDecoration: 'none', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            💰 {invoice.financingStatus && invoice.financingStatus !== 'created' ? 'View financing application' : 'See financing options'}
+          </a>
+        )}
         <button
           onClick={() => window.print()}
           style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', color: '#475569', fontSize: 13, cursor: 'pointer', fontWeight: 500 }}
@@ -207,8 +217,8 @@ export default function PublicInvoicePage() {
                 <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: '12px 0', fontSize: 14, color: '#1e293b' }}>{item.description || '—'}</td>
                   <td style={{ padding: '12px 0', fontSize: 14, color: '#475569', textAlign: 'center' }}>{item.qty}</td>
-                  <td style={{ padding: '12px 0', fontSize: 14, color: '#475569', textAlign: 'right' }}>{fmtCurrency(item.rate)}</td>
-                  <td style={{ padding: '12px 0', fontSize: 14, fontWeight: 500, color: '#1e293b', textAlign: 'right' }}>{fmtCurrency(lineItemTotal(item))}</td>
+                  <td style={{ padding: '12px 0', fontSize: 14, color: '#475569', textAlign: 'right' }}>{fmtCurrency(item.rate, invoice.currency)}</td>
+                  <td style={{ padding: '12px 0', fontSize: 14, fontWeight: 500, color: '#1e293b', textAlign: 'right' }}>{fmtCurrency(lineItemTotal(item), invoice.currency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -219,15 +229,15 @@ export default function PublicInvoicePage() {
         <div style={{ padding: '0 40px 32px', display: 'flex', justifyContent: 'flex-end' }}>
           <div style={{ minWidth: 220 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, color: '#64748b', fontSize: 14 }}>
-              <span>Subtotal</span><span>{fmtCurrency(sub)}</span>
+              <span>Subtotal</span><span>{fmtCurrency(sub, invoice.currency)}</span>
             </div>
             {invoice.taxRate > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, color: '#64748b', fontSize: 14 }}>
-                <span>Tax ({invoice.taxRate}%)</span><span>{fmtCurrency(tax)}</span>
+                <span>Tax ({invoice.taxRate}%)</span><span>{fmtCurrency(tax, invoice.currency)}</span>
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e293b', paddingTop: 10, marginTop: 4, fontWeight: 700, fontSize: 20, color: '#1e293b' }}>
-              <span>Total</span><span>{fmtCurrency(tot)}</span>
+              <span>Total</span><span>{fmtCurrency(tot, invoice.currency)}</span>
             </div>
           </div>
         </div>

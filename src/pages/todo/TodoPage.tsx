@@ -20,7 +20,7 @@ const PRIORITY_DOT: Record<Todo['priority'], string> = {
 type Filter = 'all' | 'active' | 'completed'
 
 export default function TodoPage() {
-  usePageTitle('To-Do')
+  usePageTitle('Tasks')
   const navigate   = useNavigate()
   const user       = useAuthStore(s => s.user)
   const companyId  = useAuthStore(s => s.companyId)
@@ -99,7 +99,7 @@ export default function TodoPage() {
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>To-Do List</title>
+  <title>Tasks</title>
   <style>
     body { font-family: -apple-system, Helvetica, sans-serif; color: #111; margin: 32px; }
     h1 { font-size: 22px; margin: 0 0 4px; }
@@ -111,7 +111,7 @@ export default function TodoPage() {
   <script>window.onload = function() { window.print(); }</script>
 </head>
 <body>
-  <h1>To-Do List</h1>
+  <h1>Tasks</h1>
   <p class="sub">Printed ${dateStr} · ${printTodos.length} item${printTodos.length !== 1 ? 's' : ''}</p>
   <table>
     <thead>
@@ -138,7 +138,7 @@ export default function TodoPage() {
 
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
-        <h1 className="text-2xl font-bold text-white">To-Do</h1>
+        <h1 className="text-2xl font-bold text-white">Tasks</h1>
         <div className="flex items-center gap-2 no-print">
           <button
             onClick={openAdd}
@@ -205,7 +205,7 @@ export default function TodoPage() {
 
       {/* List */}
       <div className="print-only-title hidden">
-        <h2 className="text-xl font-bold text-black mb-4">To-Do List</h2>
+        <h2 className="text-xl font-bold text-black mb-4">Tasks</h2>
       </div>
       <div id="todo-list" className="space-y-2">
         {loading ? (

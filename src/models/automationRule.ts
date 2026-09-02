@@ -1,6 +1,6 @@
 export type AutomationEntityType = 'customer' | 'invoice' | 'serviceRequest' | 'purchaseOrder' | 'signingRequest'
 export type AutomationTriggerType = 'changes_to' | 'any_change'
-export type AutomationActionType = 'set_field' | 'add_note' | 'set_followup_days' | 'send_email'
+export type AutomationActionType = 'set_field' | 'add_note' | 'set_followup_days' | 'send_email' | 'send_sms'
 
 export interface AutomationTrigger {
   entityType: AutomationEntityType
@@ -13,7 +13,7 @@ export interface AutomationAction {
   type: AutomationActionType
   field?: string   // set_field
   value?: string   // set_field
-  text?: string    // add_note
+  text?: string    // add_note, send_sms
   days?: number    // set_followup_days
   subject?: string // send_email
   body?: string    // send_email
@@ -117,15 +117,19 @@ export const ACTION_TYPE_LABELS: Record<AutomationActionType, string> = {
   add_note:         'Add a note',
   set_followup_days: 'Set follow-up date',
   send_email:       'Send an email',
+  send_sms:         'Send a text',
 }
 
 // add_note and set_followup_days write to Customer.comments/followUpDate, so
 // they're available whenever the resolved target is a Customer record.
+// send_email/send_sms resolve their recipient from email/customerEmail and
+// phone/customerPhone respectively, which every entity type carries either
+// directly or via its linked Customer — so both are available everywhere.
 export function actionTypesFor(entityType: AutomationEntityType): AutomationActionType[] {
   if (entityType === 'customer' || isCustomerLinked(entityType)) {
-    return ['set_field', 'add_note', 'set_followup_days', 'send_email']
+    return ['set_field', 'add_note', 'set_followup_days', 'send_email', 'send_sms']
   }
-  return ['set_field', 'send_email']
+  return ['set_field', 'send_email', 'send_sms']
 }
 
 export function describeTrigger(t: AutomationTrigger): string {
@@ -142,5 +146,6 @@ export function describeAction(a: AutomationAction): string {
     case 'add_note':          return `Add note: "${(a.text ?? '').slice(0, 40)}${(a.text ?? '').length > 40 ? '…' : ''}"`
     case 'set_followup_days': return `Set follow-up ${a.days ?? 0} day(s) from now`
     case 'send_email':        return `Email: "${a.subject ?? ''}"`
+    case 'send_sms':          return `Text: "${(a.text ?? '').slice(0, 40)}${(a.text ?? '').length > 40 ? '…' : ''}"`
   }
 }
