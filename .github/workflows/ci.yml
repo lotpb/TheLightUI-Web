@@ -7,32 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  # TEMPORARY diagnostic — `npm ci` has been failing on the runner while
-  # installing cleanly on macOS, and job logs aren't readable without repo
-  # admin. Each matrix leg isolates one variable, so the pass/fail pattern
-  # alone identifies the cause. Delete this job once CI is green.
-  diagnose:
-    name: "TEMP diag node${{ matrix.node }} ${{ matrix.mode }}"
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['22', '24']
-        mode: ['full', 'noscripts']
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          # No cache: rules out a poisoned npm cache as the cause.
-      - name: install
-        run: |
-          if [ "${{ matrix.mode }}" = "noscripts" ]; then
-            npm ci --ignore-scripts --no-audit --no-fund
-          else
-            npm ci --no-audit --no-fund
-          fi
-
   web:
     name: Web (typecheck, test, build)
     runs-on: ubuntu-latest
@@ -40,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm test
@@ -53,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       # The Firestore emulator is a Java process.
       - uses: actions/setup-java@v4
