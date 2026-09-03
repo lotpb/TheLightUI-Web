@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getCustomer, deleteCustomer, deactivateCustomer, updateCustomer, setFollowUpDate, setContactAttempts } from '../../services/customerService'
-import { fullName, formatCurrency, CATEGORY_LABELS, type CustomerItem, type CustomerCategory } from '../../models/customer'
+import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerItem, type CustomerCategory } from '../../models/customer'
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
@@ -14,6 +14,7 @@ import { subscribeToDocuments, uploadDocument, deleteDocument } from '../../serv
 import { formatFileSize, fileIcon, type CustomerDocument } from '../../models/document'
 import { updateTags } from '../../services/customerService'
 import { tagColor } from '../../utils/tagColor'
+import { leadStatusColor } from '../../utils/leadStatusColor'
 import { scoreLead } from '../../utils/leadScore'
 import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
 import type { CustomFieldDef } from '../../models/customField'
@@ -278,6 +279,11 @@ export default function CustomerDetailPage() {
     ? (CATEGORY_LABELS[customer.category as CustomerCategory] ?? customer.category)
     : ''
 
+  // A record with a company name is identified by that company: it takes the
+  // heading, and the person's name becomes a contact detail instead.
+  const personName = [customer.first, customer.lastname].filter(Boolean).join(' ')
+  const hasCompanyName = customer.companyName.trim() !== ''
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
       {/* Back + actions */}
@@ -298,9 +304,11 @@ export default function CustomerDetailPage() {
         <aside className="space-y-4 lg:sticky lg:top-6">
           <div className="card px-4 py-2 text-center">
             <h1 className="text-xl font-bold text-white leading-tight break-words">
-              {customer.category.toLowerCase() === 'vendor'
+              {hasCompanyName
+                ? customer.companyName.trim()
+                : customer.category.toLowerCase() === 'vendor'
                 ? customer.first || '—'
-                : [customer.first, customer.lastname].filter(Boolean).join(' ') || '—'}
+                : personName || '—'}
             </h1>
           </div>
 
@@ -332,8 +340,9 @@ export default function CustomerDetailPage() {
                   {customer.isActive ? 'Active' : 'Inactive'}
                 </span>
                 {customer.rate && (
-                  <span className="inline-flex items-center shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
-                    ★ {customer.rate}
+                  <span className="inline-flex items-center gap-1 shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
+                    <StarIcon className="w-3 h-3" filled />
+                    {customer.rate}
                   </span>
                 )}
                 {(customer.category.toLowerCase() === 'vendor' ? customer.salesman : customer.callback).toLowerCase() === 'yes' && (
@@ -376,7 +385,7 @@ export default function CustomerDetailPage() {
               )}
               <ActionTile
                 onClick={handleToggleActive}
-                icon={customer.isActive ? '⭐' : '☆'}
+                icon={<StarIcon className="w-5 h-5" filled={customer.isActive} />}
                 label="Active"
                 active={customer.isActive}
               />
@@ -444,6 +453,7 @@ export default function CustomerDetailPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FieldGroup title="Contact">
+            {hasCompanyName && <Field label="Name" value={personName} />}
             <Field label="Phone"    value={customer.phone} />
             <Field label="Email"    value={customer.email || '—'} />
             {customer.category.toLowerCase() === 'vendor' && (
@@ -600,9 +610,14 @@ export default function CustomerDetailPage() {
         {customer.category.toLowerCase() === 'lead' && (
           <>
             <FieldGroup title="Lead Info">
+              <Field label="Company Name"   value={customer.companyName} />
               <FieldRow>
                 <FieldCell label="Lead Source">{customer.leadSource || '—'}</FieldCell>
-                <FieldCell label="Lead Status">{customer.leadStatus || '—'}</FieldCell>
+                <FieldCell label="Lead Status">
+                  {customer.leadStatus
+                    ? <LeadStatusChip status={customer.leadStatus} />
+                    : <span className="text-gray-400">—</span>}
+                </FieldCell>
               </FieldRow>
               <FieldRow>
                 <FieldCell label="Last Contact"><DateChip>{formatISODateShort(customer.lastContactDate) || '—'}</DateChip></FieldCell>
@@ -709,6 +724,27 @@ type ActionTileProps = {
   to?: string
   onClick?: () => void
   active?: boolean
+}
+
+// A ★/☆ text glyph can't be used here: macOS renders it from Apple Color Emoji,
+// which paints a solid black star as a bitmap and ignores `color` entirely. This
+// draws the star so .icon-star can actually tint it.
+function StarIcon({ className, filled }: { className?: string; filled?: boolean }) {
+  return (
+    <svg
+      className={`icon-star shrink-0 ${className ?? ''}`}
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      strokeWidth={1.5}
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 2.7l2.9 5.9 6.5.95-4.7 4.58 1.11 6.47L12 17.55l-5.81 3.05 1.11-6.47-4.7-4.58 6.5-.95L12 2.7z"
+      />
+    </svg>
+  )
 }
 
 function ActionTile({ icon, label, href, to, onClick, active }: ActionTileProps) {
@@ -822,6 +858,16 @@ function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="px-4 py-3">
       <FieldCell label={label}>{value}</FieldCell>
+    </div>
+  )
+}
+
+// Same colored pill the record list uses for lead status, sized like the date
+// chip beside it so both values read as controls rather than plain text.
+function LeadStatusChip({ status }: { status: string }) {
+  return (
+    <div className={`inline-block w-auto rounded-lg px-3 py-0.5 text-sm font-medium ${leadStatusColor(status)}`} style={{ cursor: 'default' }}>
+      {status}
     </div>
   )
 }
@@ -1100,7 +1146,9 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
     if (!canSubmit || !user) return
     setAdding(true)
     try {
-      await addTodo(user.uid, title, 'medium', notes.trim(), null, customer.id, title)
+      // The last argument is customerName, not the title — passing `title` here
+      // stored every record-created task's own title as its customer name.
+      await addTodo(user.uid, title, 'medium', notes.trim(), null, customer.id, displayName(customer))
       setNotes('')
     } catch {
       toast('Could not add task', 'error')
@@ -1165,19 +1213,20 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
                 role="checkbox"
                 aria-checked={t.isCompleted}
                 onClick={() => handleToggle(t)}
-                className="w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer transition-all"
-                style={t.isCompleted
-                  ? { backgroundImage: 'linear-gradient(135deg, #34d399, #059669)', borderColor: '#059669' }
-                  : { borderColor: '#6366f1' }}
+                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer transition-all ${
+                  t.isCompleted ? 'bg-green-600 border-green-600' : 'border-gray-400'
+                }`}
               >
                 {t.isCompleted && (
-                  <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  // Matches the task circle on /todo: flat green, themed ring,
+                  // icon-on-solid so the check stays true white in light mode.
+                  <svg className="w-3 h-3 icon-on-solid" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                 )}
               </span>
               <div className="flex-1 min-w-0">
-                <p className={`text-sm ${t.isCompleted ? 'line-through text-gray-400' : 'text-gray-100'}`}>{t.title}</p>
+                <p className={`text-sm font-medium ${t.isCompleted ? 'line-through text-gray-400' : 'text-gray-100'}`}>{t.title}</p>
                 {t.notes && (
                   <p className="text-sm text-gray-400 mt-0.5">{t.notes}</p>
                 )}
@@ -2296,7 +2345,7 @@ function ComposeModal({
                   : 'bg-gray-800 text-gray-400 hover:text-gray-200'
               }`}
             >
-              {t.saved && <span className="text-yellow-400 text-xs">★</span>}
+              {t.saved && <StarIcon className="w-3 h-3" filled />}
               {t.label}
             </button>
           ))}

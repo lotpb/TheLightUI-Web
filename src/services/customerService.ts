@@ -72,11 +72,19 @@ export async function createCustomer(
   userId?: string,
 ): Promise<string> {
   const companyId = getCompanyId()
-  const data = {
+  const me = getCurrentUserLabel()
+  const data: Record<string, unknown> = {
     ...customerToFirestore(customer as CustomerItem, userId),
     companyId,
-    createdByName: getCurrentUserLabel().name,
+    createdByName: me.name,
+    // Records who created the record, so the list's "My Leads" filter can find
+    // it without touching salesman/assignedToUid — creating a lead doesn't make
+    // you its salesman. Written only here: updateCustomer must never overwrite
+    // it, and `uid` can't serve this purpose because updates restamp it with the
+    // last editor.
+    createdByUid: me.uid,
   }
+
   const ref = await addDoc(collection(db, COLLECTION), data)
   return ref.id
 }
@@ -110,8 +118,22 @@ export async function setPaymentStatus(id: string, paymentStatus: string): Promi
   await updateDoc(doc(db, COLLECTION, id), { paymentStatus })
 }
 
-export async function setEmployeeStatus(id: string, employeeStatus: string): Promise<void> {
-  await updateDoc(doc(db, COLLECTION, id), { employeeStatus })
+/**
+ * Writes `active` alongside `employeeStatus` so the two can't drift apart.
+ * Setting employeeStatus alone let a record sit at isActive:true with an
+ * 'Inactive' employment status — listed under "Active Employees" while its own
+ * badge said Inactive. 'Active' and 'On Leave' are both still employed, so
+ * only 'Inactive' clears the record's active flag.
+ */
+export async function setEmployeeStatus(
+  id: string,
+  employeeStatus: string,
+  isActive?: boolean,
+): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), {
+    employeeStatus,
+    ...(isActive === undefined ? {} : { active: isActive ? '1' : '0' }),
+  })
 }
 
 // Records which customerPortals snapshot belongs to this customer, so
@@ -137,13 +159,24 @@ export async function mergeCustomers(
   await batch.commit()
 }
 
-export async function bulkDeactivate(ids: string[]): Promise<void> {
+/**
+ * `extraFields` mirrors deactivateCustomer, so employees can keep
+ * `employeeStatus` in step with `active`. The two are separate fields that must
+ * agree: deactivating a record while leaving employeeStatus 'Active' makes the
+ * list render an Active badge on a row it simultaneously marks inactive.
+ * CustomerDetailPage.handleToggleActive establishes the same pairing for the
+ * single-record path.
+ */
+export async function bulkDeactivate(
+  ids: string[],
+  extraFields: Record<string, unknown> = {},
+): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { active: '0' })
+      batch.update(doc(db, COLLECTION, id), { active: '0', ...extraFields })
     }
     await batch.commit()
   }
@@ -476,6 +509,9 @@ export async function importCustomersFromJSON(
         pipelineStage: '',
         smsOptOut: false,
         assignedToUid: '',
+        // Left blank on bulk import: a CSV of thousands of records isn't "mine"
+        // in the sense the My Leads filter means, even though I ran the import.
+        createdByUid: '',
         portalToken: '',
       }
       const data = { ...customerToFirestore(item, userId), companyId }

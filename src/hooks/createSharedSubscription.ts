@@ -35,10 +35,14 @@ export interface SharedSnapshot<T> {
 /** How long the underlying listener stays alive after the last consumer leaves. */
 const TEARDOWN_DELAY_MS = 5_000
 
+/** Returned by a disabled hook. Module-level so the reference is stable and
+ *  doesn't invalidate consumers' memo dependencies on every render. */
+const DISABLED_SNAPSHOT: SharedSnapshot<unknown> = { items: [], loading: true, hitCap: false }
+
 export function createSharedSubscription<T>(
   subscribe: SharedSubscribe<T>,
   label: string,
-): () => SharedSnapshot<T> {
+): (enabled?: boolean) => SharedSnapshot<T> {
   type Listener = (snap: SharedSnapshot<T>) => void
 
   let snapshot: SharedSnapshot<T> = { items: [], loading: true, hitCap: false }
@@ -83,10 +87,20 @@ export function createSharedSubscription<T>(
     }
   })
 
-  return function useSharedSubscription(): SharedSnapshot<T> {
+  /**
+   * `enabled` lets a caller that only sometimes needs the data skip opening the
+   * listener. Hooks can't be called conditionally, but they can opt out —
+   * CustomerListPage serves four routes and only needs invoices and service
+   * plans on /customers; without this it would subscribe on /leads, /vendors
+   * and /employees too. Reports `loading: true` while disabled so a consumer
+   * can't mistake "not subscribed" for "loaded and empty".
+   */
+  return function useSharedSubscription(enabled = true): SharedSnapshot<T> {
     const [state, setState] = useState(snapshot)
 
     useEffect(() => {
+      if (!enabled) return
+
       listeners.add(setState)
       setState(snapshot)
 
@@ -106,8 +120,8 @@ export function createSharedSubscription<T>(
           teardownTimer = setTimeout(() => { if (refCount === 0) close() }, TEARDOWN_DELAY_MS)
         }
       }
-    }, [])
+    }, [enabled])
 
-    return state
+    return enabled ? state : (DISABLED_SNAPSHOT as SharedSnapshot<T>)
   }
 }

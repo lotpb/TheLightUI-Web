@@ -31,11 +31,14 @@ function resolveLabel(score: number): Pick<CustomerHealth, 'label' | 'badgeClass
     dotClass: 'bg-emerald-400',
     barClass: 'bg-emerald-500',
   }
+  // Green, not cyan. The four tiers are one diverging scale, and cyan sits
+  // outside the emerald→amber→red ramp — it read as a different family
+  // rather than a step down from Excellent. Green keeps the ramp continuous.
   if (score >= 60) return {
     label: 'Good',
-    badgeClass: 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30',
-    dotClass: 'bg-cyan-400',
-    barClass: 'bg-cyan-500',
+    badgeClass: 'bg-green-500/15 text-green-300 border border-green-500/30',
+    dotClass: 'bg-green-400',
+    barClass: 'bg-green-500',
   }
   if (score >= 40) return {
     label: 'Fair',
@@ -51,7 +54,18 @@ function resolveLabel(score: number): Pick<CustomerHealth, 'label' | 'badgeClass
   }
 }
 
-// Full score — needs invoices + plans. Use on detail page.
+/** Plain-text breakdown for a title tooltip. Only meaningful for the full
+ *  score — calculateHealthScoreLight returns `factors: []`. Mirrors
+ *  scoreBreakdown() in utils/leadScore, so both chips explain themselves. */
+export function healthBreakdown(h: CustomerHealth): string {
+  const lines = h.factors.map(f => {
+    const mark = f.earned === f.max ? '✓' : f.earned > 0 ? '~' : '·'
+    return `${mark} ${f.label} — ${f.earned}/${f.max} · ${f.detail}`
+  })
+  return [`Health ${h.score}/100 · ${h.label}`, '', ...lines].join('\n')
+}
+
+// Full score — needs invoices + plans. Use on the detail page and the list.
 export function calculateHealthScore(
   customer: CustomerItem,
   invoices: Invoice[],
@@ -109,28 +123,22 @@ export function calculateHealthScore(
   return { score, ...resolveLabel(score), factors }
 }
 
-// Light score — customer fields only. Use on list page.
-// Uses recency (35) + engagement (15) = max 50 pts, scaled to 100.
-export function calculateHealthScoreLight(customer: CustomerItem): CustomerHealth {
-  const days = daysSince(customer.lastUpdateDate)
-  let recencyPts = 0
-  if (days <= 7)       recencyPts = 35
-  else if (days <= 30) recencyPts = 25
-  else if (days <= 60) recencyPts = 15
-  else if (days <= 90) recencyPts =  5
-
-  const hasNotes    = !!customer.comments?.trim()
-  const hasFollowUp = !!customer.followUpDate
-  const hasAmount   = customer.amount > 0
-  const engPts = (hasNotes ? 5 : 0) + (hasFollowUp ? 5 : 0) + (hasAmount ? 5 : 0)
-
-  // Scale the 0-50 raw pts to 0-100
-  const raw = recencyPts + engPts
-  const score = Math.round((raw / 50) * 100)
-
-  return {
-    score,
-    ...resolveLabel(score),
-    factors: [],
-  }
-}
+// REMOVED: calculateHealthScoreLight.
+//
+// It scored recency (35) + engagement (15) out of 50 and scaled that to 100,
+// then ran the result through the same resolveLabel() thresholds as the full
+// score — which also weighs invoice health (30) and service plans (20). The two
+// therefore disagreed on the same customer, while rendering identical labels,
+// colours and chip shapes:
+//
+//   updated this week, overdue invoices, no plan  ->  light 70 "Good"
+//                                                     full  35 "At Risk"
+//
+// /customers showed the light label; /records/:id and /health showed the full
+// one. Because invoices were excluded, the light score's "At Risk" could only
+// ever mean "stale record", never a payment problem — so the Health quick
+// filter surfaced the wrong customers.
+//
+// The list now uses calculateHealthScore with shared invoice and service-plan
+// subscriptions. Don't reintroduce a partial variant that reuses these labels:
+// a weaker score needs its own vocabulary, or none.

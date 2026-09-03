@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, bulkAssignSalesmanUser, setPaymentStatus, setEmployeeStatus, REALTIME_LIMIT } from '../../services/customerService'
 import { fetchSalesmenForCompany, memberDisplayName, type TeamMember } from '../../services/teamService'
-import { categoryMatches, fullName, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
+import { categoryMatches, fullName, displayName, vendorFields, formatCurrency, type CustomerItem, CATEGORY_LABELS, type CustomerCategory } from '../../models/customer'
 import { exportCustomersJSON, esc } from '../../utils/exportUtils'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
@@ -17,15 +17,16 @@ import { usePermissions } from '../../hooks/usePermissions'
 import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
-import { scoreLead } from '../../utils/leadScore'
-import { calculateHealthScoreLight, type HealthLabel } from '../../utils/customerHealth'
+import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
+import { calculateHealthScore, healthBreakdown, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
+import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
 import type { SavedView } from '../../models/savedView'
 
 const PAGE_SIZE = 50
 
-type SortField = 'name' | 'date' | 'location' | 'active' | 'score'
+type SortField = 'name' | 'date' | 'location' | 'active' | 'score' | 'rating'
 type SortDir   = 'asc' | 'desc'
 
 const SORT_LABELS: Record<SortField, string> = {
@@ -34,6 +35,21 @@ const SORT_LABELS: Record<SortField, string> = {
   location: 'Location',
   active:   'Active',
   score:    'Score',
+  rating:   'Rating',
+}
+
+/**
+ * The sort menu was fixed across all four categories, so "Score" appeared on
+ * /vendors and /employees and ordered them by scoreLead — a lead-qualification
+ * score computed from phone/email/appointment fields. It produced a confident
+ * but meaningless order. Rating is the vendor equivalent and only vendors
+ * store one.
+ */
+function sortFieldsFor(cat: CustomerCategory): SortField[] {
+  const base: SortField[] = ['name', 'date', 'location', 'active']
+  if (cat === 'Lead') return [...base, 'score']
+  if (cat === 'Vendor') return [...base, 'rating']
+  return base
 }
 
 const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Employee']
@@ -66,7 +82,41 @@ function useClickOutside(
   }, [active, ref, onClose])
 }
 
-function QuickFilterButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+/** Inline icon matching this page's existing SVGs (strokeWidth 2, currentColor
+ *  so it follows hover states). The shared ico() helper in config/navigation is
+ *  strokeWidth 1.5 and single-path, which doesn't fit here. */
+function Icon({ d, className = 'w-4 h-4' }: { d: string | readonly string[]; className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+      {(Array.isArray(d) ? d : [d as string]).map((p, i) => (
+        <path key={i} strokeLinecap="round" strokeLinejoin="round" d={p} />
+      ))}
+    </svg>
+  )
+}
+
+// Heroicons v2 outline paths, replacing emoji (🏷 🖨 ⚠) and ASCII arrows (↑ ↓).
+// Those render from Apple Color Emoji or the UI font, so they can't inherit a
+// button's colour — the same trap index.css documents for .icon-star.
+const ICONS = {
+  tag: [
+    'M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z',
+    'M6 6h.008v.008H6V6Z',
+  ],
+  printer: 'M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m10.5 0a48.536 48.536 0 0 0-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5Zm-3 0h.008v.008H15V10.5Z',
+  uploadTray: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M7.5 7.5 12 3m0 0 4.5 4.5M12 3v13.5',
+  downloadTray: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3',
+  arrowUp: 'M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18',
+  arrowDown: 'M19.5 13.5 12 21m0 0-7.5-7.5M12 21V3',
+  warning: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z',
+  close: 'M6 18 18 6M6 6l12 12',
+  // ★/☆ render from Apple Color Emoji as a solid black star that ignores
+  // `color` outright — the .icon-star rule in index.css exists for exactly
+  // this. Use the path with that class, never the glyph.
+  star: 'M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z',
+} as const
+
+function QuickFilterButton({ label, active, onClick }: { label: ReactNode; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -80,6 +130,49 @@ function QuickFilterButton({ label, active, onClick }: { label: string; active: 
   )
 }
 
+/** A titled group of quick filters, capped so a data-derived list can't grow
+ *  the sidebar taller than the record table it sits beside — statuses and
+ *  sources come from the records themselves, so imported data can produce
+ *  dozens. The active option is always kept visible even when collapsed,
+ *  so a filter can never be hidden while it's in effect. */
+function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6 }: {
+  title: string
+  options: string[]
+  activeValue: string
+  onSelect: (next: string) => void
+  initial?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const base = options.slice(0, initial)
+  const shown = expanded
+    ? options
+    : activeValue && !base.includes(activeValue) ? [...base, activeValue] : base
+  const hiddenCount = options.length - shown.length
+
+  return (
+    <>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">{title}</p>
+      {shown.map(o => (
+        <QuickFilterButton
+          key={o}
+          label={o}
+          active={activeValue === o}
+          onClick={() => onSelect(activeValue === o ? '' : o)}
+        />
+      ))}
+      {(hiddenCount > 0 || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          className="w-full text-left px-3 py-1 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+        >
+          {expanded ? 'Show less' : `Show ${hiddenCount} more`}
+        </button>
+      )}
+    </>
+  )
+}
+
 export default function CustomerListPage() {
   const { pathname } = useLocation()
   const cat: CustomerCategory = PATH_TO_CATEGORY[pathname] ?? 'Lead'
@@ -90,6 +183,18 @@ export default function CustomerListPage() {
   const labels = usePickerStore(s => s.labels)
   const toast = useToast()
   const perms = usePermissions()
+
+  // Health used to be computed here with calculateHealthScoreLight (recency +
+  // engagement only, scaled to 100) while the record page and /health used the
+  // full score. Same labels, same colours, different verdicts: a customer with
+  // overdue invoices read "Good" (70) on this list and "At Risk" (35) one click
+  // away. The list now uses the same full score as everywhere else, which needs
+  // invoices and service plans — opted out on the other three category routes
+  // so they don't open listeners whose data goes unused.
+  const isCustomerView = cat === 'Customer'
+  const { items: invoices, loading: invoicesLoading } = useSharedInvoices(isCustomerView)
+  const { items: servicePlans, loading: plansLoading } = useSharedServicePlans(isCustomerView)
+  const healthReady = isCustomerView && !invoicesLoading && !plansLoading
 
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,6 +237,7 @@ export default function CustomerListPage() {
   // `salesman` is repurposed as a plain Yes/No flag for Employee ("is a
   // salesperson") and Vendor ("has callback") — a different field from the
   // generic `callback` ("was contacted") used by the Lead/Customer filter.
+  const [filterEmployeeStatus, setFilterEmployeeStatus] = useState('')
   const [filterSalesmanFlag, setFilterSalesmanFlag] = useState<'' | 'yes' | 'no'>('')
   const [filterProfession, setFilterProfession] = useState('')
   const [filterRating, setFilterRating]         = useState('')
@@ -179,6 +285,7 @@ export default function CustomerListPage() {
     setFilterProfession('')
     setFilterRating('')
     setFilterManager('')
+    setFilterEmployeeStatus('')
   }
 
   useEffect(() => subscribeToSavedViews(cat, setSavedViews, () => {}), [cat])
@@ -268,7 +375,11 @@ export default function CustomerListPage() {
     const ids = [...selectedIds]
     setBulkWorking(true)
     try {
-      await bulkDeactivate(ids)
+      // Employees carry a second status field that has to agree with `active`,
+      // the same pairing CustomerDetailPage.handleToggleActive applies.
+      // Without it these rows kept an "Active" employment badge after being
+      // deactivated.
+      await bulkDeactivate(ids, cat === 'Employee' ? { employeeStatus: 'Inactive' } : {})
       toast(`Deactivated ${ids.length} record${ids.length !== 1 ? 's' : ''}.`, 'success')
       clearSelection()
     } catch {
@@ -416,9 +527,14 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
+  // Normalised before deduping: `rate` is a string, so '5' and '5.0' used to
+  // become two separate filter buttons that each matched a different subset.
   const uniqueRatings = useMemo<string[]>(() => {
     const set = new Set<string>()
-    all.filter(c => categoryMatches(c.category, cat) && c.rate.trim()).forEach(c => set.add(c.rate.trim()))
+    all.filter(c => categoryMatches(c.category, cat) && c.rate.trim()).forEach(c => {
+      const n = Number(c.rate.trim())
+      if (Number.isFinite(n)) set.add(String(n))
+    })
     return [...set].sort((a, b) => Number(b) - Number(a))
   }, [all, cat])
 
@@ -434,11 +550,51 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
+  // calculateHealthScore filters the invoice and plan arrays by customerId
+  // internally. Both collections cap at 5,000 docs, so calling it per customer
+  // against the full arrays would be up to 25M comparisons per recompute.
+  // Pre-grouping makes each call O(1) — passing an already-narrowed array is
+  // equivalent, since the internal filter then just passes it through.
+  const invoicesByCustomer = useMemo(() => {
+    const m = new Map<string, typeof invoices>()
+    for (const inv of invoices) {
+      const list = m.get(inv.customerId)
+      if (list) list.push(inv)
+      else m.set(inv.customerId, [inv])
+    }
+    return m
+  }, [invoices])
+
+  const plansByCustomer = useMemo(() => {
+    const m = new Map<string, typeof servicePlans>()
+    for (const p of servicePlans) {
+      const list = m.get(p.customerId)
+      if (list) list.push(p)
+      else m.set(p.customerId, [p])
+    }
+    return m
+  }, [servicePlans])
+
+  const healthFor = useCallback(
+    (c: CustomerItem): CustomerHealth => calculateHealthScore(
+      c,
+      invoicesByCustomer.get(c.id) ?? [],
+      plansByCustomer.get(c.id) ?? [],
+    ),
+    [invoicesByCustomer, plansByCustomer],
+  )
+
+  // A health filter can't be applied until invoices and service plans arrive,
+  // so the list has to keep showing skeletons until then. Otherwise it renders
+  // every customer for a moment and snaps to the filtered set — the same
+  // flash-of-wrong-content the badge placeholder avoids.
+  const listLoading = loading || (!!filterHealth && !healthReady)
+
   const activeFilterCount = [
     filterSalesman, filterState, filterLeadSource, filterProduct,
     filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
     filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
-    filterSalesmanFlag, filterProfession, filterRating, filterManager,
+    filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
   ].filter(Boolean).length
 
   const filtered = useMemo(() => {
@@ -449,6 +605,7 @@ export default function CustomerListPage() {
       const q = debouncedSearch.toLowerCase()
       items = items.filter(c =>
         fullName(c).toLowerCase().includes(q) ||
+        c.companyName.toLowerCase().includes(q) ||
         c.phone.includes(q) ||
         c.city.toLowerCase().includes(q) ||
         c.email.toLowerCase().includes(q) ||
@@ -465,17 +622,30 @@ export default function CustomerListPage() {
     if (filterLeadStatus) items = items.filter(c => c.leadStatus === filterLeadStatus)
     if (filterQuality === 'hot') items = items.filter(c => scoreLead(c).label === 'Hot')
     else if (filterQuality === 'stale') items = items.filter(c => dealAgeDays(c) >= 30)
-    if (filterAssignment === 'mine') items = items.filter(c => c.assignedToUid === user?.uid)
+    // "Mine" = assigned to me OR created by me. Creating a lead doesn't make you
+    // its salesman, so authorship counts on its own — otherwise this filter is
+    // permanently empty for anyone whose role isn't 'salesman' (they can't
+    // appear in the assignee picker at all).
+    if (filterAssignment === 'mine') {
+      items = items.filter(c => !!user?.uid && (c.assignedToUid === user.uid || c.createdByUid === user.uid))
+    }
     else if (filterAssignment === 'unassigned') items = items.filter(c => !c.assignedToUid)
-    if (filterHealth) items = items.filter(c => calculateHealthScoreLight(c).label === filterHealth)
+    // Must use the same score the badge renders, or filtering by "At Risk"
+    // returns a different set than the badges show. Skipped until the
+    // collections load, so the filter can't silently match on partial data.
+    if (filterHealth && healthReady) items = items.filter(c => healthFor(c).label === filterHealth)
     if (filterPaymentStatus) items = items.filter(c => c.paymentStatus === filterPaymentStatus)
     // "No" has to mean "not yes" rather than literally 'no', the same way
     // filterCallback above treats it: on records where the flag was never set
     // `salesman` is empty, and those belong in the No bucket.
+    // Employment status was displayed and editable but had no filter at all —
+    // you could see who was On Leave but not list them. Matches on the resolved
+    // status so records with an unset field are still reachable.
+    if (filterEmployeeStatus) items = items.filter(c => effectiveEmployeeStatus(c) === filterEmployeeStatus)
     if (filterSalesmanFlag === 'yes') items = items.filter(c => c.salesman.toLowerCase() === 'yes')
     else if (filterSalesmanFlag === 'no') items = items.filter(c => c.salesman.toLowerCase() !== 'yes')
     if (filterProfession) items = items.filter(c => c.profession === filterProfession)
-    if (filterRating) items = items.filter(c => c.rate === filterRating)
+    if (filterRating) items = items.filter(c => Number(c.rate) === Number(filterRating))
     if (filterManager) items = items.filter(c => c.callback === filterManager)
     if (filterDateFrom) {
       const from = new Date(filterDateFrom)
@@ -497,11 +667,12 @@ export default function CustomerListPage() {
       : null
     items = [...items].sort((a, b) => {
       switch (sortField) {
-        case 'name':     return dir * fullName(a).localeCompare(fullName(b))
+        case 'name':     return dir * displayName(a).localeCompare(displayName(b))
         case 'date':     return dir * (a.creationDate.getTime() - b.creationDate.getTime())
         case 'location': return dir * (a.city || '').localeCompare(b.city || '')
         case 'active':   return dir * (Number(b.isActive) - Number(a.isActive))
         case 'score':    return dir * ((scores!.get(a.id) ?? 0) - (scores!.get(b.id) ?? 0))
+        case 'rating':   return dir * ((Number(a.rate) || 0) - (Number(b.rate) || 0))
         default:         return 0
       }
     })
@@ -510,14 +681,15 @@ export default function CustomerListPage() {
       filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
       filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
       filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus, user,
-      filterSalesmanFlag, filterProfession, filterRating, filterManager])
+      filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
+      healthReady, healthFor])
 
   // Reset to page 1 whenever anything changes the filtered set
   useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
     filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
     filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
     filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
-    filterSalesmanFlag, filterProfession, filterRating, filterManager])
+    filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus])
 
   const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
@@ -549,17 +721,30 @@ export default function CustomerListPage() {
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     const label = CATEGORY_LABELS[cat]
 
+    // The fifth column was hard-coded to the Salesman label printing
+    // `c.salesman`. Vendors store the Callback Yes/No flag in that field and
+    // employees store an is-a-salesperson flag, so both printed a column
+    // headed "Salesman" full of Yes/No.
+    const personColumn: { heading: string; value: (c: CustomerItem) => string } =
+      cat === 'Vendor'
+        ? { heading: 'Manager', value: c => vendorFields(c).manager || '' }
+        : cat === 'Employee'
+          ? { heading: 'Role', value: c => c.job || c.profession || '' }
+          : { heading: labels.salesman ?? 'Salesman', value: c => c.salesman || '' }
+
     const rows = filtered.map(c => {
-      const name = fullName(c)
+      const name = displayName(c)
+      // Company-named records list the company, with the contact person beneath it.
+      const personName = c.companyName.trim() ? fullName(c) : ''
       const location = [c.city, c.state].filter(Boolean).join(', ')
       const amt = c.amount > 0 ? formatCurrency(c.amount) : ''
       return `
         <tr style="border-bottom:1px solid #e5e7eb;">
-          <td style="padding:10px 8px;font-size:14px;font-weight:500;color:#111;vertical-align:top;">${esc(name) || '—'}${!c.isActive ? ' <span style="font-size:11px;color:#9ca3af;">(inactive)</span>' : ''}</td>
+          <td style="padding:10px 8px;font-size:14px;font-weight:500;color:#111;vertical-align:top;">${esc(name) || '—'}${!c.isActive ? ' <span style="font-size:11px;color:#9ca3af;">(inactive)</span>' : ''}${personName ? `<div style="font-size:12px;font-weight:400;color:#6b7280;">${esc(personName)}</div>` : ''}</td>
           <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${esc(c.phone || '')}</td>
           <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${esc(location)}</td>
           <td style="padding:10px 8px;font-size:12px;color:#6b7280;vertical-align:top;">${esc(c.email || '')}</td>
-          <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${esc(c.salesman || '')}</td>
+          <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${esc(personColumn.value(c))}</td>
           <td style="padding:10px 8px;font-size:13px;font-weight:600;color:#059669;text-align:right;white-space:nowrap;vertical-align:top;">${amt}</td>
         </tr>`
     }).join('')
@@ -592,7 +777,7 @@ export default function CustomerListPage() {
         <th>Phone</th>
         <th>Location</th>
         <th>Email</th>
-        <th>${labels.salesman}</th>
+        <th>${esc(personColumn.heading)}</th>
         <th style="text-align:right;">Amount</th>
       </tr>
     </thead>
@@ -647,7 +832,7 @@ export default function CustomerListPage() {
           <div ref={sortRef} className="relative">
             <button
               onClick={() => setSortOpen(v => !v)}
-              className="btn-secondary text-sm px-3 py-1.5 flex items-center gap-1.5"
+              className="btn-secondary text-sm flex items-center gap-1.5"
             >
               Sort By
               <svg className={`w-3.5 h-3.5 transition-transform ${sortOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -656,7 +841,7 @@ export default function CustomerListPage() {
             </button>
             {sortOpen && (
               <div className="absolute right-0 mt-1 w-40 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                {(Object.keys(SORT_LABELS) as SortField[]).map(field => (
+                {sortFieldsFor(cat).map(field => (
                   <button
                     key={field}
                     onClick={() => handleSortSelect(field)}
@@ -664,9 +849,10 @@ export default function CustomerListPage() {
                   >
                     <span>{SORT_LABELS[field]}</span>
                     {sortField === field && (
-                      <span className="text-indigo-400 text-xs font-bold">
-                        {sortDir === 'asc' ? '↑' : '↓'}
-                      </span>
+                      <Icon
+                        className="w-3 h-3 text-indigo-400"
+                        d={sortDir === 'asc' ? ICONS.arrowUp : ICONS.arrowDown}
+                      />
                     )}
                   </button>
                 ))}
@@ -678,7 +864,7 @@ export default function CustomerListPage() {
           <div ref={menuRef} className="relative">
             <button
               onClick={() => setMenuOpen(v => !v)}
-              className="btn-secondary text-sm px-3 py-1.5 flex items-center gap-1.5"
+              className="btn-secondary text-sm flex items-center gap-1.5"
             >
               Actions
               <svg className={`w-3.5 h-3.5 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -694,14 +880,14 @@ export default function CustomerListPage() {
                       disabled={importing}
                       className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
                     >
-                      <span className="text-base">↑</span>
+                      <Icon d={ICONS.uploadTray} />
                       {importing ? 'Importing…' : 'Import JSON'}
                     </button>
                     <button
                       onClick={() => { closeMenu(); setCsvImportOpen(true) }}
                       className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2.5"
                     >
-                      <span className="text-base">↑</span>
+                      <Icon d={ICONS.uploadTray} />
                       Import CSV
                     </button>
                   </>
@@ -711,23 +897,23 @@ export default function CustomerListPage() {
                   disabled={loading}
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
                 >
-                  <span className="text-base">↓</span>
+                  <Icon d={ICONS.downloadTray} />
                   Export JSON
                 </button>
                 <div className="border-t border-gray-700/60" />
                 <button
                   onClick={() => { closeMenu(); handlePrint() }}
-                  disabled={loading || filtered.length === 0}
+                  disabled={listLoading || filtered.length === 0}
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 flex items-center gap-2.5"
                 >
-                  <span className="text-base">🖨</span>
+                  <Icon d={ICONS.printer} />
                   Print
                 </button>
               </div>
             )}
           </div>
           {perms.canEdit && (
-            <Link to={`/records/new?category=${cat}`} className="btn-primary text-sm px-3 py-1.5">
+            <Link to={`/records/new?category=${cat}`} className="btn-primary text-sm">
               + New
             </Link>
           )}
@@ -758,12 +944,15 @@ export default function CustomerListPage() {
         ))}
       </div>
 
-      {/* Search + filter */}
-      <div className="flex gap-2 mb-2">
+      {/* Search + filter. flex-wrap makes wrapping deliberate rather than
+          something the row falls into when a button's label grows, and the
+          search field keeps a floor width so it can't be squeezed to a sliver
+          before the row decides to wrap. */}
+      <div className="flex flex-wrap gap-2 mb-2">
         <input
           ref={searchInputRef}
           type="search"
-          className="input-field flex-1"
+          className="input-field flex-1 min-w-[14rem]"
           placeholder={`Search ${CATEGORY_LABELS[cat].toLowerCase()}…`}
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -790,7 +979,7 @@ export default function CustomerListPage() {
           {viewsOpen && (
             <div className="absolute right-0 mt-1 w-64 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
               {savedViews.length === 0 ? (
-                <p className="px-4 py-3 text-sm text-gray-500">No saved views for {CATEGORY_LABELS[cat]} yet.</p>
+                <p className="px-4 py-3 text-sm text-gray-400">No saved views for {CATEGORY_LABELS[cat]} yet.</p>
               ) : (
                 <div className="max-h-64 overflow-y-auto divide-y divide-gray-700/50">
                   {savedViews.map(view => (
@@ -804,7 +993,7 @@ export default function CustomerListPage() {
                       <button
                         onClick={() => handleDeleteView(view)}
                         title="Delete view"
-                        className="px-2.5 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="px-2.5 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         ×
                       </button>
@@ -850,39 +1039,44 @@ export default function CustomerListPage() {
             </span>
           )}
         </button>
-        <button
-          onClick={() => {
-            const next = !showInactive
-            setShowInactive(next)
-            localStorage.setItem('thelight.showInactive', String(next))
-          }}
-          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-            !showInactive
-              ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
-              : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-          }`}
-        >
-          {showInactive ? 'All' : 'Active'}
-        </button>
+        {/* The Active/All toggle used to live here as well as in the Common
+            Filters sidebar. Both wrote the same showInactive state, and every
+            category's sidebar carries the labelled pair ("Active Leads" /
+            "All Leads"), so this copy was redundant — and ambiguous, since its
+            label was its state rather than its action. The record count line
+            below still reports "· active only". */}
         {/* Tag filter */}
         {allCatTags.length > 0 && (
-          <div ref={tagRef} className="relative">
+          <div ref={tagRef} className="relative flex items-stretch">
+            {/* Two sibling buttons, not a <span onClick> nested inside a
+                <button>: nesting interactive content is invalid markup and left
+                the clear action unreachable by keyboard. Segmented via the
+                corner radii so it still reads as one control. */}
             <button
               onClick={() => setTagOpen(v => !v)}
-              className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-2 text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+                tagFilter ? 'rounded-l-lg border-r-0' : 'rounded-lg'
+              } ${
                 tagFilter
                   ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
                   : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
               }`}
             >
-              🏷 {tagFilter ?? 'Tag'}
-              {tagFilter && (
-                <span
-                  onClick={e => { e.stopPropagation(); setTagFilter(null) }}
-                  className="ml-0.5 opacity-70 hover:opacity-100"
-                >×</span>
-              )}
+              <Icon d={ICONS.tag} className="w-4 h-4 shrink-0" />
+              {/* The label swaps between "Tag" and an arbitrary-length tag
+                  name, which is what let this button shove the row into a
+                  reflow. Capped and truncated so its width stays bounded. */}
+              <span className="truncate max-w-[8rem]">{tagFilter ?? 'Tag'}</span>
             </button>
+            {tagFilter && (
+              <button
+                onClick={() => setTagFilter(null)}
+                aria-label={`Clear tag filter "${tagFilter}"`}
+                className="px-2 rounded-r-lg border border-indigo-500/50 bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 transition-colors flex items-center"
+              >
+                <Icon d={ICONS.close} className="w-3.5 h-3.5" />
+              </button>
+            )}
             {tagOpen && (
               <div className="absolute right-0 mt-1 w-44 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
                 {allCatTags.map(tag => (
@@ -904,9 +1098,15 @@ export default function CustomerListPage() {
       {filterOpen && (
         <div className="mb-4 p-4 bg-gray-800/70 rounded-xl border border-gray-700/50 space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {uniqueSalesmen.length > 0 && (
+            {/* Only Lead/Customer use `salesman` as an assignee — Employee
+                repurposes it as an is-a-salesperson flag and Vendor as a
+                Callback flag (see isLeadOrCustomer). Ungated, this rendered a
+                dropdown labelled "Salesman" whose only options were "yes" and
+                "no", duplicating the sidebar's Salesperson buttons through a
+                different piece of state the two could disagree on. */}
+            {isLeadOrCustomer(cat) && uniqueSalesmen.length > 0 && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">{labels.salesman ?? 'Salesman'}</label>
+                <label className="block text-xs text-gray-400 mb-1">{labels.salesman ?? 'Salesman'}</label>
                 <select
                   value={filterSalesman}
                   onChange={e => setFilterSalesman(e.target.value)}
@@ -919,7 +1119,7 @@ export default function CustomerListPage() {
             )}
             {uniqueStates.length > 0 && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">State</label>
+                <label className="block text-xs text-gray-400 mb-1">State</label>
                 <select
                   value={filterState}
                   onChange={e => setFilterState(e.target.value)}
@@ -930,9 +1130,13 @@ export default function CustomerListPage() {
                 </select>
               </div>
             )}
-            {uniqueLeadSources.length > 0 && (
+            {/* Leads get Source as a quick-filter group in the sidebar, so the
+                select would be a second control on the same filterLeadSource
+                state. The other categories have no sidebar Source group, so
+                they still need it here. */}
+            {uniqueLeadSources.length > 0 && cat !== 'Lead' && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Lead Source</label>
+                <label className="block text-xs text-gray-400 mb-1">Lead Source</label>
                 <select
                   value={filterLeadSource}
                   onChange={e => setFilterLeadSource(e.target.value)}
@@ -945,7 +1149,7 @@ export default function CustomerListPage() {
             )}
             {uniqueProducts.length > 0 && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Product</label>
+                <label className="block text-xs text-gray-400 mb-1">Product</label>
                 <select
                   value={filterProduct}
                   onChange={e => setFilterProduct(e.target.value)}
@@ -956,8 +1160,18 @@ export default function CustomerListPage() {
                 </select>
               </div>
             )}
+            {/* Lead/Customer only. `callback` is the real callback flag for
+                those two, but Vendor repurposes it to hold the Manager's NAME
+                (see isLeadOrCustomer) — so this select filtered
+                c.callback === 'yes' against a person's name: "Yes" matched
+                nothing and "No" matched everything. Vendors already have a
+                working "Callback: Yes/No" pair in the sidebar, which reads the
+                field that actually holds the flag (c.salesman), so this was
+                also a second control labelled "Callback" on the same page.
+                Employees don't have the dimension at all. */}
+            {isLeadOrCustomer(cat) && (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Callback</label>
+              <label className="block text-xs text-gray-400 mb-1">Callback</label>
               <select
                 value={filterCallback}
                 onChange={e => setFilterCallback(e.target.value)}
@@ -968,11 +1182,12 @@ export default function CustomerListPage() {
                 <option value="no">No</option>
               </select>
             </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Date From</label>
+              <label className="block text-xs text-gray-400 mb-1">Date From</label>
               <input
                 type="date"
                 value={filterDateFrom}
@@ -981,7 +1196,7 @@ export default function CustomerListPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Date To</label>
+              <label className="block text-xs text-gray-400 mb-1">Date To</label>
               <input
                 type="date"
                 value={filterDateTo}
@@ -991,34 +1206,39 @@ export default function CustomerListPage() {
             </div>
           </div>
 
+          {/* Amount isn't an employee field — the form gates it behind
+              !isEmployee — so a min/max range over staff records filters on
+              legacy import data. */}
+          {cat !== 'Employee' && (
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Min Amount ($)</label>
+              <label className="block text-xs text-gray-400 mb-1">Min Amount ($)</label>
               <input
                 type="number"
                 min={0}
                 value={filterAmtMin}
                 onChange={e => setFilterAmtMin(e.target.value)}
                 placeholder="0"
-                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Max Amount ($)</label>
+              <label className="block text-xs text-gray-400 mb-1">Max Amount ($)</label>
               <input
                 type="number"
                 min={0}
                 value={filterAmtMax}
                 onChange={e => setFilterAmtMax(e.target.value)}
                 placeholder="No limit"
-                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
               />
             </div>
           </div>
+          )}
 
           {activeFilterCount > 0 && (
             <div className="flex items-center justify-between pt-1 border-t border-gray-700/50">
-              <span className="text-xs text-gray-500">{activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''} active</span>
+              <span className="text-xs text-gray-400">{activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''} active</span>
               <button
                 onClick={clearAdvancedFilters}
                 className="text-xs text-red-400 hover:text-red-300 transition-colors font-medium"
@@ -1038,7 +1258,10 @@ export default function CustomerListPage() {
 
       {hitRecordCap && (
         <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4">
-          ⚠ Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some records may not be visible — contact support to raise this limit.
+          <span className="flex items-start gap-2">
+            <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some records may not be visible — contact support to raise this limit.</span>
+          </span>
         </div>
       )}
 
@@ -1102,8 +1325,8 @@ export default function CustomerListPage() {
           </button>
         </div>
       ) : (
-        !loading && (
-          <p className="text-xs text-gray-500 mb-3">
+        !listLoading && (
+          <p className="text-xs text-gray-400 mb-3">
             {pageCount > 1
               ? `${rangeStart}–${rangeEnd} of ${filtered.length} records`
               : `${filtered.length} ${filtered.length === 1 ? 'record' : 'records'}`}
@@ -1113,11 +1336,15 @@ export default function CustomerListPage() {
         )
       )}
 
-      <div className={hasQuickFilterSidebar ? 'flex gap-4 items-start' : ''}>
+      {/* Side-by-side only at the width this layout was designed for. The page
+          caps at max-w-5xl (1024px), so below lg the 208px sidebar was just
+          eating the record list. Stacked, the filters sit above the list
+          (order-first) rather than below 50 rows of records. */}
+      <div className={hasQuickFilterSidebar ? 'flex flex-col lg:flex-row gap-4 lg:items-start' : ''}>
       <div className={hasQuickFilterSidebar ? 'flex-1 min-w-0' : ''}>
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
         {/* Select-all checkbox row — hidden for roles without bulk actions */}
-        {!loading && filtered.length > 0 && perms.canBulkAction && (
+        {!listLoading && filtered.length > 0 && perms.canBulkAction && (
           <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
             <input
               type="checkbox"
@@ -1125,12 +1352,12 @@ export default function CustomerListPage() {
               onChange={togglePage}
               className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
             />
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-gray-400">
               {allPageSelected ? 'Deselect page' : 'Select page'}
             </span>
           </div>
         )}
-        {loading ? (
+        {listLoading ? (
           Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
         ) : filtered.length === 0 ? (
           <div className="px-4 py-8 text-center">
@@ -1163,12 +1390,13 @@ export default function CustomerListPage() {
               selected={selectedIds.has(c.id)}
               onToggle={() => toggleOne(c.id)}
               showCheckbox={perms.canBulkAction}
+              health={healthReady ? healthFor(c) : null}
             />
           ))
         )}
 
         {/* Pagination footer — only shown when there's more than one page */}
-        {!loading && pageCount > 1 && (
+        {!listLoading && pageCount > 1 && (
           <div className="flex items-center justify-between px-4 py-3">
             <button
               onClick={() => { setPage(p => Math.max(1, p - 1)); listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
@@ -1180,7 +1408,7 @@ export default function CustomerListPage() {
               </svg>
               Prev
             </button>
-            <span className="text-xs text-gray-500 tabular-nums">
+            <span className="text-xs text-gray-400 tabular-nums">
               {page} / {pageCount}
             </span>
             <button
@@ -1198,7 +1426,7 @@ export default function CustomerListPage() {
       </div>
       </div>
       {cat === 'Employee' && (
-        <div className="w-52 shrink-0 card p-3 space-y-1">
+        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
           <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
           <QuickFilterButton
             label="Active Employees"
@@ -1220,18 +1448,31 @@ export default function CustomerListPage() {
             active={filterSalesmanFlag === 'no'}
             onClick={() => setFilterSalesmanFlag(filterSalesmanFlag === 'no' ? '' : 'no')}
           />
-          {uniqueStates.map(s => (
-            <QuickFilterButton
-              key={s}
-              label={`State: ${s}`}
-              active={filterState === s}
-              onClick={() => setFilterState(filterState === s ? '' : s)}
+          {/* The one dimension this route uniquely tracks, and the only one
+              that had no filter. Fixed list rather than data-derived: these are
+              the three values the form offers, so an imported typo shouldn't
+              become a filter button. */}
+          <QuickFilterGroup
+            title="Employment"
+            options={EMPLOYEE_STATUS_CYCLE}
+            activeValue={filterEmployeeStatus}
+            onSelect={setFilterEmployeeStatus}
+          />
+
+          {/* Same unbounded-list problem as the Lead sidebar: this is one
+              button per state present in the data, which can reach 50. */}
+          {uniqueStates.length > 0 && (
+            <QuickFilterGroup
+              title="State"
+              options={uniqueStates}
+              activeValue={filterState}
+              onSelect={setFilterState}
             />
-          ))}
+          )}
         </div>
       )}
       {cat === 'Lead' && (
-        <div className="w-52 shrink-0 card p-3 space-y-1">
+        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
           <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
 
           <QuickFilterButton
@@ -1268,36 +1509,26 @@ export default function CustomerListPage() {
           />
 
           {uniqueLeadStatuses.length > 0 && (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Status</p>
-              {uniqueLeadStatuses.map(s => (
-                <QuickFilterButton
-                  key={s}
-                  label={s}
-                  active={filterLeadStatus === s}
-                  onClick={() => setFilterLeadStatus(filterLeadStatus === s ? '' : s)}
-                />
-              ))}
-            </>
+            <QuickFilterGroup
+              title="Status"
+              options={uniqueLeadStatuses}
+              activeValue={filterLeadStatus}
+              onSelect={setFilterLeadStatus}
+            />
           )}
 
           {uniqueLeadSources.length > 0 && (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Source</p>
-              {uniqueLeadSources.map(s => (
-                <QuickFilterButton
-                  key={s}
-                  label={s}
-                  active={filterLeadSource === s}
-                  onClick={() => setFilterLeadSource(filterLeadSource === s ? '' : s)}
-                />
-              ))}
-            </>
+            <QuickFilterGroup
+              title="Source"
+              options={uniqueLeadSources}
+              activeValue={filterLeadSource}
+              onSelect={setFilterLeadSource}
+            />
           )}
         </div>
       )}
       {cat === 'Customer' && (
-        <div className="w-52 shrink-0 card p-3 space-y-1">
+        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
           <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
 
           <QuickFilterButton
@@ -1332,23 +1563,20 @@ export default function CustomerListPage() {
             />
           ))}
 
+          {/* Last of the data-derived groups to get capped — imported payment
+              values can otherwise grow the sidebar past the record list. */}
           {uniquePaymentStatuses.length > 0 && (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Payment Status</p>
-              {uniquePaymentStatuses.map(s => (
-                <QuickFilterButton
-                  key={s}
-                  label={s}
-                  active={filterPaymentStatus === s}
-                  onClick={() => setFilterPaymentStatus(filterPaymentStatus === s ? '' : s)}
-                />
-              ))}
-            </>
+            <QuickFilterGroup
+              title="Payment Status"
+              options={uniquePaymentStatuses}
+              activeValue={filterPaymentStatus}
+              onSelect={setFilterPaymentStatus}
+            />
           )}
         </div>
       )}
       {cat === 'Vendor' && (
-        <div className="w-52 shrink-0 card p-3 space-y-1">
+        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
           <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
 
           <QuickFilterButton
@@ -1379,7 +1607,7 @@ export default function CustomerListPage() {
               {uniqueRatings.map(r => (
                 <QuickFilterButton
                   key={r}
-                  label={`${r} ★`}
+                  label={<span className="inline-flex items-center gap-1">{r}<Icon d={ICONS.star} className="w-3 h-3 icon-star" /></span>}
                   active={filterRating === r}
                   onClick={() => setFilterRating(filterRating === r ? '' : r)}
                 />
@@ -1388,31 +1616,21 @@ export default function CustomerListPage() {
           )}
 
           {uniqueProfessions.length > 0 && (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Profession</p>
-              {uniqueProfessions.map(s => (
-                <QuickFilterButton
-                  key={s}
-                  label={s}
-                  active={filterProfession === s}
-                  onClick={() => setFilterProfession(filterProfession === s ? '' : s)}
-                />
-              ))}
-            </>
+            <QuickFilterGroup
+              title="Profession"
+              options={uniqueProfessions}
+              activeValue={filterProfession}
+              onSelect={setFilterProfession}
+            />
           )}
 
           {uniqueManagers.length > 0 && (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Manager</p>
-              {uniqueManagers.map(s => (
-                <QuickFilterButton
-                  key={s}
-                  label={s}
-                  active={filterManager === s}
-                  onClick={() => setFilterManager(filterManager === s ? '' : s)}
-                />
-              ))}
-            </>
+            <QuickFilterGroup
+              title="Manager"
+              options={uniqueManagers}
+              activeValue={filterManager}
+              onSelect={setFilterManager}
+            />
           )}
         </div>
       )}
@@ -1442,21 +1660,75 @@ export default function CustomerListPage() {
   )
 }
 
+function fmtShortDate(d: Date): string {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+/** Days since the record was last touched — the recency input to the health
+ *  score. Mirrors dealAgeDays() for leads. */
+function daysSinceUpdate(c: CustomerItem): number {
+  return Math.max(0, Math.floor((Date.now() - c.lastUpdateDate.getTime()) / 86_400_000))
+}
+
 function CustomerRow({
   customer: c,
   selected,
   onToggle,
   showCheckbox = true,
+  health = null,
 }: {
   customer: CustomerItem
   selected: boolean
   onToggle: () => void
   showCheckbox?: boolean
+  /** Full health score, computed by the page. Null until the invoice and
+   *  service-plan collections have loaded, so the badge renders a placeholder
+   *  rather than briefly showing a label derived from partial data. */
+  health?: CustomerHealth | null
 }) {
-  const name = c.category.toLowerCase() === 'vendor' ? (c.first || '—') : fullName(c)
-  const initials = [c.first[0], c.category.toLowerCase() !== 'vendor' ? c.lastname[0] : ''].filter(Boolean).join('').toUpperCase()
+  // A company name takes the row's title; the person's name drops to the subtitle.
+  const showCompanyFirst = c.companyName.trim() !== ''
+  const personName = fullName(c)
+  const name = showCompanyFirst
+    ? c.companyName.trim()
+    : c.category.toLowerCase() === 'vendor' ? (c.first || '—') : personName
+  const initials = showCompanyFirst
+    ? name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+    : [c.first[0], c.category.toLowerCase() !== 'vendor' ? c.lastname[0] : ''].filter(Boolean).join('').toUpperCase()
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const color = coloredAvatars ? avatarColor(name) : avatarOriginal()
+
+  // Subtitle fields, in display order. Kept as discrete strings so each can
+  // truncate on its own instead of being concatenated into one clipped line.
+  const lowerCat = c.category.toLowerCase()
+  const subtitleParts = [
+    showCompanyFirst ? personName : '',
+    [c.city, c.state].filter(Boolean).join(', '),
+    // Employees showed only an unlabelled adNo here, while job, profession and
+    // manager — the fields you'd actually scan a staff list for — went unused.
+    // Each part truncates independently, so adding them can't clip the others
+    // out of existence.
+    ...(lowerCat === 'employee'
+      ? [
+          c.job || c.profession,
+          c.manager ? `Reports to ${c.manager}` : '',
+          c.adNo ? `ID ${c.adNo}` : '',
+        ]
+      : lowerCat === 'vendor'
+        // Manager and Next Follow-up Date are both vendor form fields that the
+        // list never showed. Manager is read through vendorFields because it's
+        // stored in `callback`, not `manager`.
+        ? [
+            c.profession,
+            vendorFields(c).manager ? `Mgr ${vendorFields(c).manager}` : '',
+            c.followUpDate ? `Follow-up ${fmtShortDate(c.followUpDate)}` : '',
+          ]
+        : [c.salesman]),
+    // Recency is the single largest input to a customer's health score (35 of
+    // 100) and had no presence on the row at all — the verdict was visible but
+    // its dominant cause wasn't. Leads show deal age in the same spirit.
+    lowerCat === 'customer' ? `Updated ${daysSinceUpdate(c)}d ago` : '',
+  ].filter(Boolean)
 
   return (
     <div className={`group flex items-center gap-3 px-4 py-3 transition-colors ${selected ? 'bg-indigo-600/10' : 'hover:bg-gray-700/30'}`}>
@@ -1507,44 +1779,156 @@ function CustomerRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-100 truncate">{name || '—'}</span>
-            {!c.isActive && <span className="text-xs text-gray-500 shrink-0">inactive</span>}
+            {!c.isActive && <span className="text-xs text-gray-400 shrink-0">inactive</span>}
             {c.category.toLowerCase() === 'lead' && c.leadStatus && (
               <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${leadStatusColor(c.leadStatus)}`}>
                 {c.leadStatus}
               </span>
             )}
+            {/* Tags are squared and #-prefixed so they read as a different
+                class of object from the fully-round status pill beside them.
+                Both were rounded-full and hue-coded, and since tag hues come
+                from a hash they can land on the same colour as a status —
+                a violet pill could be "Proposal Sent" or the tag "Referral". */}
             {(c.tags ?? []).slice(0, 2).map(tag => (
-              <span key={tag} className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${tagColor(tag)}`}>{tag}</span>
+              <span key={tag} className={`px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${tagColor(tag)}`}>#{tag}</span>
             ))}
             {(c.tags ?? []).length > 2 && (
-              <span className="text-xs text-gray-600 shrink-0">+{c.tags.length - 2}</span>
+              <span className="text-xs text-gray-400 shrink-0">+{c.tags.length - 2}</span>
             )}
           </div>
-          <p className="text-sm text-gray-400 truncate">
-            {[c.city, c.state].filter(Boolean).join(', ')}
-            {c.category.toLowerCase() !== 'vendor' && c.category.toLowerCase() !== 'employee' && c.salesman ? ` · ${c.salesman}` : ''}
-            {c.category.toLowerCase() === 'vendor' && c.profession ? ` · ${c.profession}` : ''}
-            {c.category.toLowerCase() === 'employee' && c.adNo ? ` · ${c.adNo}` : ''}
-          </p>
+          {/* Each subtitle field truncates in its own box rather than the whole
+              line being one joined string. Before, a long person name could eat
+              the location and the assignee entirely, and because it clipped
+              mid-token you couldn't tell which field you'd lost. Now every
+              field always shows its beginning. The global `* { min-width: 0 }`
+              reset in index.css is what lets these flex children shrink. */}
+          {subtitleParts.length > 0 && (
+            <div className="flex items-center gap-1.5 text-sm text-gray-400">
+              {subtitleParts.map((part, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span aria-hidden className="shrink-0">·</span>}
+                  <span className="truncate">{part}</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="shrink-0 text-right flex flex-col items-end gap-1 self-start">
-          {c.category.toLowerCase() !== 'customer' && c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
+        {/* Leads get a fixed-width column so the two numeric readouts land in
+            the same place on every row. Without it the column's width floated
+            with the amount string and the score label ("Hot" vs "Cold"), so
+            nothing aligned vertically and the subtitle's truncation point moved
+            row to row. Left auto for the other categories, whose clusters hold
+            different content. */}
+        <div className={`shrink-0 text-right flex flex-col items-end gap-1 self-start ${c.category.toLowerCase() === 'lead' ? 'w-40' : ''}`}>
+          {/* One amount for every category. Customers used to render their own
+              copy outside the link, which meant clicking a customer's amount
+              did nothing while clicking a lead's navigated. */}
+          {/* Not for employees: the form puts Amount inside a !isEmployee
+              section, so a value on a staff record is legacy import data with
+              no defined meaning — and it rendered in the same slot, with the
+              same styling, as a lead's deal value. */}
+          {c.amount > 0 && lowerCat !== 'employee' && (
+            <p className="text-sm font-semibold text-white tabular-nums">{formatCurrency(c.amount)}</p>
+          )}
+          {c.category.toLowerCase() === 'customer' && (
+            // rounded-md to match the lead score chip: both are computed
+            // quality readouts, so they share a silhouette. The number is shown
+            // for the same reason it is on leads — the four labels span
+            // 20-point bands, so 60 and 79 both read "Good".
+            health ? (
+              <span
+                title={healthBreakdown(health)}
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold border cursor-help ${health.badgeClass}`}
+              >
+                <span className={`w-1 h-1 rounded-full ${health.dotClass}`} />
+                {health.label}
+                <span className="tabular-nums font-bold">{health.score}</span>
+              </span>
+            ) : (
+              // Holds the slot while invoices and plans load, so rows don't
+              // reflow and no wrong label derived from partial data is shown.
+              <span className="inline-block h-[1.125rem] w-20 rounded-md bg-gray-700/50 animate-pulse" />
+            )
+          )}
+          {/* Payment state as a readout, not an action. Previously the row
+              rendered a green "$ Paid" *button* only when the customer had NOT
+              paid — so green signalled unpaid, and a customer who had paid
+              showed no payment indicator at all. Both states are now shown,
+              with the colour matching the meaning. rounded-md keeps it in the
+              same family as the health chip beside it. */}
+          {c.category.toLowerCase() === 'customer' && (
+            // Plain text, not a filled chip: the health badge beside it is the
+            // graded primary readout, and a second tinted pill competed with it
+            // for the same hues. Emphasis sits on the exception — unpaid gets
+            // amber and weight, paid stays quiet — the same way deal age is
+            // handled on /leads.
+            <span
+              className={`text-xs ${
+                c.paymentStatus === 'Paid'
+                  ? 'text-gray-400 font-normal'
+                  : 'text-amber-400 font-semibold'
+              }`}
+            >
+              {c.paymentStatus === 'Paid' ? 'Paid' : c.paymentStatus || 'Unpaid'}
+            </span>
+          )}
+          {lowerCat === 'vendor' && (() => {
+            const { callbackFlag } = vendorFields(c)
+            const rating = Number(c.rate)
+            const hasRating = c.rate.trim() !== '' && Number.isFinite(rating)
+            if (!hasRating && !callbackFlag.trim()) return null
+            return (
+              // The sidebar can filter vendors by rating and by the callback
+              // flag, but neither appeared anywhere in the row — filtering
+              // acted on data the list never showed.
+              <div className="flex items-center justify-end gap-2 text-xs">
+                {hasRating && (
+                  <span className="inline-flex items-center gap-0.5 tabular-nums text-gray-300">
+                    {rating}
+                    <Icon d={ICONS.star} className="w-3 h-3 icon-star" />
+                  </span>
+                )}
+                {callbackFlag.trim() && (
+                  <span className={callbackFlag.toLowerCase() === 'yes' ? 'text-amber-400 font-semibold' : 'text-gray-400'}>
+                    Callback {callbackFlag.toLowerCase() === 'yes' ? 'Yes' : 'No'}
+                  </span>
+                )}
+              </div>
+            )
+          })()}
           {c.category.toLowerCase() === 'lead' && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center justify-end gap-2 w-full">
+              {/* Score keeps its temperature hue but goes squared-with-a-dot,
+                  so it can't be mistaken for the round status pill. The number
+                  is shown because the four labels span 20-point buckets — a 70
+                  and a 100 both read "Hot" — and because Sort By › Score
+                  already orders on it, so without it the sort looks arbitrary.
+                  The tooltip surfaces the per-factor breakdown. */}
               {(() => {
                 const ls = scoreLead(c)
                 return (
-                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${ls.badgeClass}`}>
+                  <span
+                    title={scoreBreakdown(ls)}
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold border cursor-help ${ls.badgeClass}`}
+                  >
                     <span className={`w-1 h-1 rounded-full ${ls.dotClass}`} />
                     {ls.label}
+                    <span className="tabular-nums font-bold">{ls.score}</span>
                   </span>
                 )
               })()}
+              {/* Age drops the pill shape entirely: dealAgeClasses only returns
+                  a text treatment, so wrapping it in px/py/rounded-full
+                  rendered a pill silhouette with no fill next to genuinely
+                  filled ones. Plain tabular-nums text reads as the number it
+                  is. No font-weight here — dealAgeClasses owns it, so the
+                  weight ramp isn't fighting a fixed font-medium. */}
               {(() => {
                 const days = dealAgeDays(c)
                 return (
-                  <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${dealAgeClasses(days)}`}>
-                    {days} {days === 1 ? 'Day' : 'Days'}
+                  <span className={`text-xs tabular-nums shrink-0 w-10 text-right ${dealAgeClasses(days)}`}>
+                    {days}d
                   </span>
                 )
               })()}
@@ -1552,50 +1936,63 @@ function CustomerRow({
           )}
         </div>
       </Link>
-      {c.category.toLowerCase() === 'customer' && (() => {
-        const hs = calculateHealthScoreLight(c)
-        return (
-          <div className="shrink-0 flex flex-col items-end gap-1 self-start">
-            {c.amount > 0 && <p className="text-sm font-semibold text-white">{formatCurrency(c.amount)}</p>}
-            <div className="flex items-center gap-1.5">
-              {c.paymentStatus !== 'Paid' && (
-                <button
-                  type="button"
-                  onClick={() => { void setPaymentStatus(c.id, 'Paid') }}
-                  title="Mark payment status as Paid"
-                  className="shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-md bg-green-600/20 text-green-400 border border-green-700/30 hover:bg-green-600/30 transition-colors"
-                >
-                  $ Paid
-                </button>
-              )}
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold border ${hs.badgeClass}`}>
-                <span className={`w-1 h-1 rounded-full ${hs.dotClass}`} />
-                {hs.label}
-              </span>
-            </div>
-          </div>
-        )
-      })()}
-      {c.category.toLowerCase() === 'employee' && (
+      {/* Trailing action slot. Only real buttons live out here — an <a> can't
+          contain interactive content, which is the whole reason the customer
+          and employee clusters were ever outside the link. The readouts that
+          came along for the ride (amount, health badge) are back inside it. */}
+      {/* A verb label and the app's quiet toolbar treatment, so this reads as
+          an action rather than a second status chip. The old "$ Paid" was a
+          green tinted pill — visually identical to the readouts beside it,
+          while actually writing to Firestore on a single click. */}
+      {c.category.toLowerCase() === 'customer' && c.paymentStatus !== 'Paid' && (
         <button
           type="button"
-          onClick={() => { void setEmployeeStatus(c.id, nextEmployeeStatus(c.employeeStatus)) }}
-          title="Click to advance employee status"
-          className={`shrink-0 self-start text-[10px] leading-none px-1.5 py-1 rounded-md border transition-colors ${employeeStatusClasses(c.employeeStatus)}`}
+          onClick={() => { void setPaymentStatus(c.id, 'Paid') }}
+          title={`Mark ${displayName(c)} as paid`}
+          className="shrink-0 self-start text-xs font-medium leading-none px-2 py-1.5 rounded-md bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
         >
-          {c.employeeStatus || 'Active'}
+          Mark paid
         </button>
       )}
+      {c.category.toLowerCase() === 'employee' && (() => {
+        // Never invent a status. An empty employeeStatus used to render as
+        // "Active", so a record with isActive:false showed the word "inactive"
+        // beside its name and an "Active" badge on the same row. Falling back
+        // to isActive means the two can't contradict each other.
+        const status = effectiveEmployeeStatus(c)
+        return (
+          // A select, not a badge that cycles on click. The old control looked
+          // exactly like the status readouts around it while rewriting the
+          // record on a single click, and reaching a specific value took up to
+          // two clicks with no way back if you overshot. A select is visibly a
+          // control, lands on any value in one action, and is keyboard
+          // reachable. Colour still carries the status.
+          <select
+            value={status}
+            onChange={e => {
+              const nextStatus = e.target.value
+              void setEmployeeStatus(c.id, nextStatus, nextStatus !== 'Inactive')
+            }}
+            aria-label={`Employment status for ${displayName(c)}`}
+            className={`shrink-0 self-start text-xs font-medium leading-none pl-2 pr-1 py-1.5 rounded-md border bg-gray-800 cursor-pointer outline-none focus:border-indigo-500 ${employeeStatusClasses(status)}`}
+          >
+            {EMPLOYEE_STATUS_CYCLE.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        )
+      })()}
     </div>
   )
 }
 
 const EMPLOYEE_STATUS_CYCLE = ['Active', 'On Leave', 'Inactive']
 
-function nextEmployeeStatus(current: string): string {
-  const i = EMPLOYEE_STATUS_CYCLE.indexOf(current)
-  return EMPLOYEE_STATUS_CYCLE[(i + 1) % EMPLOYEE_STATUS_CYCLE.length]
+/** The status to display when the field is unset. `isActive` is the only other
+ *  signal available, and deriving from it guarantees the badge can't disagree
+ *  with the "inactive" marker beside the name. */
+function effectiveEmployeeStatus(c: CustomerItem): string {
+  return c.employeeStatus || (c.isActive ? 'Active' : 'Inactive')
 }
+
 
 function employeeStatusClasses(status: string): string {
   switch (status) {
@@ -1617,11 +2014,11 @@ function UserAssignInput({
   }, [])
 
   if (salesmen === null) {
-    return <div className="p-3 text-xs text-gray-500">Loading team…</div>
+    return <div className="p-3 text-xs text-gray-400">Loading team…</div>
   }
   if (salesmen.length === 0) {
     return (
-      <div className="p-3 text-xs text-gray-500">
+      <div className="p-3 text-xs text-gray-400">
         No salesmen on your team yet. Invite one from Team settings.
       </div>
     )
@@ -1667,7 +2064,7 @@ function AssignInput({
           onChange={e => setCustom(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onAssign(custom.trim()) }}
           placeholder="Type name…"
-          className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:border-indigo-500"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-400 outline-none focus:border-indigo-500"
         />
         <button
           onClick={() => { if (custom.trim()) onAssign(custom.trim()) }}
@@ -1719,7 +2116,7 @@ function BulkEmailModal({
       <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700/60">
           <h2 className="text-base font-semibold text-white">Send Email</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
             </svg>
@@ -1742,29 +2139,29 @@ function BulkEmailModal({
           </div>
 
           <div>
-            <label className="block text-xs text-gray-500 mb-1.5">Subject</label>
+            <label className="block text-xs text-gray-400 mb-1.5">Subject</label>
             <input
               type="text"
               value={subject}
               onChange={e => setSubject(e.target.value)}
               required
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
               placeholder="Email subject…"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-gray-500 mb-1.5">Body</label>
+            <label className="block text-xs text-gray-400 mb-1.5">Body</label>
             <textarea
               value={body}
               onChange={e => setBody(e.target.value)}
               required
               rows={7}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-600 resize-none"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400 resize-none"
               placeholder="Write your message…"
             />
-            <p className="text-xs text-gray-600 mt-1">
-              Merge tags: <span className="text-gray-500 font-mono">{'{first}'}</span> <span className="text-gray-500 font-mono">{'{lastname}'}</span> <span className="text-gray-500 font-mono">{'{city}'}</span> <span className="text-gray-500 font-mono">{'{salesman}'}</span>
+            <p className="text-xs text-gray-400 mt-1">
+              Merge tags: <span className="text-gray-400 font-mono">{'{first}'}</span> <span className="text-gray-400 font-mono">{'{lastname}'}</span> <span className="text-gray-400 font-mono">{'{city}'}</span> <span className="text-gray-400 font-mono">{'{salesman}'}</span>
             </p>
           </div>
 

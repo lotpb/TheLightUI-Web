@@ -137,12 +137,14 @@ export default function TodoEditPage() {
         <div>
           <label className="form-label">Priority</label>
           <div className="flex gap-2 mt-1 flex-nowrap overflow-x-auto scrollbar-none">
+            {/* Same dimming fix as the picker on /todo: the label stays legible
+                at gray-400 and the dot carries the unselected state. */}
             {(['low', 'medium', 'high'] as Todo['priority'][]).map(p => (
               <button key={p} type="button" onClick={() => { setTouched(true); setPriority(p) }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                  priority === p ? PRIORITY_STYLES[p] : 'border-gray-700 text-gray-500 opacity-60'
+                  priority === p ? PRIORITY_STYLES[p] : 'border-gray-700 text-gray-400'
                 }`}>
-                <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[p]}`} />
+                <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[p]} ${priority === p ? '' : 'opacity-40'}`} />
                 {p.charAt(0).toUpperCase() + p.slice(1)}
               </button>
             ))}

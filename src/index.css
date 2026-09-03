@@ -48,12 +48,19 @@
     display: none !important;
   }
 
-  .print-only-title {
-    display: block !important;
-  }
-
   body {
     background: white !important;
+    color: #111 !important;
+  }
+
+  /* Page headings are text-white, which resolves to --color-white — literal
+     white in dark mode — so every page title printed white-on-white. body's
+     color can't reach them because the utility class wins. Scoped to headings
+     so glyphs sitting on solid colour chips (.icon-on-solid, badges) keep
+     their true white. */
+  h1.text-white,
+  h2.text-white,
+  h3.text-white {
     color: #111 !important;
   }
 
@@ -75,13 +82,46 @@
     color: #6b7280 !important;
   }
 
+  /* The meta line (customer · due · added) is spans, not paragraphs, so the
+     "#todo-list p" rule above doesn't reach it. gray-300 is near-white in dark
+     mode and would print blank. */
+  #todo-list .text-gray-300 {
+    color: #374151 !important;
+  }
+
+  /* Priority badges: red and amber are handled below for due dates, but the
+     medium badge's yellow-400 is #facc15 — invisible on paper. */
+  #todo-list .text-yellow-400 {
+    color: #a16207 !important;
+  }
+
   #todo-list .text-indigo-400 {
     color: #4338ca !important;
   }
 
-  #todo-list span[role="checkbox"] {
+  /* Due-date urgency. The 400 shades are tuned for a dark card and drop to
+     ~2.4:1 on paper, so print gets the 700 shades instead. */
+  #todo-list .text-red-400 {
+    color: #b91c1c !important;
+  }
+
+  #todo-list .text-amber-400 {
+    color: #b45309 !important;
+  }
+
+  /* role="checkbox" sits on the toggle button; the circle is the span inside it.
+     Unchecked prints as a neutral outline. Checked has to force its own fill:
+     print drops backgrounds by default, which would put a white checkmark
+     inside an empty circle and make a completed task look outstanding. */
+  #todo-list [role="checkbox"] > span {
     border-color: #9ca3af !important;
-    background: white !important;
+  }
+
+  #todo-list [role="checkbox"][aria-checked="true"] > span {
+    background-color: #16a34a !important;
+    border-color: #16a34a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 
@@ -122,6 +162,28 @@ html.light-mode {
   --gray-100: 8 12 28;
 }
 
+/* The proposal / invoice / quote previews are fixed white "paper" documents —
+   they use bg-white + text-gray-900 to look like print output in BOTH themes.
+   Those utilities are var-backed, so light mode inverted the whole document:
+   --color-white is 15 23 42, making bg-white render near-black, while
+   text-gray-900 (232 238 245) went pale and the text-white inside the slate-800
+   letterhead band went dark-on-dark. Rather than override each utility, pin the
+   palette back to its dark-mode (i.e. literal) values for this subtree only, so
+   paper stays paper. Any future full-bleed document surface just needs .paper. */
+html.light-mode .paper {
+  --color-white: 255 255 255;
+  --gray-950: 3 7 18;
+  --gray-900: 17 24 39;
+  --gray-800: 31 41 55;
+  --gray-700: 55 65 81;
+  --gray-600: 75 85 99;
+  --gray-500: 107 114 128;
+  --gray-400: 156 163 175;
+  --gray-300: 209 213 219;
+  --gray-200: 229 231 235;
+  --gray-100: 243 244 246;
+}
+
 /* text-white maps to --color-white (dark navy in light mode) which is correct
    for text on card/page backgrounds, but elements with a solid colored
    background (indigo buttons, red badges, active nav) still need true white. */
@@ -140,6 +202,7 @@ html.light-mode .bg-sky-600,
 html.light-mode .bg-teal-600,
 html.light-mode .bg-green-700\/70,
 html.light-mode .bg-red-700\/70,
+html.light-mode .bg-slate-600,
 html.light-mode .btn-primary {
   color: rgb(255 255 255) !important;
 }
@@ -152,35 +215,225 @@ html.light-mode .text-indigo-300 { color: #4f46e5 !important; } /* role badges *
 html.light-mode .text-teal-300   { color: #0f766e !important; }
 html.light-mode .text-yellow-300 { color: #a16207 !important; }
 html.light-mode .text-red-400    { color: #b91c1c !important; }
+/* The 200 shades are paler still, and every place they're used (idle sign-out
+   banner, duplicate warnings, low-stock list, code chips) sits on a surface that
+   goes white or pale-tinted in light mode, so they vanish without this. */
+html.light-mode .text-yellow-200 { color: #713f12 !important; }
+html.light-mode .text-amber-200  { color: #78350f !important; }
 html.light-mode .text-gray-600   { color: #000 !important; } /* was near-invisible pale gray meant for borders, not text (e.g. filter panel section headers) */
 
-/* Soft-pill action buttons (translucent bg-X-600/20 + text-X-400/300 + border-X-700/30)
-   read fine in dark mode but the diluted tint background pushes contrast below ~4:1
-   in light mode; darken the text further only for this exact combo so unrelated
+/* Star on the record page's "Active" action tile. Must be an SVG, not a ★/☆ glyph:
+   those get rendered from Apple Color Emoji, which paints a solid black star and
+   ignores `color` outright, so no CSS could tint them. Bright yellow fill with a
+   darker gold outline works in both themes without a light-mode variant — the fill
+   is 6.73:1 on the dark tile and only 1.10:1 on the pale light-mode tile, but the
+   #a16207 stroke (3.55:1) delineates the shape there. Coloured on its own so the
+   tile's label keeps its themed colour. */
+.icon-star { color: #facc15; stroke: #a16207; }
+
+/* Soft-pill action buttons (translucent bg-X-600/20 + text-X-400/300): these DO
+   composite to a genuinely pale tint, so unlike the 900-shade tints below they only
+   need darker text, not a repainted surface. Keyed on the bg + text pair rather than
+   also requiring border-X-700/30 — the /customers view, saved-filter and tag buttons
+   pair the same tint with border-indigo-500/50 or no border at all, and were missed
+   by the old three-class selector (4.63:1). Still bg-scoped, so unrelated
    single-class usages (badges, links) keep their own overrides above. */
-html.light-mode .bg-green-600\/20.text-green-400.border-green-700\/30   { color: #14532d !important; }
-html.light-mode .bg-indigo-600\/20.text-indigo-300.border-indigo-700\/30 { color: #312e81 !important; }
-html.light-mode .bg-red-600\/20.text-red-400.border-red-700\/30         { color: #7f1d1d !important; }
-html.light-mode .bg-emerald-600\/20.text-emerald-300.border-emerald-700\/30 { color: #064e3b !important; }
-html.light-mode .bg-amber-600\/20.text-amber-400.border-amber-700\/30   { color: #78350f !important; }
+html.light-mode .bg-green-600\/20.text-green-400,
+html.light-mode .bg-green-600\/20.text-green-300     { color: #14532d !important; }
+html.light-mode .bg-indigo-600\/20.text-indigo-300,
+html.light-mode .bg-indigo-600\/20.text-indigo-400   { color: #312e81 !important; }
+html.light-mode .bg-red-600\/20.text-red-400,
+html.light-mode .bg-red-600\/20.text-red-300         { color: #7f1d1d !important; }
+html.light-mode .bg-emerald-600\/20.text-emerald-300,
+html.light-mode .bg-emerald-600\/20.text-emerald-400 { color: #064e3b !important; }
+html.light-mode .bg-amber-600\/20.text-amber-400,
+html.light-mode .bg-amber-600\/20.text-amber-300     { color: #78350f !important; }
+
+/* Deep-tint pills (bg-X-900/40 + text-X-300 or -400): unlike the /20 pills above,
+   a 900 shade at 40 % over a white card does NOT composite to a pale tint — it
+   lands on a muddy mid-tone (green-900/40 → rgb(161 186 171), ~0.46 luminance).
+   At that lightness the pale 300 text sits near 2:1 AND dark text only reaches
+   ~4.3:1, so recoloring the text alone can't fix it; the surface has to be
+   repainted as a real pale tint. Backgrounds go to the 100 shade and text to the
+   900 shade, which clears 8:1. Affects the batch category pills and the
+   follow-up / pipeline / leaderboard / duplicates badges that share these classes. */
+html.light-mode .bg-green-900\/40  { background-color: #dcfce7 !important; }
+html.light-mode .bg-blue-900\/40   { background-color: #dbeafe !important; }
+html.light-mode .bg-indigo-900\/40 { background-color: #e0e7ff !important; }
+html.light-mode .bg-orange-900\/40 { background-color: #ffedd5 !important; }
+html.light-mode .bg-amber-900\/40  { background-color: #fef3c7 !important; }
+html.light-mode .bg-yellow-900\/40 { background-color: #fef9c3 !important; }
+html.light-mode .bg-red-900\/40    { background-color: #fee2e2 !important; }
+html.light-mode .bg-sky-900\/40    { background-color: #e0f2fe !important; }
+html.light-mode .bg-violet-900\/40 { background-color: #ede9fe !important; }
+
+html.light-mode .bg-green-900\/40.text-green-300,
+html.light-mode .bg-green-900\/40.text-green-400   { color: #14532d !important; }
+html.light-mode .bg-blue-900\/40.text-blue-300,
+html.light-mode .bg-blue-900\/40.text-blue-400     { color: #1e3a8a !important; }
+html.light-mode .bg-indigo-900\/40.text-indigo-300,
+html.light-mode .bg-indigo-900\/40.text-indigo-400 { color: #312e81 !important; }
+html.light-mode .bg-orange-900\/40.text-orange-300,
+html.light-mode .bg-orange-900\/40.text-orange-400 { color: #7c2d12 !important; }
+html.light-mode .bg-amber-900\/40.text-amber-300,
+html.light-mode .bg-amber-900\/40.text-amber-400   { color: #78350f !important; }
+html.light-mode .bg-yellow-900\/40.text-yellow-300,
+html.light-mode .bg-yellow-900\/40.text-yellow-400 { color: #713f12 !important; }
+html.light-mode .bg-red-900\/40.text-red-300,
+html.light-mode .bg-red-900\/40.text-red-400       { color: #7f1d1d !important; }
+html.light-mode .bg-sky-900\/40.text-sky-300,
+html.light-mode .bg-sky-900\/40.text-sky-400       { color: #075985 !important; }
+html.light-mode .bg-violet-900\/40.text-violet-300,
+html.light-mode .bg-violet-900\/40.text-violet-400 { color: #4c1d95 !important; }
+
+/* The matching border-X-700/30 rings composite against the new pale surfaces the
+   same way the old backgrounds did — muddy and heavier than the fill. Lighten
+   them to the 200 shade so the pill reads as a tint, not an outlined chip. */
+html.light-mode .bg-green-900\/40.border-green-700\/30   { border-color: #bbf7d0 !important; }
+html.light-mode .bg-blue-900\/40.border-blue-700\/30     { border-color: #bfdbfe !important; }
+html.light-mode .bg-indigo-900\/40.border-indigo-700\/30 { border-color: #c7d2fe !important; }
+html.light-mode .bg-orange-900\/40.border-orange-700\/30 { border-color: #fed7aa !important; }
+
+/* Same defect one step lighter: bg-X-900/30 over white → rgb(185 203 192) for
+   green. Covers the batch Callback "Yes" pill, the callback-queue / follow-up /
+   target status pills, and the red-900/30 error banners used on ~20 pages, all of
+   which pair the tint with pale 300/400 text. */
+html.light-mode .bg-green-900\/30  { background-color: #dcfce7 !important; }
+html.light-mode .bg-blue-900\/30   { background-color: #dbeafe !important; }
+html.light-mode .bg-indigo-900\/30 { background-color: #e0e7ff !important; }
+html.light-mode .bg-red-900\/30    { background-color: #fee2e2 !important; }
+html.light-mode .bg-orange-900\/30 { background-color: #ffedd5 !important; }
+html.light-mode .bg-amber-900\/30  { background-color: #fef3c7 !important; }
+html.light-mode .bg-yellow-900\/30 { background-color: #fef9c3 !important; }
+html.light-mode .bg-teal-900\/30   { background-color: #ccfbf1 !important; }
+html.light-mode .bg-sky-900\/30    { background-color: #e0f2fe !important; }
+html.light-mode .bg-violet-900\/30 { background-color: #ede9fe !important; }
+
+html.light-mode .bg-green-900\/30.text-green-300,
+html.light-mode .bg-green-900\/30.text-green-400   { color: #14532d !important; }
+html.light-mode .bg-blue-900\/30.text-blue-300,
+html.light-mode .bg-blue-900\/30.text-blue-400     { color: #1e3a8a !important; }
+html.light-mode .bg-indigo-900\/30.text-indigo-300,
+html.light-mode .bg-indigo-900\/30.text-indigo-400 { color: #312e81 !important; }
+html.light-mode .bg-red-900\/30.text-red-300,
+html.light-mode .bg-red-900\/30.text-red-400       { color: #7f1d1d !important; }
+html.light-mode .bg-orange-900\/30.text-orange-300,
+html.light-mode .bg-orange-900\/30.text-orange-400 { color: #7c2d12 !important; }
+html.light-mode .bg-amber-900\/30.text-amber-300,
+html.light-mode .bg-amber-900\/30.text-amber-400   { color: #78350f !important; }
+html.light-mode .bg-yellow-900\/30.text-yellow-300,
+html.light-mode .bg-yellow-900\/30.text-yellow-400 { color: #713f12 !important; }
+html.light-mode .bg-teal-900\/30.text-teal-300,
+html.light-mode .bg-teal-900\/30.text-teal-400     { color: #134e4a !important; }
+html.light-mode .bg-sky-900\/30.text-sky-300,
+html.light-mode .bg-sky-900\/30.text-sky-400       { color: #075985 !important; }
+html.light-mode .bg-violet-900\/30.text-violet-300,
+html.light-mode .bg-violet-900\/30.text-violet-400 { color: #4c1d95 !important; }
+
+/* And the /20 step of the same 900-shade family — a beige-grey mud rather than a
+   tint (yellow-900/20 → rgb(227 217 208), only 3.54:1 under text-yellow-300). Used
+   by the /customers warning banner and the batch Deactivate/Delete buttons. */
+html.light-mode .bg-yellow-900\/20 { background-color: #fef9c3 !important; }
+html.light-mode .bg-red-900\/20    { background-color: #fee2e2 !important; }
+html.light-mode .bg-green-900\/20  { background-color: #dcfce7 !important; }
+html.light-mode .bg-amber-900\/20  { background-color: #fef3c7 !important; }
+html.light-mode .bg-indigo-900\/20 { background-color: #e0e7ff !important; }
+
+html.light-mode .bg-yellow-900\/20.text-yellow-300,
+html.light-mode .bg-yellow-900\/20.text-yellow-400 { color: #713f12 !important; }
+html.light-mode .bg-red-900\/20.text-red-300,
+html.light-mode .bg-red-900\/20.text-red-400       { color: #7f1d1d !important; }
+html.light-mode .bg-green-900\/20.text-green-300,
+html.light-mode .bg-green-900\/20.text-green-400   { color: #14532d !important; }
+html.light-mode .bg-amber-900\/20.text-amber-300,
+html.light-mode .bg-amber-900\/20.text-amber-400   { color: #78350f !important; }
+html.light-mode .bg-indigo-900\/20.text-indigo-300,
+html.light-mode .bg-indigo-900\/20.text-indigo-400 { color: #312e81 !important; }
+
+/* Several of these pills darken on hover (hover:bg-X-900/50). That token is a
+   separate class, so the repaint above misses it and the text would drop back
+   into a muddy tint mid-hover — keep the hover a shade of the same pale family. */
+html.light-mode .hover\:bg-green-900\/50:hover  { background-color: #bbf7d0 !important; }
+html.light-mode .hover\:bg-blue-900\/50:hover   { background-color: #bfdbfe !important; }
+html.light-mode .hover\:bg-indigo-900\/50:hover { background-color: #c7d2fe !important; }
+html.light-mode .hover\:bg-red-900\/50:hover    { background-color: #fecaca !important; }
+
+/* Border rings on the /30 tints, matching the /40 treatment above. */
+html.light-mode .bg-green-900\/30[class*="border-green-700/"]   { border-color: #bbf7d0 !important; }
+html.light-mode .bg-blue-900\/30[class*="border-blue-700/"]     { border-color: #bfdbfe !important; }
+html.light-mode .bg-indigo-900\/30[class*="border-indigo-700/"] { border-color: #c7d2fe !important; }
+html.light-mode .bg-red-900\/30[class*="border-red-700/"]       { border-color: #fecaca !important; }
+html.light-mode .bg-teal-900\/30[class*="border-teal-600/"]     { border-color: #99f6e4 !important; }
+html.light-mode .bg-amber-900\/30[class*="border-amber-700/"]   { border-color: #fde68a !important; }
+
+/* Selected/active buttons tinted with indigo-600/40 or indigo-500/15: text-indigo-200
+   has no standalone override (it reads fine on solid indigo) but disappears against
+   these washed-out tints — e.g. the active button in the batch action bar. */
+html.light-mode .bg-indigo-600\/40.text-indigo-200,
+html.light-mode .bg-indigo-600\/20.text-indigo-200,
+html.light-mode .bg-indigo-500\/15.text-indigo-200 { color: #312e81 !important; }
 
 /* Todo priority pills (bg-X-500/20 + text-X-400 + border-X-600/40): plain black
    reads better than a tinted shade against these very pale pastel backgrounds. */
 html.light-mode .bg-yellow-500\/20.text-yellow-400.border-yellow-600\/40 { color: #000 !important; }
 html.light-mode .bg-red-500\/20.text-red-400.border-red-600\/40         { color: #000 !important; }
-/* Anchored with ^= (start of string) and *=" " (after a space) so this only
-   matches a standalone bg-gray-X/NN class — NOT hover:bg-gray-X/NN, which
-   contains the same substring but has no background until actually hovered
-   (this previously forced white text on transparent/white resting buttons,
-   e.g. the Common Filters sidebar quick-filter buttons). */
-html.light-mode [class^="bg-gray-500/"][class*="text-gray-400"],
-html.light-mode [class*=" bg-gray-500/"][class*="text-gray-400"],
-html.light-mode [class^="bg-gray-600/"][class*="text-gray-400"],
-html.light-mode [class*=" bg-gray-600/"][class*="text-gray-400"],
-html.light-mode [class^="bg-gray-700/"][class*="text-gray-400"],
-html.light-mode [class*=" bg-gray-700/"][class*="text-gray-400"],
-html.light-mode [class^="bg-gray-800/"][class*="text-gray-400"],
-html.light-mode [class*=" bg-gray-800/"][class*="text-gray-400"] { color: #fff !important; }
+/* REMOVED 2026-09-02: a block here forced `color: #fff` on any element combining
+   a bg-gray-{500,600,700,800}/NN tint with text-gray-400. It was wrong for every
+   tint it matched. The reasoning behind it was presumably that --gray-500 is a
+   dark slate (71 85 105) in light mode and so needs white text — but these classes
+   always carry an alpha, and composited over a white card the darkest of them
+   (gray-500/20) still only reaches rgb(218 221 225). Measured across every
+   shade/alpha pair actually used in the app, white text scored 1.00–1.36:1 while
+   text-gray-400's own light value scores 7.60–10.35:1, so the rule is deleted
+   rather than patched and text-gray-400 is simply left alone.
+
+   It broke, in order: the Common Filters quick-filter buttons (worked around by
+   anchoring the selectors so hover:bg-* wouldn't match), the "Cold" lead-score
+   badge on /leads (worked around with a one-off exception), and the Inactive
+   employee-status button on /employees. Deleting it fixes ~30 elements across
+   /employees, /customers, the record detail page, /commission, /targets,
+   /callback, /jobs, /purchaseorders, /warranties, /serviceplans and /chart.
+   Don't reintroduce it: in light mode there is no gray tint dark enough to carry
+   white text — use a solid bg-gray-500 (no alpha) if that's ever needed. */
+
+/* Lead status pills, tag pills and lead-score badges use a bg-X-500/20 or /15 tint
+   with text-X-300 — a family no other page uses, and one with no override at all,
+   so on /leads every pill sat between 1.08:1 and 1.56:1. Like the other /15–/20
+   tints these composite genuinely pale, so text-only (900 shade) is the fix and the
+   surface is left alone. Sources: utils/tagColor.ts, utils/leadStatusColor.ts,
+   utils/leadScore.ts. */
+html.light-mode .bg-indigo-500\/20.text-indigo-300, html.light-mode .bg-indigo-500\/15.text-indigo-300,
+html.light-mode .bg-indigo-500\/20.text-indigo-200, html.light-mode .bg-indigo-500\/15.text-indigo-200 { color: #312e81 !important; }
+html.light-mode .bg-violet-500\/20.text-violet-300, html.light-mode .bg-violet-500\/15.text-violet-300,
+html.light-mode .bg-violet-500\/20.text-violet-200, html.light-mode .bg-violet-500\/15.text-violet-200 { color: #4c1d95 !important; }
+html.light-mode .bg-blue-500\/20.text-blue-300,     html.light-mode .bg-blue-500\/15.text-blue-300,
+html.light-mode .bg-blue-500\/20.text-blue-200,     html.light-mode .bg-blue-500\/15.text-blue-200     { color: #1e3a8a !important; }
+html.light-mode .bg-cyan-500\/20.text-cyan-300,     html.light-mode .bg-cyan-500\/15.text-cyan-300,
+html.light-mode .bg-cyan-500\/20.text-cyan-200,     html.light-mode .bg-cyan-500\/15.text-cyan-200     { color: #164e63 !important; }
+html.light-mode .bg-teal-500\/20.text-teal-300,     html.light-mode .bg-teal-500\/15.text-teal-300,
+html.light-mode .bg-teal-500\/20.text-teal-200,     html.light-mode .bg-teal-500\/15.text-teal-200     { color: #134e4a !important; }
+html.light-mode .bg-green-500\/20.text-green-300,   html.light-mode .bg-green-500\/15.text-green-300,
+html.light-mode .bg-green-500\/20.text-green-200,   html.light-mode .bg-green-500\/15.text-green-200   { color: #14532d !important; }
+/* emerald isn't in the tag palette, only in the customer health score ("Excellent"). */
+html.light-mode .bg-emerald-500\/20.text-emerald-300, html.light-mode .bg-emerald-500\/15.text-emerald-300,
+html.light-mode .bg-emerald-500\/20.text-emerald-200, html.light-mode .bg-emerald-500\/15.text-emerald-200 { color: #064e3b !important; }
+html.light-mode .bg-yellow-500\/20.text-yellow-300, html.light-mode .bg-yellow-500\/15.text-yellow-300,
+html.light-mode .bg-yellow-500\/20.text-yellow-200, html.light-mode .bg-yellow-500\/15.text-yellow-200 { color: #713f12 !important; }
+html.light-mode .bg-orange-500\/20.text-orange-300, html.light-mode .bg-orange-500\/15.text-orange-300,
+html.light-mode .bg-orange-500\/20.text-orange-200, html.light-mode .bg-orange-500\/15.text-orange-200 { color: #7c2d12 !important; }
+html.light-mode .bg-amber-500\/20.text-amber-300,   html.light-mode .bg-amber-500\/15.text-amber-300,
+html.light-mode .bg-amber-500\/20.text-amber-200,   html.light-mode .bg-amber-500\/15.text-amber-200   { color: #78350f !important; }
+html.light-mode .bg-red-500\/20.text-red-300,       html.light-mode .bg-red-500\/15.text-red-300,
+html.light-mode .bg-red-500\/20.text-red-200,       html.light-mode .bg-red-500\/15.text-red-200       { color: #7f1d1d !important; }
+html.light-mode .bg-rose-500\/20.text-rose-300,     html.light-mode .bg-rose-500\/15.text-rose-300,
+html.light-mode .bg-rose-500\/20.text-rose-200,     html.light-mode .bg-rose-500\/15.text-rose-200     { color: #881337 !important; }
+html.light-mode .bg-pink-500\/20.text-pink-300,     html.light-mode .bg-pink-500\/15.text-pink-300,
+html.light-mode .bg-pink-500\/20.text-pink-200,     html.light-mode .bg-pink-500\/15.text-pink-200     { color: #831843 !important; }
+
+/* Bare text-amber-400 with no background — the 14-29 day deal-age pill on /leads,
+   at 1.67:1 on a white card. Joins the standalone hue overrides further up; the
+   two-class combo rules above still win where a tint is present. */
+html.light-mode .text-amber-400 { color: #78350f !important; }
 
 /* ─────────────────────────────────────────────────────────────────────── */
 
@@ -214,6 +467,14 @@ html.light-mode [class*=" bg-gray-800/"][class*="text-gray-400"] { color: #fff !
   }
   .section-header {
     @apply text-xs font-semibold uppercase tracking-wider text-gray-400 px-1 mb-2;
+  }
+  /* For a glyph sitting on a solid saturated chip (the /menu tiles). text-white
+     can't be used: it resolves to --color-white, which is dark navy in light mode,
+     so the icon rendered dark-on-colour. The icons stroke with currentColor, so
+     setting colour is enough — the chip background and the tile label below it
+     stay themed. */
+  .icon-on-solid {
+    color: rgb(255 255 255);
   }
   .form-label {
     @apply block text-xs font-medium text-gray-400 mb-1.5;

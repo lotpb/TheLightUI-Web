@@ -20,6 +20,15 @@ function factor(label: string, max: number, condition: boolean): ScoreFactor {
   return { label, earned: condition ? max : 0, max }
 }
 
+/** Plain-text breakdown of how a score was earned, for a title tooltip.
+ *  `factors` is built on every scoreLead() call but was never surfaced, so
+ *  there was no way to tell why a lead scored what it did — or what would
+ *  move it. */
+export function scoreBreakdown(s: LeadScore): string {
+  const lines = s.factors.map(f => `${f.earned > 0 ? '✓' : '·'} ${f.label} — ${f.earned}/${f.max}`)
+  return [`Lead score ${s.score}/100 · ${s.label}`, '', ...lines].join('\n')
+}
+
 export function scoreLead(c: CustomerItem): LeadScore {
   const factors: ScoreFactor[] = [
     factor('Has phone number',       15, !!c.phone.trim()),

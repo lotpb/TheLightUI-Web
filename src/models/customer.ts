@@ -69,6 +69,11 @@ export interface CustomerItem {
   // when unassigned or when `salesman` was set to a legacy free-text name that
   // doesn't correspond to a real team-member account.
   assignedToUid: string
+  // uid of whoever created the record. Read-only here: deliberately NOT written
+  // by customerToFirestore, so an edit by someone else can never reassign
+  // authorship. createCustomer() is the only writer. Empty on records created
+  // before this field existed.
+  createdByUid: string
   // Token of this customer's portal snapshot (customerPortals/{token}).
   // Read-only here: it is deliberately NOT written by customerToFirestore, so
   // an ordinary customer edit can never clear it. setPortalToken() is the only
@@ -128,6 +133,7 @@ export const emptyCustomer = (): CustomerItem => ({
   pipelineStage: '',
   smsOptOut: false,
   assignedToUid: '',
+  createdByUid: '',
   portalToken: '',
 })
 
@@ -230,6 +236,7 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     pipelineStage: str(d, 'pipelineStage'),
     smsOptOut: d['smsOptOut'] === true,
     assignedToUid: str(d, 'assignedToUid'),
+    createdByUid: str(d, 'createdByUid'),
     portalToken: str(d, 'portalToken'),
   }
 }
@@ -309,4 +316,26 @@ export function formatCurrency(cents: number, currency: string = 'USD'): string 
 export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'> & { category?: string }): string {
   if (c.category?.toLowerCase() === 'vendor') return c.first || ''
   return [c.first, c.lastname].filter(Boolean).join(' ')
+}
+
+// The name a record is identified by: a company name outranks the person's name,
+// matching how the detail page titles the record.
+export function displayName(
+  c: Pick<CustomerItem, 'first' | 'lastname' | 'companyName'> & { category?: string },
+): string {
+  return c.companyName?.trim() || fullName(c)
+}
+
+/**
+ * Vendor records reuse two fields for different things than Lead/Customer do:
+ * `salesman` holds the Callback Yes/No flag, and `callback` holds the Manager's
+ * name. Reading them by their raw names is how the /vendors Callback filter
+ * ended up comparing a person's name to 'yes', and how the printout got a
+ * "Salesman" column full of Yes/No. Go through this accessor instead.
+ */
+export function vendorFields(c: Pick<CustomerItem, 'salesman' | 'callback'>): {
+  callbackFlag: string
+  manager: string
+} {
+  return { callbackFlag: c.salesman, manager: c.callback }
 }
