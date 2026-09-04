@@ -5,6 +5,7 @@ import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerIt
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
 import { Icon, ICONS, ACTIVITY_ICONS } from '../../components/Icon'
+import { dueMeta } from '../../utils/dueDate'
 import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePickerStore } from '../../stores/pickerStore'
@@ -509,9 +510,9 @@ export default function CustomerDetailPage() {
           {/* Tags + Score */}
           <div className="card p-4">
             <div className="flex items-center justify-between gap-2 mb-2.5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Tags</p>
+              <p className="card-section-title">Tags</p>
               {(customer.category.toLowerCase() === 'lead' || customer.category.toLowerCase() === 'customer') && (
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Overall Score</p>
+                <p className="card-section-title">Overall Score</p>
               )}
             </div>
             <div className="flex items-start justify-between gap-2">
@@ -900,7 +901,7 @@ function FieldGroup({ title, children }: { title: string; children: React.ReactN
         {/* text-xs, matching .section-header. The group title, the field labels
             and the values were all within 2px of each other, so a Details tab
             read as forty near-equal lines separated only by colour. */}
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{title}</p>
+        <p className="card-section-title">{title}</p>
       </div>
       <div className="divide-y divide-gray-700/30">{children}</div>
     </div>
@@ -1104,7 +1105,7 @@ function FollowUpSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Follow-up</p>
+        <p className="card-section-title">Follow-up</p>
         {saving && (
           <span className="w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
         )}
@@ -1183,7 +1184,7 @@ function CalledSection({
             column label outranked the section it sat in. Both are text-xs now,
             with only the title carrying the uppercase treatment. ml-auto was
             redundant under justify-between. */}
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Called</p>
+        <p className="card-section-title">Called</p>
         <span className="text-xs font-medium text-gray-400">Attempts</span>
       </div>
       <div className="px-4 py-3 flex items-center justify-between">
@@ -1245,7 +1246,7 @@ function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">History</p>
+        <p className="card-section-title">History</p>
       </div>
       {entries.length === 0 && (
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No history yet</p>
@@ -1337,7 +1338,7 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Tasks</p>
+        <p className="card-section-title">Tasks</p>
         <Link to="/todo" className="text-xs text-indigo-400 hover:text-indigo-300">View all →</Link>
       </div>
 
@@ -1391,11 +1392,18 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
                 {t.notes && (
                   <p className="text-sm text-gray-400 mt-0.5">{t.notes}</p>
                 )}
-                {t.dueDate && (
-                  <p className="text-xs text-indigo-400 mt-0.5">
-                    Due {t.dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </p>
-                )}
+                {/* Through the shared helper, not a bare toLocaleDateString.
+                    Task due dates are written at UTC midnight, so reading them
+                    in local time showed the day before for anyone west of UTC —
+                    the same off-by-one already fixed on /todo and /dashboard,
+                    which is what utils/dueDate exists for. It also carries the
+                    urgency: this used to print flat indigo, so a task five days
+                    overdue looked identical to one due next month, in the colour
+                    that means "link" everywhere else on the page. */}
+                {t.dueDate && (() => {
+                  const due = dueMeta(t.dueDate, t.isCompleted)
+                  return <p className={`text-xs mt-0.5 ${due.cls}`}>{due.label}</p>
+                })()}
               </div>
               <span className={`text-xs px-2 py-0.5 rounded-full border shrink-0 ${TASK_PRIORITY_STYLES[t.priority]}`}>
                 {t.priority}
@@ -1459,7 +1467,7 @@ function SmsThreadSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Texts</p>
+        <p className="card-section-title">Texts</p>
       </div>
 
       {messages.length === 0 ? (
@@ -1562,7 +1570,7 @@ function EmailThreadSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Email Thread</p>
+        <p className="card-section-title">Email Thread</p>
       </div>
       {messages.length === 0 ? (
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No email messages yet</p>
@@ -1652,7 +1660,7 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Campaigns</p>
+        <p className="card-section-title">Campaigns</p>
       </div>
       <div className="divide-y divide-gray-700/30">
         {sorted.map(r => (
@@ -1737,7 +1745,7 @@ function RelatedRecordsSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Related Records</p>
+        <p className="card-section-title">Related Records</p>
       </div>
 
       {totalCount === 0 && (
@@ -1993,7 +2001,7 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Activity Log</p>
+        <p className="card-section-title">Activity Log</p>
       </div>
 
       {/* Add activity form */}
@@ -2632,7 +2640,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+        <p className="card-section-title">
           Files {docs.length > 0 && <span className="text-gray-600 font-normal normal-case">({docs.length})</span>}
         </p>
         <button
@@ -2846,7 +2854,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
   return (
     <div className="card">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 rounded-t-xl flex items-center justify-between">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+        <p className="card-section-title">
           Sequences {activeEnrollments.length > 0 && (
             <span className="text-gray-600 font-normal normal-case">({activeEnrollments.length} active)</span>
           )}

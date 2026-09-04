@@ -480,6 +480,16 @@ html.light-mode .text-amber-400 { color: #78350f !important; }
   .section-header {
     @apply text-xs font-semibold uppercase tracking-wider text-gray-400 px-1 mb-2;
   }
+  /* The title inside a card's header strip. Same type as .section-header but
+     without its px-1/mb-2, since the strip supplies its own padding.
+     Exists because the record page hand-repeated this class string fourteen
+     times; a pass that corrected three of them left the sidebar at text-xs and
+     all seven tab sections at text-sm, so the page disagreed with itself about
+     what a section header is. One definition now, so the next change can't
+     land on a subset. */
+  .card-section-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-gray-400;
+  }
   /* For a glyph sitting on a solid saturated chip (the /menu tiles). text-white
      can't be used: it resolves to --color-white, which is dark navy in light mode,
      so the icon rendered dark-on-colour. The icons stroke with currentColor, so
