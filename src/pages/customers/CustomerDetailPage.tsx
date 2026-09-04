@@ -108,6 +108,14 @@ function DetailTabBar({
   const btnRefs = useRef<Partial<Record<TabKey, HTMLButtonElement>>>({})
   const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
 
+  // Re-measures on `counts` as well as `active`, and observes the container.
+  //
+  // The eight tab counts arrive asynchronously from their own subscriptions, and
+  // a count badge appearing widens that button — so the indicator was left
+  // sitting under where a tab used to be. Listening only to window resize also
+  // missed font loading and the tab strip's own horizontal scrolling. A
+  // ResizeObserver on the container catches all of it, including the layout
+  // shifts a window resize never fires for.
   useEffect(() => {
     function measure() {
       const btn = btnRefs.current[active]
@@ -118,9 +126,27 @@ function DetailTabBar({
       setIndicator({ left: btnRect.left - containerRect.left + container.scrollLeft, width: btnRect.width })
     }
     measure()
+
+    const container = containerRef.current
+    const observer = new ResizeObserver(measure)
+    if (container) {
+      observer.observe(container)
+      // Each button too: a count badge changes one button's width without
+      // changing the container's.
+      for (const btn of Object.values(btnRefs.current)) if (btn) observer.observe(btn)
+      container.addEventListener('scroll', measure, { passive: true })
+    }
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [active])
+
+    // Fonts settle after first paint and shift every text measurement.
+    document.fonts?.ready.then(measure).catch(() => {})
+
+    return () => {
+      observer.disconnect()
+      container?.removeEventListener('scroll', measure)
+      window.removeEventListener('resize', measure)
+    }
+  }, [active, counts])
 
   return (
     <div className="border-b border-gray-800 mb-6">
@@ -167,6 +193,9 @@ export default function CustomerDetailPage() {
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // Deactivating is a write that changes whether the record shows up in the
+  // lists at all, and it used to happen on one click of a star-shaped tile.
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false)
   const [compose, setCompose] = useState<'email' | 'sms' | null>(null)
   // All four are already scoped to this customer — no further filtering needed.
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -346,17 +375,35 @@ export default function CustomerDetailPage() {
                 <p className="text-xl font-bold text-green-400 tabular-nums">{formatCurrency(customer.amount)}</p>
               )}
 
-              <div className="flex flex-nowrap gap-1.5 overflow-x-auto max-w-full">
+              {/* Wraps rather than scrolling. flex-nowrap + overflow-x-auto hid
+                  the overflow with no scrollbar, fade or affordance, and in the
+                  fixed 300px sidebar it overflowed as a matter of course: the
+                  card's interior is 252px and category + Active + rating +
+                  Called measure about 269px, so the last pill was simply gone.
+                  Desktop-only, since below lg the column is full width. */}
+              <div className="flex flex-wrap gap-1.5 max-w-full">
                 {catLabel && (
                   <span className="inline-flex items-center shrink-0 text-xs font-medium bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full">
                     {catLabel}
                   </span>
                 )}
-                <span className={`inline-flex items-center shrink-0 text-xs font-medium px-2.5 py-1 rounded-full ${
-                  customer.isActive ? 'bg-green-500/15 text-green-400' : 'bg-gray-700/50 text-gray-400'
-                }`}>
+                {/* The status readout is also the control that sets it — see the
+                    note on the action grid below. */}
+                <button
+                  type="button"
+                  onClick={() => customer.isActive ? setConfirmDeactivate(true) : handleToggleActive()}
+                  aria-pressed={customer.isActive}
+                  title={customer.isActive ? 'Deactivate this record' : 'Reactivate this record'}
+                  className={`inline-flex items-center gap-1 shrink-0 text-xs font-medium px-2.5 py-1 rounded-full border
+                              transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                    customer.isActive
+                      ? 'bg-green-500/15 text-green-400 border-green-600/40 hover:bg-green-500/25'
+                      : 'bg-gray-700/50 text-gray-400 border-gray-500 hover:bg-gray-700'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${customer.isActive ? 'bg-green-400' : 'bg-gray-400'}`} />
                   {customer.isActive ? 'Active' : 'Inactive'}
-                </span>
+                </button>
                 {customer.rate && (
                   <span className="inline-flex items-center gap-1 shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
                     <StarIcon className="w-3 h-3" filled />
@@ -372,65 +419,90 @@ export default function CustomerDetailPage() {
               </div>
             </div>
 
-            {/* Action tiles */}
-            <div className="grid grid-cols-4 gap-2 mt-5 pt-4 border-t border-gray-700/50">
-              {customer.phone && (
-                <ActionTile
-                  href={`tel:${customer.phone}`}
-                  icon={(
-                    <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-                    </svg>
+            {/* Grouped, and no longer holding a state toggle.
+                Twelve identical chips in three anonymous rows put "Print" and
+                "Contact" in the same visual class as a write that deactivates
+                the record — and that write fired on a single click with no
+                confirmation. The Active tile is gone: a star means favourite or
+                bookmark, not status, and the same state was already displayed as
+                the Active/Inactive pill directly above. That pill is now the
+                control, which removes the duplicate and puts the toggle next to
+                the thing it describes. Deactivating asks first; reactivating
+                doesn't, since it isn't the destructive direction.
+
+                Labels rather than one flat grid so reaching for a document
+                doesn't mean scanning past four exports. */}
+            <div className="mt-5 pt-4 border-t border-gray-700/50 space-y-3">
+              {(customer.phone || customer.email || customer.street) && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Contact</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {customer.phone && (
+                      <ActionTile
+                        href={`tel:${customer.phone}`}
+                        icon={(
+                          <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                          </svg>
+                        )}
+                        label="Call"
+                      />
+                    )}
+                    {customer.phone && (
+                      <ActionTile onClick={() => setCompose('sms')} icon={<Icon d={ICONS.chat} className="w-5 h-5" />} label="Message" />
+                    )}
+                    {customer.email && (
+                      <ActionTile onClick={() => setCompose('email')} icon={<Icon d={ICONS.envelope} className="w-5 h-5" />} label="Email" />
+                    )}
+                    {customer.street && (
+                      <ActionTile
+                        to={`/maps?address=${encodeURIComponent(
+                          [customer.street, customer.city, customer.state, customer.zip]
+                            .filter(Boolean).join(', ')
+                        )}`}
+                        icon={<Icon d={ICONS.mapPin} className="w-5 h-5" />}
+                        label="Map"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Create</p>
+                <div className="grid grid-cols-4 gap-2">
+                  <ActionTile to={`/proposals/new?customerId=${id}`} icon={<Icon d={ICONS.documentText} className="w-5 h-5" />} label="Proposal" />
+                  <ActionTile to={`/invoices/new?customerId=${id}`}  icon={<Icon d={ICONS.receipt} className="w-5 h-5" />}      label="Invoice" />
+                  <ActionTile to={`/records/${id}/quote`}            icon={<Icon d={ICONS.clipboard} className="w-5 h-5" />}    label="Quote" />
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Share</p>
+                <div className="grid grid-cols-4 gap-2">
+                  <ActionTile onClick={() => downloadVCF(customer)} icon={<Icon d={ICONS.user} className="w-5 h-5" />} label="Contact" />
+                  {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
+                    <ActionTile onClick={() => downloadICS(customer)} icon={<Icon d={ICONS.calendar} className="w-5 h-5" />} label="Calendar" />
                   )}
-                  label="Call"
-                />
-              )}
-              {customer.phone && (
-                <ActionTile onClick={() => setCompose('sms')} icon={<Icon d={ICONS.chat} className="w-5 h-5" />} label="Message" />
-              )}
-              {customer.email && (
-                <ActionTile onClick={() => setCompose('email')} icon={<Icon d={ICONS.envelope} className="w-5 h-5" />} label="Email" />
-              )}
-              {customer.street && (
-                <ActionTile
-                  to={`/maps?address=${encodeURIComponent(
-                    [customer.street, customer.city, customer.state, customer.zip]
-                      .filter(Boolean).join(', ')
-                  )}`}
-                  icon={<Icon d={ICONS.mapPin} className="w-5 h-5" />}
-                  label="Map"
-                />
-              )}
-              <ActionTile
-                onClick={handleToggleActive}
-                icon={<StarIcon className="w-5 h-5" filled={customer.isActive} />}
-                label="Active"
-                active={customer.isActive}
-              />
-              <ActionTile to={`/proposals/new?customerId=${id}`} icon={<Icon d={ICONS.documentText} className="w-5 h-5" />} label="Proposal" />
-              <ActionTile to={`/invoices/new?customerId=${id}`}  icon={<Icon d={ICONS.receipt} className="w-5 h-5" />}      label="Invoice" />
-              <ActionTile to={`/records/${id}/quote`}            icon={<Icon d={ICONS.clipboard} className="w-5 h-5" />}    label="Quote" />
-              <ActionTile onClick={() => downloadVCF(customer)}  icon={<Icon d={ICONS.user} className="w-5 h-5" />}         label="Contact" />
-              {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
-                <ActionTile onClick={() => downloadICS(customer)} icon={<Icon d={ICONS.calendar} className="w-5 h-5" />} label="Calendar" />
-              )}
-              {/* The spinner is the same 20px box as the icon it replaces. The
-                  old '…' swap changed the glyph's metrics, so the tile jogged
-                  while the portal link was generating. */}
-              <ActionTile
-                onClick={handlePortalLink}
-                icon={generatingPortal
-                  ? <span className="w-5 h-5 flex items-center justify-center">
-                      <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                    </span>
-                  : <Icon d={ICONS.link} className="w-5 h-5" />}
-                label="Portal"
-              />
-              <ActionTile
-                onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
-                icon={<Icon d={ICONS.printer} className="w-5 h-5" />}
-                label="Print"
-              />
+                  {/* The spinner is the same 20px box as the icon it replaces.
+                      The old '…' swap changed the glyph's metrics, so the tile
+                      jogged while the portal link was generating. */}
+                  <ActionTile
+                    onClick={handlePortalLink}
+                    icon={generatingPortal
+                      ? <span className="w-5 h-5 flex items-center justify-center">
+                          <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        </span>
+                      : <Icon d={ICONS.link} className="w-5 h-5" />}
+                    label="Portal"
+                  />
+                  <ActionTile
+                    onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
+                    icon={<Icon d={ICONS.printer} className="w-5 h-5" />}
+                    label="Print"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -738,6 +810,13 @@ export default function CustomerDetailPage() {
         onConfirm={handleDelete}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      <ConfirmModal
+        isOpen={confirmDeactivate}
+        message={`Mark ${fullName(customer)} inactive? They'll be hidden from the record lists until reactivated.`}
+        onConfirm={() => { setConfirmDeactivate(false); handleToggleActive() }}
+        onCancel={() => setConfirmDeactivate(false)}
+      />
     </div>
   )
 }
@@ -818,7 +897,10 @@ function FieldGroup({ title, children }: { title: string; children: React.ReactN
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">{title}</p>
+        {/* text-xs, matching .section-header. The group title, the field labels
+            and the values were all within 2px of each other, so a Details tab
+            read as forty near-equal lines separated only by colour. */}
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{title}</p>
       </div>
       <div className="divide-y divide-gray-700/30">{children}</div>
     </div>
@@ -854,7 +936,9 @@ function isBlank(v: React.ReactNode): boolean {
 function FieldCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-sm text-gray-400 mb-1">{label}</p>
+      {/* text-xs, the app's .form-label size, against a text-base value: a real
+          step instead of the old 14/16 pairing. */}
+      <p className="text-xs text-gray-400 mb-1">{label}</p>
       <div className="text-base text-gray-200 break-words">
         {isBlank(children) ? <EmptyValue /> : children}
       </div>
@@ -1020,7 +1104,7 @@ function FollowUpSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Follow-up</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Follow-up</p>
         {saving && (
           <span className="w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
         )}
@@ -1095,8 +1179,12 @@ function CalledSection({
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-        <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Called</p>
-        <span className="text-base font-medium text-gray-400 ml-auto">Attempts</span>
+        {/* "Attempts" was text-base against a text-sm section title, so the
+            column label outranked the section it sat in. Both are text-xs now,
+            with only the title carrying the uppercase treatment. ml-auto was
+            redundant under justify-between. */}
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Called</p>
+        <span className="text-xs font-medium text-gray-400">Attempts</span>
       </div>
       <div className="px-4 py-3 flex items-center justify-between">
         <span className="flex items-center gap-1.5">
@@ -1107,23 +1195,30 @@ function CalledSection({
           {saving && (
             <span className="w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
           )}
+          {/* w-6 h-6 = 24px, the WCAG 2.5.8 minimum; these were 20px. The − and
+              + glyphs are Icon SVGs so they inherit the button's colour and
+              disabled state instead of being typeset text. */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => handleChange(customer.contactAttempts - 1)}
               disabled={saving || customer.contactAttempts <= 0}
-              className="w-5 h-5 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 disabled:opacity-40 transition-colors text-xs leading-none"
+              aria-label="One fewer contact attempt"
+              className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
+                         disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             >
-              −
+              <Icon d={ICONS.minus} className="w-3.5 h-3.5" />
             </button>
-            <span className="text-gray-300 font-medium w-4 text-center">{customer.contactAttempts}</span>
+            <span className="text-gray-300 font-medium w-4 text-center tabular-nums">{customer.contactAttempts}</span>
             <button
               type="button"
               onClick={() => handleChange(customer.contactAttempts + 1)}
               disabled={saving}
-              className="w-5 h-5 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 disabled:opacity-40 transition-colors text-xs leading-none"
+              aria-label="One more contact attempt"
+              className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
+                         disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             >
-              +
+              <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
