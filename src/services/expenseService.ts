@@ -38,7 +38,11 @@ export function subscribeToExpenses(
   )
 }
 
-export function subscribeToExpensesToday(
+// Expenses dated within an inclusive [start, end] window — the dashboard
+// passes either today's bounds or the current month's.
+export function subscribeToExpensesInRange(
+  start: Date,
+  end: Date,
   onData: (items: Expense[]) => void,
   onError: (err: Error) => void,
 ): Unsubscribe {
@@ -47,14 +51,12 @@ export function subscribeToExpensesToday(
     onError(new Error('Not authenticated'))
     return () => {}
   }
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-  const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
   return onSnapshot(
     query(
       collection(db, COL),
       where('companyId', '==', companyId),
-      where('date', '>=', Timestamp.fromDate(todayStart)),
-      where('date', '<=', Timestamp.fromDate(todayEnd)),
+      where('date', '>=', Timestamp.fromDate(start)),
+      where('date', '<=', Timestamp.fromDate(end)),
       orderBy('date', 'desc'),
     ),
     snap => {

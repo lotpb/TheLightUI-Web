@@ -167,7 +167,7 @@ export default function QuotePage() {
       </div>
 
       {/* ── Quote document ── */}
-      <div className="quote-doc max-w-3xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
+      <div className="quote-doc paper max-w-3xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
 
         {/* Header band */}
         <div style={{ background: '#1e293b', padding: '32px 40px' }}>

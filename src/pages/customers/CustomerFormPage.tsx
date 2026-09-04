@@ -316,7 +316,7 @@ export default function CustomerFormPage() {
                   <td style={{ width: '50%', paddingLeft: '6px', verticalAlign: 'top' }} />
                 </tr>
               )}
-              {isCustomer && (
+              {isLeadOrCustomer && (
                 <tr>
                   <td colSpan={2} style={{ paddingTop: '12px', verticalAlign: 'top' }}>
                     <label className="form-label">Company Name</label>

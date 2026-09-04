@@ -37,7 +37,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [showReminders, setShowReminders] = useState(false)
   const closeSearch = useCallback(() => setShowSearch(false), [])
 
-  const { notifications: reminderItems, urgentCount, recentActivity, permission, requestPermission } = useReminders()
+  const { notifications: reminderItems, urgentCount, recentActivity, permission, notificationSupport, requestPermission } = useReminders()
   const { unreadCount, startWatch, stopWatch } = useChatStore()
 
   const [appNotifications, setAppNotifications] = useState<AppNotification[]>([])
@@ -182,7 +182,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { canInstall, install, dismiss: dismissInstall } = useInstallPrompt()
 
   const isChatLog    = /^\/chat\/.+/.test(pathname)
-  const isFullHeight = isChatLog || pathname === '/maps'
+  // /pipeline is a board: its columns scroll internally and the page itself
+  // must not. It was already written as a full-height flex layout (h-full,
+  // shrink-0 headers, flex-1 min-h-0 board) but wasn't registered here, so it
+  // compensated with a hard-coded calc(100vh - 230px) on every column.
+  const isFullHeight = isChatLog || pathname === '/maps' || pathname === '/pipeline'
 
   async function handleSignOut() {
     await signOut()
@@ -611,6 +615,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           notifications={reminderItems}
           recentActivity={recentActivity}
           permission={permission}
+          notificationSupport={notificationSupport}
           onRequestPermission={requestPermission}
           onClose={() => setShowReminders(false)}
           appNotifications={appNotifications}

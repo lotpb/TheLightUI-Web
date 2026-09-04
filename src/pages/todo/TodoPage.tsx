@@ -4,6 +4,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToTodos, addTodo, toggleTodo } from '../../services/todoService'
 import { useAuthStore } from '../../stores/authStore'
 import type { Todo } from '../../models/todo'
+import { dueMeta, fmtDue } from '../../utils/dueDate'
 
 const PRIORITY_STYLES: Record<Todo['priority'], string> = {
   low:    'bg-gray-500/20 text-gray-400 border-gray-600/40',
@@ -19,27 +20,6 @@ const PRIORITY_DOT: Record<Todo['priority'], string> = {
 
 type Filter = 'all' | 'active' | 'completed'
 
-type DueStatus = 'overdue' | 'today' | 'tomorrow' | 'later' | 'done'
-
-/** Whole-day index for a date, read in UTC. Due dates are day-granular: every
- *  write path lands them on UTC midnight (`new Date('2026-09-12')` from the
- *  date input, `safeDate` in the CSV import), so the day the user picked only
- *  survives if it's read back in UTC. A bare toLocaleDateString() renders the
- *  day before for anyone west of UTC. */
-function dayIndexUTC(d: Date) {
-  return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 86400000)
-}
-
-/** Today as the same kind of index, from the viewer's local calendar day. */
-function todayIndexLocal() {
-  const now = new Date()
-  return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000)
-}
-
-function fmtDue(d: Date) {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
-}
-
 /** The customer a task belongs to, or null when there isn't one to show.
  *  Tasks created from a record page before the customerName argument was fixed
  *  stored the task's own title in that field; suppress those rather than print
@@ -52,26 +32,6 @@ function customerLabel(t: Todo): string | null {
 /** The print popup interpolates task-authored strings straight into markup. */
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-/** Due-date urgency, following the /serviceplans treatment: red + medium weight
- *  once late, amber inside the next day, plain gray beyond that. A completed
- *  task is never urgent no matter how late it was. */
-function dueMeta(due: Date, isCompleted: boolean): { status: DueStatus, label: string, cls: string } {
-  if (isCompleted) return { status: 'done', label: `Due ${fmtDue(due)}`, cls: 'text-gray-400' }
-
-  const days = dayIndexUTC(due) - todayIndexLocal()
-  if (days < 0) {
-    const late = -days
-    return {
-      status: 'overdue',
-      label: `Due ${fmtDue(due)} · ${late} day${late === 1 ? '' : 's'} overdue`,
-      cls: 'text-red-400 font-medium',
-    }
-  }
-  if (days === 0) return { status: 'today',    label: 'Due today',    cls: 'text-amber-400 font-medium' }
-  if (days === 1) return { status: 'tomorrow', label: 'Due tomorrow', cls: 'text-amber-400' }
-  return { status: 'later', label: `Due ${fmtDue(due)}`, cls: 'text-gray-400' }
 }
 
 export default function TodoPage() {

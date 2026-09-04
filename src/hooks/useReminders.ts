@@ -35,6 +35,30 @@ export interface Notification {
 
 const NOTIFY_AHEAD_MS = 60 * 60 * 1_000
 
+// Why notifications may be impossible in this browser:
+//  - 'supported'    → the Notification API exists, so we can prompt.
+//  - 'needs-install'→ iPhone/iPad Safari, which only exposes notifications to
+//                     web apps launched from the Home Screen. In a normal tab
+//                     `window.Notification` is undefined, so prompting is a
+//                     no-op and the user must "Add to Home Screen" first.
+//  - 'unsupported'  → any other browser without the API.
+export type NotificationSupport = 'supported' | 'needs-install' | 'unsupported'
+
+function detectNotificationSupport(): NotificationSupport {
+  if (typeof window === 'undefined') return 'unsupported'
+  if (typeof Notification !== 'undefined' && typeof Notification.requestPermission === 'function') {
+    return 'supported'
+  }
+  // iPadOS reports a Macintosh user agent in desktop mode, so fall back to
+  // touch points to tell an iPad apart from a real Mac.
+  const ua = navigator.userAgent
+  const isIOSLike = /iPad|iPhone|iPod/.test(ua) ||
+    (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  return isIOSLike && !isStandalone ? 'needs-install' : 'unsupported'
+}
+
 function urgencyFor(date: Date): Notification['urgency'] | null {
   const now      = new Date()
   const today    = new Date(now); today.setHours(0, 0, 0, 0)
@@ -63,6 +87,7 @@ export function useReminders() {
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default',
   )
+  const [notificationSupport] = useState<NotificationSupport>(detectNotificationSupport)
   const notifiedIds = useRef(new Set<string>())
 
   useEffect(() => {
@@ -245,15 +270,36 @@ export function useReminders() {
   }, [toast])
 
   async function requestPermission() {
-    if (typeof Notification === 'undefined') return
-    const result = await Notification.requestPermission()
-    setPermission(result)
-    if (result === 'granted' && user) {
-      registerPush(user.uid).catch(() => {})
+    if (typeof Notification === 'undefined' || typeof Notification.requestPermission !== 'function') {
+      toast(
+        notificationSupport === 'needs-install'
+          ? 'On iPhone and iPad, notifications only work from a Home Screen app. Tap Share → Add to Home Screen, then reopen TheLight from there.'
+          : 'This browser does not support notifications.',
+        'info',
+      )
+      return
+    }
+    try {
+      // Safari 15 and earlier only implement the callback form, which returns
+      // undefined instead of a promise — support both.
+      const result = await new Promise<NotificationPermission>((resolve, reject) => {
+        const maybePromise = Notification.requestPermission(resolve)
+        if (maybePromise && typeof maybePromise.then === 'function') {
+          maybePromise.then(resolve, reject)
+        }
+      })
+      setPermission(result)
+      if (result === 'granted' && user) {
+        registerPush(user.uid).catch(() => {})
+      } else if (result === 'denied') {
+        toast('Notifications were blocked. Enable them for this site in your browser settings.', 'error')
+      }
+    } catch {
+      toast('Could not turn on notifications in this browser.', 'error')
     }
   }
 
   const urgentCount = notifications.filter(n => n.urgency === 'overdue' || n.urgency === 'today').length
 
-  return { notifications, urgentCount, recentActivity, permission, requestPermission }
+  return { notifications, urgentCount, recentActivity, permission, notificationSupport, requestPermission }
 }

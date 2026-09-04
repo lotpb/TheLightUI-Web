@@ -4,7 +4,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import { createProposal, getProposal, updateProposal } from '../../services/proposalService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { subscribeToCatalog } from '../../services/catalogService'
-import { categoryMatches, fullName, type CustomerItem } from '../../models/customer'
+import { categoryMatches, fullName, displayName, type CustomerItem } from '../../models/customer'
 import type { CatalogItem } from '../../models/catalogItem'
 import {
   fmtCurrency, generateProposalNumber, lineItemTotal,
@@ -123,11 +123,11 @@ export default function ProposalFormPage() {
 
   function selectCustomer(c: CustomerItem) {
     setCustomerId(c.id)
-    setCustomerName(fullName(c))
+    setCustomerName(displayName(c))
     setCustomerPhone(c.phone)
     setCustomerEmail(c.email)
     setCustomerAddress([c.street, c.city, c.state, c.zip].filter(Boolean).join(', '))
-    setCustQuery(fullName(c))
+    setCustQuery(displayName(c))
     setShowCustList(false)
   }
 
@@ -139,11 +139,12 @@ export default function ProposalFormPage() {
     const q = customerQuery.trim().toLowerCase()
     if (!q) {
       return [...billable]
-        .sort((a, b) => fullName(a).localeCompare(fullName(b)))
+        .sort((a, b) => displayName(a).localeCompare(displayName(b)))
         .slice(0, 8)
     }
     return billable.filter(c =>
       fullName(c).toLowerCase().includes(q) ||
+      c.companyName.toLowerCase().includes(q) ||
       c.phone.includes(q) ||
       c.email.toLowerCase().includes(q),
     ).slice(0, 8)
@@ -262,16 +263,24 @@ export default function ProposalFormPage() {
             />
             {showCustList && custSuggestions.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 overflow-hidden">
-                {custSuggestions.map(c => (
-                  <button
-                    key={c.id}
-                    onPointerDown={() => selectCustomer(c)}
-                    className="w-full text-left px-4 py-2.5 hover:bg-gray-700/50 transition-colors"
-                  >
-                    <p className="text-sm font-medium text-gray-200">{fullName(c)}</p>
-                    <p className="text-xs text-gray-500">{c.phone || c.email || c.city}</p>
-                  </button>
-                ))}
+                {custSuggestions.map(c => {
+                  // A company name titles the result; the person's name moves to the subtitle.
+                  const hasCompany = c.companyName.trim() !== ''
+                  const sub = [
+                    hasCompany ? fullName(c) : '',
+                    c.phone || c.email || c.city,
+                  ].filter(Boolean).join(' · ')
+                  return (
+                    <button
+                      key={c.id}
+                      onPointerDown={() => selectCustomer(c)}
+                      className="w-full text-left px-4 py-2.5 hover:bg-gray-700/50 transition-colors"
+                    >
+                      <p className="text-sm font-medium text-gray-200">{displayName(c) || '—'}</p>
+                      {sub && <p className="text-xs text-gray-500">{sub}</p>}
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>

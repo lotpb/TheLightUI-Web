@@ -71,7 +71,7 @@ function MenuSection({ group }: { group: NavGroup }) {
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <div className={`w-8 h-8 rounded-xl ${group.iconBg} flex items-center justify-center shrink-0 shadow-lg`}>
-          {group.groupIcon('w-4 h-4 text-white')}
+          {group.groupIcon('w-4 h-4 icon-on-solid')}
         </div>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-white leading-none">{group.label}</h2>
@@ -119,7 +119,7 @@ function FeatureCard({ item, group }: { item: NavItem; group: NavGroup }) {
                 : `${group.iconBg} opacity-80 group-hover:opacity-100`
             }`}
           >
-            {item.icon('w-5 h-5 text-white')}
+            {item.icon('w-5 h-5 icon-on-solid')}
           </div>
           <span
             className={`text-xs font-medium leading-tight line-clamp-2 w-full transition-colors duration-150 ${

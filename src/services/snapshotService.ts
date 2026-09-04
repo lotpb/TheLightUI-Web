@@ -22,7 +22,14 @@ export interface SaleEntry {
   amount: number
 }
 
+// Which window the per-period figures cover. 'today' is midnight-to-midnight,
+// 'month' is the 1st of the current month to the 1st of the next, and 'year'
+// is Jan 1 of the current year to Jan 1 of the next.
+export type SnapshotPeriod = 'today' | 'month' | 'year'
+
 export interface SnapshotData {
+  // The *Today fields hold whichever period was requested — they keep their
+  // names because 'today' is the default and every caller labels them itself.
   leadsToday: CustomerItem[]
   customersToday: CustomerItem[]
   appointmentsToday: CustomerItem[]
@@ -33,13 +40,18 @@ export interface SnapshotData {
   totalCustomerSales: number
 }
 
-export async function fetchSnapshot(): Promise<SnapshotData> {
+export async function fetchSnapshot(period: SnapshotPeriod = 'today'): Promise<SnapshotData> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
 
   const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = new Date(start.getTime() + 86_400_000)
+  const [start, end] =
+    period === 'year'
+      ? [new Date(now.getFullYear(), 0, 1), new Date(now.getFullYear() + 1, 0, 1)]
+      : period === 'month'
+        ? [new Date(now.getFullYear(), now.getMonth(), 1), new Date(now.getFullYear(), now.getMonth() + 1, 1)]
+        : [new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+           new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)]
   const tsStart = Timestamp.fromDate(start)
   const tsEnd = Timestamp.fromDate(end)
 

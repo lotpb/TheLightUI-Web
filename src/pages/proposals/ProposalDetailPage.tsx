@@ -326,7 +326,7 @@ export default function ProposalDetailPage() {
       )}
 
       {/* ── PROPOSAL DOCUMENT ──────────────────────────────── */}
-      <div className="bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">
+      <div className="paper bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">
 
         <div className="bg-slate-800 px-8 py-6 flex items-start justify-between gap-4">
           <div>

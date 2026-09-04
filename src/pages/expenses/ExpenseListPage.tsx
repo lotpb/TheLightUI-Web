@@ -1,73 +1,119 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts'
 import { subscribeToExpenses, deleteExpense } from '../../services/expenseService'
-import { formatCurrency, type Expense } from '../../models/expense'
+import { formatCurrency, type Expense, type ExpenseCategory } from '../../models/expense'
 import { useAuthStore } from '../../stores/authStore'
 import { useDebounce } from '../../hooks/useDebounce'
 import ConfirmModal from '../../components/ConfirmModal'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSearchShortcut } from '../../hooks/useSearchShortcut'
+import { esc } from '../../utils/exportUtils'
+import CollapsibleSection from '../../components/CollapsibleSection'
+import { Icon, ICONS } from '../../components/Icon'
 
 const MONTHS = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
 ]
 
-const CATEGORY_COLORS: Record<string, string> = {
-  Food:          'bg-yellow-500/20 text-yellow-300',
-  Meals:         'bg-orange-500/20 text-orange-300',
-  Travel:        'bg-cyan-500/20 text-cyan-300',
-  Entertainment: 'bg-pink-500/20 text-pink-300',
-  Software:      'bg-blue-500/20 text-blue-300',
-  Supplies:      'bg-purple-500/20 text-purple-300',
-  Utilities:     'bg-green-500/20 text-green-300',
-  Tithes:        'bg-indigo-500/20 text-indigo-300',
-  Other:         'bg-gray-500/20 text-gray-300',
+/**
+ * One entry per category, driving the row pill, the donut slice and the legend
+ * dot from the same place.
+ *
+ * These used to be two independent systems: CATEGORY_COLORS mapped names to
+ * Tailwind tints, while DONUT_GRADIENTS assigned slice colours by *sort
+ * position* (`DONUT_GRADIENTS[i % 9]`). So Travel's pill was cyan while its
+ * slice was whatever index it happened to land on — and the index moved as
+ * amounts reordered. The legend used the donut colour, so nothing bridged the
+ * two and a slice could not be traced back to a row.
+ *
+ * Typed against ExpenseCategory so adding a category to the model's enum fails
+ * the build until it gets a colour here. `from`/`to` are lighter/darker steps
+ * of the same Tailwind hue as `pill`, so the slice reads as the same colour.
+ */
+const CATEGORY_STYLE: Record<ExpenseCategory, {
+  pill: string
+  solid: string
+  from: string
+  to: string
+}> = {
+  Food:          { pill: 'bg-yellow-500/20 text-yellow-300', solid: '#facc15', from: '#fef08a', to: '#a16207' },
+  Meals:         { pill: 'bg-orange-500/20 text-orange-300', solid: '#fb923c', from: '#fed7aa', to: '#c2410c' },
+  Travel:        { pill: 'bg-cyan-500/20 text-cyan-300',     solid: '#22d3ee', from: '#a5f3fc', to: '#0e7490' },
+  Entertainment: { pill: 'bg-pink-500/20 text-pink-300',     solid: '#f472b6', from: '#fbcfe8', to: '#be185d' },
+  Software:      { pill: 'bg-blue-500/20 text-blue-300',     solid: '#60a5fa', from: '#bfdbfe', to: '#1d4ed8' },
+  Supplies:      { pill: 'bg-purple-500/20 text-purple-300', solid: '#c084fc', from: '#e9d5ff', to: '#7e22ce' },
+  Utilities:     { pill: 'bg-green-500/20 text-green-300',   solid: '#4ade80', from: '#bbf7d0', to: '#15803d' },
+  Tithes:        { pill: 'bg-indigo-500/20 text-indigo-300', solid: '#818cf8', from: '#c7d2fe', to: '#4338ca' },
+  Other:         { pill: 'bg-gray-500/20 text-gray-300',     solid: '#9ca3af', from: '#d1d5db', to: '#4b5563' },
+}
+
+/** Legacy or imported values that aren't in the enum fall back to Other. */
+function catStyle(cat: string) {
+  return CATEGORY_STYLE[cat as ExpenseCategory] ?? CATEGORY_STYLE.Other
 }
 
 function catColor(cat: string): string {
-  return CATEGORY_COLORS[cat] ?? 'bg-gray-500/20 text-gray-300'
+  return catStyle(cat).pill
 }
 
-const DONUT_GRADIENTS = [
-  { id: 'dg0', from: '#c7d2fe', to: '#4338ca', solid: '#818cf8' },
-  { id: 'dg1', from: '#fef08a', to: '#b45309', solid: '#fbbf24' },
-  { id: 'dg2', from: '#a5f3fc', to: '#0e7490', solid: '#22d3ee' },
-  { id: 'dg3', from: '#fbcfe8', to: '#be185d', solid: '#f472b6' },
-  { id: 'dg4', from: '#a7f3d0', to: '#047857', solid: '#34d399' },
-  { id: 'dg5', from: '#fed7aa', to: '#c2410c', solid: '#fb923c' },
-  { id: 'dg6', from: '#ddd6fe', to: '#6d28d9', solid: '#a78bfa' },
-  { id: 'dg7', from: '#ecfccb', to: '#4d7c0f', solid: '#a3e635' },
-  { id: 'dg8', from: '#fee2e2', to: '#b91c1c', solid: '#f87171' },
-]
+/** Gradient ids are keyed by category, not by position, so a slice keeps its
+ *  colour when the sort order changes. */
+function catGradientId(cat: string): string {
+  return `expgrad-${cat.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+}
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-function groupLast7Days(expenses: Expense[]) {
+interface DayBucket {
+  label: string
+  total: number
+  isToday: boolean
+}
+
+function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate()
+}
+
+function sumOn(expenses: Expense[], day: Date): number {
+  return expenses.reduce((s, e) => (sameDay(e.date, day) ? s + e.amount : s), 0)
+}
+
+/**
+ * The seven days ending today.
+ *
+ * This used to start from the most recent Sunday and walk *forward* seven days
+ * — the current calendar week, not the last seven days, despite the name. On a
+ * Monday that rendered one populated bar and six empty future ones. A trailing
+ * window is always seven days of real history.
+ */
+function groupTrailing7Days(expenses: Expense[]): DayBucket[] {
   const today = new Date()
-  today.setHours(23, 59, 59, 999)
-  // Start from the most recent Sunday
-  const sunday = new Date(today)
-  sunday.setDate(today.getDate() - today.getDay())
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(sunday)
-    d.setDate(sunday.getDate() + i)
-    return d
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today)
+    d.setDate(today.getDate() - (6 - i))
+    return {
+      label: DAY_LABELS[d.getDay()],
+      total: sumOn(expenses, d),
+      isToday: i === 6,
+    }
   })
-  return days.map(d => {
-    const total = expenses
-      .filter(e =>
-        e.date.getFullYear() === d.getFullYear() &&
-        e.date.getMonth()    === d.getMonth()    &&
-        e.date.getDate()     === d.getDate()
-      )
-      .reduce((s, e) => s + e.amount, 0)
-    const isToday =
-      d.getFullYear() === today.getFullYear() &&
-      d.getMonth()    === today.getMonth()    &&
-      d.getDate()     === today.getDate()
-    return { day: DAY_LABELS[d.getDay()], total, isToday }
+}
+
+/** Every day of the given month, so the chart matches the month being viewed. */
+function groupMonthDays(expenses: Expense[], year: number, month: number): DayBucket[] {
+  const today = new Date()
+  const dayCount = new Date(year, month + 1, 0).getDate()
+  return Array.from({ length: dayCount }, (_, i) => {
+    const d = new Date(year, month, i + 1)
+    return {
+      label: String(i + 1),
+      total: sumOn(expenses, d),
+      isToday: sameDay(d, today),
+    }
   })
 }
 
@@ -75,13 +121,11 @@ type Period = 'all' | 'month'
 
 export default function ExpenseListPage() {
   usePageTitle('Expenses')
-  const navigate  = useNavigate()
   const user      = useAuthStore(s => s.user)
   const companyId = useAuthStore(s => s.companyId)
   const [all, setAll]             = useState<Expense[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
   useSearchShortcut(searchInputRef, () => setSearch(''))
@@ -131,15 +175,66 @@ export default function ExpenseListPage() {
     return Object.entries(map).sort((a, b) => b[1] - a[1])
   }, [filtered])
 
-  const last7Days = useMemo(() => groupLast7Days(all), [all])
+  /**
+   * The chart follows the page's filters. It used to be built from `all`, so
+   * with the period on "By Month → March" and a search active it still showed
+   * the current week from the full dataset — a total that could never
+   * reconcile with the two filtered summaries directly above it.
+   *
+   * The window tracks the period rather than just intersecting with it: a
+   * seven-day window inside a past month would render empty every time, so
+   * month mode charts that month's days instead.
+   */
+  const chart = useMemo(() => (
+    period === 'month'
+      ? { title: `${MONTHS[month]} ${year} — daily`, data: groupMonthDays(filtered, year, month) }
+      : { title: 'Last 7 days', data: groupTrailing7Days(filtered) }
+  ), [filtered, period, year, month])
+
+  /**
+   * Navigation bounds, derived from the data rather than hard-coded. The
+   * arrows used to walk indefinitely in both directions with no reset, so it
+   * was easy to end up in 2031 looking at an empty month with no way back
+   * except clicking the same number of times in reverse — and no way to tell
+   * an empty month from an out-of-range one.
+   *
+   * The current month is always reachable even with no data in it, so a fresh
+   * account isn't locked out of the view it opens on.
+   */
+  const monthBounds = useMemo(() => {
+    const asIndex = (y: number, m: number) => y * 12 + m
+    const nowIdx = asIndex(now.getFullYear(), now.getMonth())
+    if (all.length === 0) return { min: nowIdx, max: nowIdx }
+    let min = Infinity
+    let max = -Infinity
+    for (const e of all) {
+      const i = asIndex(e.date.getFullYear(), e.date.getMonth())
+      if (i < min) min = i
+      if (i > max) max = i
+    }
+    return { min: Math.min(min, nowIdx), max: Math.max(max, nowIdx) }
+    // `now` is created fresh each render but only its month matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all])
+
+  const monthIndex = year * 12 + month
+  const canGoPrev = monthIndex > monthBounds.min
+  const canGoNext = monthIndex < monthBounds.max
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth()
 
   function prevMonth() {
+    if (!canGoPrev) return
     if (month === 0) { setMonth(11); setYear(y => y - 1) }
     else setMonth(m => m - 1)
   }
   function nextMonth() {
+    if (!canGoNext) return
     if (month === 11) { setMonth(0); setYear(y => y + 1) }
     else setMonth(m => m + 1)
+  }
+  function goToCurrentMonth() {
+    setYear(now.getFullYear())
+    setMonth(now.getMonth())
   }
 
   async function confirmDelete() {
@@ -153,10 +248,6 @@ export default function ExpenseListPage() {
     }
   }
 
-  function handleEditSelected() {
-    if (selectedId) navigate(`/expenses/${selectedId}/edit`)
-  }
-
   function handlePrint() {
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     const periodLabel = period === 'all' ? 'All Time' : `${MONTHS[month]} ${year}`
@@ -166,11 +257,11 @@ export default function ExpenseListPage() {
       const d = e.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       return `
         <tr style="border-bottom:1px solid #e5e7eb;">
-          <td style="padding:10px 8px;font-size:14px;font-weight:500;color:#111;vertical-align:top;">${e.title || '—'}</td>
+          <td style="padding:10px 8px;font-size:14px;font-weight:500;color:#111;vertical-align:top;">${esc(e.title) || '—'}</td>
           <td style="padding:10px 8px;font-size:13px;color:#374151;white-space:nowrap;vertical-align:top;">${formatCurrency(e.amount)}</td>
-          <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${e.category}</td>
+          <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${esc(e.category)}</td>
           <td style="padding:10px 8px;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;">${d}</td>
-          <td style="padding:10px 8px;font-size:12px;color:#6b7280;vertical-align:top;">${e.notes || ''}</td>
+          <td style="padding:10px 8px;font-size:12px;color:#6b7280;vertical-align:top;">${esc(e.notes || '')}</td>
           <td style="padding:10px 8px;font-size:12px;text-align:center;vertical-align:top;">${e.isReimbursable ? '✓' : ''}</td>
         </tr>`
     }).join('')
@@ -179,7 +270,7 @@ export default function ExpenseListPage() {
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Expenses — ${periodLabel}</title>
+  <title>Expenses — ${esc(periodLabel)}</title>
   <style>
     body { font-family: -apple-system, Helvetica, sans-serif; color: #111; margin: 32px; }
     h1 { font-size: 22px; margin: 0 0 4px; }
@@ -192,7 +283,7 @@ export default function ExpenseListPage() {
   <script>window.onload = function() { window.print(); }</script>
 </head>
 <body>
-  <h1>Expenses — ${periodLabel}</h1>
+  <h1>Expenses — ${esc(periodLabel)}</h1>
   <p class="sub">Printed ${dateStr} · ${filtered.length} expense${filtered.length !== 1 ? 's' : ''}</p>
   <table>
     <thead>
@@ -229,19 +320,18 @@ export default function ExpenseListPage() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold text-white">Expenses</h1>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleEditSelected}
-            disabled={!selectedId}
-            className="text-sm font-medium px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-600"
-          >
-            Edit
-          </button>
-          <Link to="/expenses/new" className="btn-primary text-sm px-3 py-1.5">+ Add</Link>
+          <Link to="/expenses/new" className="btn-primary text-sm px-3 py-1.5 inline-flex items-center gap-1.5">
+            <Icon d={ICONS.plus} className="w-4 h-4" />
+            Add
+          </Link>
           <button
             onClick={handlePrint}
             className="text-sm font-medium px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors"
           >
-            🖨 Print
+            <span className="flex items-center gap-1.5">
+              <Icon d={ICONS.printer} className="w-4 h-4" />
+              Print
+            </span>
           </button>
         </div>
       </div>
@@ -268,16 +358,43 @@ export default function ExpenseListPage() {
 
       {/* Month navigator — only when period === 'month' */}
       {period === 'month' && (
-        <div className="flex items-center justify-between card px-4 py-3 mb-4">
-          <button onClick={prevMonth} className="text-gray-400 hover:text-white text-lg px-2">‹</button>
-          <span className="font-semibold text-white">{MONTHS[month]} {year}</span>
-          <button onClick={nextMonth} className="text-gray-400 hover:text-white text-lg px-2">›</button>
+        <div className="flex items-center justify-between card px-2 py-2 mb-4">
+          <button
+            onClick={prevMonth}
+            disabled={!canGoPrev}
+            aria-label="Previous month"
+            className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+          >
+            <Icon d={ICONS.chevronLeft} className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="font-semibold text-white truncate">{MONTHS[month]} {year}</span>
+            {/* Only offered when it would do something. */}
+            {!isCurrentMonth && (
+              <button
+                onClick={goToCurrentMonth}
+                className="text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors shrink-0"
+              >
+                This month
+              </button>
+            )}
+          </div>
+
+          <button
+            onClick={nextMonth}
+            disabled={!canGoNext}
+            aria-label="Next month"
+            className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+          >
+            <Icon d={ICONS.chevronRight} className="w-4 h-4" />
+          </button>
         </div>
       )}
 
       {/* Search */}
       <div className="relative mb-4">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
         </svg>
         <input
@@ -292,7 +409,7 @@ export default function ExpenseListPage() {
           <button
             type="button"
             onClick={() => setSearch('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
             aria-label="Clear search"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -309,20 +426,32 @@ export default function ExpenseListPage() {
             <span className="text-sm text-gray-400">
               {period === 'all' ? 'Total (all time)' : `Total — ${MONTHS[month]} ${year}`}
             </span>
-            <span className="text-2xl font-bold text-white">{formatCurrency(total)}</span>
+            <span className="text-2xl font-bold text-white tabular-nums">{formatCurrency(total)}</span>
           </div>
+        </div>
+      )}
+
+      {/* Analysis, collapsed. The donut and the daily chart stacked above the
+          list added roughly 600px, so on a laptop you scrolled past every
+          visualisation to reach the expenses the page is named after. The total
+          above stays visible — it's one line and it's the headline figure. */}
+      {!loading && filtered.length > 0 && (
+        <CollapsibleSection title="Breakdown" count={byCategory.length}>
           {byCategory.length > 0 && (
-            <div className="mt-3">
+            <div className="card p-4">
               <div className="relative">
                 <ResponsiveContainer width="100%" height={180}>
                   <PieChart>
                     <defs>
-                      {DONUT_GRADIENTS.map(g => (
-                        <linearGradient key={g.id} id={g.id} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={g.from} stopOpacity={1} />
-                          <stop offset="100%" stopColor={g.to} stopOpacity={1} />
-                        </linearGradient>
-                      ))}
+                      {byCategory.map(([cat]) => {
+                        const st = catStyle(cat)
+                        return (
+                          <linearGradient key={cat} id={catGradientId(cat)} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={st.from} stopOpacity={1} />
+                            <stop offset="100%" stopColor={st.to} stopOpacity={1} />
+                          </linearGradient>
+                        )
+                      })}
                     </defs>
                     <Pie
                       data={byCategory.map(([name, value]) => ({ name, value }))}
@@ -333,10 +462,14 @@ export default function ExpenseListPage() {
                       dataKey="value"
                       paddingAngle={2}
                     >
-                      {byCategory.map(([cat], i) => {
-                        const g = DONUT_GRADIENTS[i % DONUT_GRADIENTS.length]
-                        return <Cell key={cat} fill={`url(#${g.id})`} stroke={g.to} strokeWidth={0.5} />
-                      })}
+                      {byCategory.map(([cat]) => (
+                        <Cell
+                          key={cat}
+                          fill={`url(#${catGradientId(cat)})`}
+                          stroke={catStyle(cat).to}
+                          strokeWidth={0.5}
+                        />
+                      ))}
                     </Pie>
                     <Tooltip
                       formatter={(v: number) => formatCurrency(v)}
@@ -354,9 +487,9 @@ export default function ExpenseListPage() {
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-x-3 gap-y-2.5 mt-1">
-                {byCategory.map(([cat, amt], i) => (
+                {byCategory.map(([cat, amt]) => (
                   <div key={cat} className="flex items-start gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: DONUT_GRADIENTS[i % DONUT_GRADIENTS.length].solid }} />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: catStyle(cat).solid }} />
                     <div className="min-w-0">
                       <p className="text-xs text-gray-400 truncate">{cat}</p>
                       <p className="text-xs font-semibold text-gray-200">{formatCurrency(amt)}</p>
@@ -366,14 +499,58 @@ export default function ExpenseListPage() {
               </div>
             </div>
           )}
-        </div>
+
+          {/* Spend-over-time chart lives in the same disclosure as the donut —
+              both are analysis rather than the page's primary content. */}
+          <div className="card p-4">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{chart.title}</h2>
+            <span className="text-sm font-semibold text-white tabular-nums">
+              {formatCurrency(chart.data.reduce((s, d) => s + d.total, 0))}
+            </span>
+          </div>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={chart.data} margin={{ left: 0, right: 4, top: 4, bottom: 0 }}>
+              <defs>
+                <linearGradient id="blueBarGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#93c5fd" stopOpacity={1} />
+                  <stop offset="100%" stopColor="#1d4ed8" stopOpacity={1} />
+                </linearGradient>
+                <linearGradient id="todayBarGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#c7d2fe" stopOpacity={1} />
+                  <stop offset="100%" stopColor="#4338ca" stopOpacity={1} />
+                </linearGradient>
+              </defs>
+              {/* Month mode has up to 31 bars, so thin the labels out. */}
+              <XAxis
+                dataKey="label"
+                tick={{ fill: '#9ca3af', fontSize: 12 }}
+                interval={period === 'month' ? 4 : 0}
+              />
+              <YAxis tickFormatter={v => `$${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`} tick={{ fill: '#6b7280', fontSize: 11 }} width={38} />
+              <Tooltip
+                formatter={(v: number) => [formatCurrency(v), 'Spent']}
+                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: 8 }}
+                labelStyle={{ color: '#f3f4f6' }}
+                itemStyle={{ color: '#e5e7eb' }}
+                cursor={false}
+              />
+              <Bar dataKey="total" radius={[4, 4, 0, 0]} activeBar={false}>
+                {chart.data.map((d, i) => (
+                  <Cell key={i} fill={d.isToday ? 'url(#todayBarGrad)' : 'url(#blueBarGrad)'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          </div>
+        </CollapsibleSection>
       )}
 
       {/* Reimbursable total */}
       {!loading && filtered.some(e => e.isReimbursable) && (
-        <div className="flex items-center justify-between bg-green-900/20 border border-green-700/30 rounded-xl px-4 py-2.5 mb-3 text-sm">
+        <div className="flex items-center justify-between bg-green-900/20 border border-green-700/30 rounded-xl px-4 py-2.5 mt-3 mb-3 text-sm">
           <span className="text-green-400">Reimbursable</span>
-          <span className="font-semibold text-green-300">
+          <span className="font-semibold text-green-300 tabular-nums">
             {formatCurrency(filtered.filter(e => e.isReimbursable).reduce((s, e) => s + e.amount, 0))}
           </span>
         </div>
@@ -385,46 +562,8 @@ export default function ExpenseListPage() {
         </div>
       )}
 
-      {/* Last 7 days chart */}
       {!loading && (
-        <div className="card p-4 mb-4">
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">This Week</h2>
-            <span className="text-sm font-semibold text-white">{formatCurrency(last7Days.reduce((s, d) => s + d.total, 0))}</span>
-          </div>
-          <ResponsiveContainer width="100%" height={140}>
-            <BarChart data={last7Days} margin={{ left: 0, right: 4, top: 4, bottom: 0 }}>
-              <defs>
-                <linearGradient id="blueBarGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#93c5fd" stopOpacity={1} />
-                  <stop offset="100%" stopColor="#1d4ed8" stopOpacity={1} />
-                </linearGradient>
-                <linearGradient id="todayBarGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#c7d2fe" stopOpacity={1} />
-                  <stop offset="100%" stopColor="#4338ca" stopOpacity={1} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="day" tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <YAxis tickFormatter={v => `$${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`} tick={{ fill: '#6b7280', fontSize: 11 }} width={38} />
-              <Tooltip
-                formatter={(v: number) => [formatCurrency(v), 'Spent']}
-                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: 8 }}
-                labelStyle={{ color: '#f3f4f6' }}
-                itemStyle={{ color: '#e5e7eb' }}
-                cursor={false}
-              />
-              <Bar dataKey="total" radius={[4, 4, 0, 0]} activeBar={false}>
-                {last7Days.map((d, i) => (
-                  <Cell key={i} fill={d.isToday ? 'url(#todayBarGrad)' : 'url(#blueBarGrad)'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {!loading && (
-        <p className="text-xs text-gray-500 mb-3">
+        <p className="text-xs text-gray-400 mb-3">
           {filtered.length} {filtered.length === 1 ? 'expense' : 'expenses'}
         </p>
       )}
@@ -436,14 +575,14 @@ export default function ExpenseListPage() {
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
             <div className="w-12 h-12 rounded-full bg-gray-700/50 flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" />
               </svg>
             </div>
             {search.trim() ? (
               <>
                 <p className="text-gray-300 font-medium mb-1">No results for &ldquo;{search.trim()}&rdquo;</p>
-                <p className="text-sm text-gray-500 mb-4">Try a different title, category, or note.</p>
+                <p className="text-sm text-gray-400 mb-4">Try a different title, category, or note.</p>
                 <button onClick={() => setSearch('')} className="btn-secondary text-sm px-5 py-2">
                   Clear search
                 </button>
@@ -451,24 +590,27 @@ export default function ExpenseListPage() {
             ) : all.length === 0 ? (
               <>
                 <p className="text-gray-300 font-medium mb-1">No expenses yet</p>
-                <p className="text-sm text-gray-500 mb-4">Start tracking your spending by adding your first expense.</p>
-                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-block">
-                  + Add Expense
+                <p className="text-sm text-gray-400 mb-4">Start tracking your spending by adding your first expense.</p>
+                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-flex items-center gap-1.5">
+                  <Icon d={ICONS.plus} className="w-4 h-4" />
+                  Add Expense
                 </Link>
               </>
             ) : (
               <>
                 <p className="text-gray-300 font-medium mb-1">Nothing for {MONTHS[month]} {year}</p>
-                <p className="text-sm text-gray-500 mb-4">No expenses recorded in this month.</p>
-                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-block">
-                  + Add Expense
+                <p className="text-sm text-gray-400 mb-4">No expenses recorded in this month.</p>
+                <Link to="/expenses/new" className="btn-primary text-sm px-5 py-2 inline-flex items-center gap-1.5">
+                  <Icon d={ICONS.plus} className="w-4 h-4" />
+                  Add Expense
                 </Link>
                 <div className="mt-3">
                   <button
                     onClick={() => setPeriod('all')}
-                    className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                    className="text-sm text-gray-400 hover:text-gray-200 inline-flex items-center gap-1 transition-colors"
                   >
-                    View all time →
+                    View all time
+                    <Icon d={ICONS.arrowRight} className="w-3 h-3" />
                   </button>
                 </div>
               </>
@@ -476,13 +618,7 @@ export default function ExpenseListPage() {
           </div>
         ) : (
           filtered.map(e => (
-            <ExpenseRow
-              key={e.id}
-              expense={e}
-              onDelete={setPendingDelete}
-              isSelected={e.id === selectedId}
-              onSelect={() => setSelectedId(e.id === selectedId ? null : e.id)}
-            />
+            <ExpenseRow key={e.id} expense={e} onDelete={setPendingDelete} />
           ))
         )}
       </div>
@@ -500,54 +636,57 @@ export default function ExpenseListPage() {
 function ExpenseRow({
   expense: e,
   onDelete,
-  isSelected,
-  onSelect,
 }: {
   expense: Expense
   onDelete: (e: Expense) => void
-  isSelected: boolean
-  onSelect: () => void
 }) {
   const dateStr = e.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
   return (
-    <div
-      onClick={onSelect}
-      className={`flex items-center gap-3 px-4 py-3.5 group cursor-pointer transition-colors ${isSelected ? 'bg-indigo-950/60' : ''}`}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-          <span className="font-medium text-gray-100 truncate">{e.title || '—'}</span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${catColor(e.category)}`}>
-            {e.category}
-          </span>
-          {e.isReimbursable && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-700/20 text-green-400 shrink-0">
-              Reimbursable
+    <div className="flex items-stretch">
+      {/* The row itself is the edit target, the way /todo works. It used to
+          toggle a selection whose only purpose was enabling a separate Edit
+          button in the header — so editing had two routes (row-select-then-
+          header, or the hover pencil) and the row's own click did nothing
+          useful on its own. */}
+      <Link
+        to={`/expenses/${e.id}/edit`}
+        className="flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5 text-left hover:bg-gray-700/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+            <span className="font-medium text-gray-100 truncate">{e.title || '—'}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${catColor(e.category)}`}>
+              {e.category}
             </span>
-          )}
+            {e.isReimbursable && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-700/20 text-green-400 shrink-0">
+                Reimbursable
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">{dateStr}</span>
+            {e.notes && <span className="text-xs text-gray-400 truncate">· {e.notes}</span>}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">{dateStr}</span>
-          {e.notes && <span className="text-xs text-gray-500 truncate">· {e.notes}</span>}
-        </div>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <span className="font-semibold text-white">{formatCurrency(e.amount)}</span>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Link
-            to={`/expenses/${e.id}/edit`}
-            className="text-gray-500 hover:text-gray-300 text-sm px-1.5 py-1 rounded"
-          >
-            ✎
-          </Link>
-          <button
-            onClick={() => onDelete(e)}
-            className="text-gray-500 hover:text-red-400 text-sm px-1.5 py-1 rounded"
-          >
-            ✕
-          </button>
-        </div>
+        <span className="font-semibold text-white shrink-0 tabular-nums">{formatCurrency(e.amount)}</span>
+      </Link>
+
+      {/* Delete stays a sibling of the link, never nested inside it, and is
+          always visible — it sat in opacity-0 group-hover:opacity-100, so on
+          touch it never appeared and there was no other delete path anywhere
+          on the page. The pencil that lived here is gone: the row is the edit
+          affordance now. */}
+      <div className="flex items-center shrink-0 pr-2">
+        <button
+          type="button"
+          onClick={() => onDelete(e)}
+          aria-label={`Delete ${e.title || 'expense'}`}
+          className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-gray-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+        >
+          <Icon d={ICONS.trash} className="w-4 h-4" />
+        </button>
       </div>
     </div>
   )

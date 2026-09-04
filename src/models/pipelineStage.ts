@@ -22,21 +22,27 @@ export const STAGE_COLOR_PALETTE = [
 ] as const
 export type StageColorKey = typeof STAGE_COLOR_PALETTE[number]
 
-export const STAGE_COLOR_CLASSES: Record<StageColorKey, { text: string; bar: string; badge: string }> = {
-  indigo:  { text: 'text-indigo-400',  bar: 'bg-indigo-500',  badge: 'bg-indigo-600' },
-  blue:    { text: 'text-blue-400',    bar: 'bg-blue-500',    badge: 'bg-blue-600' },
-  teal:    { text: 'text-teal-400',    bar: 'bg-teal-500',    badge: 'bg-teal-600' },
-  emerald: { text: 'text-emerald-400', bar: 'bg-emerald-500', badge: 'bg-emerald-600' },
-  green:   { text: 'text-green-400',   bar: 'bg-green-500',   badge: 'bg-green-600' },
-  amber:   { text: 'text-amber-400',   bar: 'bg-amber-500',   badge: 'bg-amber-600' },
-  orange:  { text: 'text-orange-400',  bar: 'bg-orange-500',  badge: 'bg-orange-600' },
-  rose:    { text: 'text-rose-400',    bar: 'bg-rose-500',    badge: 'bg-rose-600' },
-  red:     { text: 'text-red-400',     bar: 'bg-red-500',     badge: 'bg-red-600' },
-  pink:    { text: 'text-pink-400',    bar: 'bg-pink-500',    badge: 'bg-pink-600' },
-  purple:  { text: 'text-purple-400',  bar: 'bg-purple-500',  badge: 'bg-purple-600' },
-  violet:  { text: 'text-violet-400',  bar: 'bg-violet-500',  badge: 'bg-violet-600' },
-  gray:    { text: 'text-gray-400',    bar: 'bg-gray-600',    badge: 'bg-gray-700' },
-  slate:   { text: 'text-slate-400',   bar: 'bg-slate-500',   badge: 'bg-slate-600' },
+// `badge` was removed: it paired text-white with bg-<hue>-600, which failed AA
+// in dark mode for amber/green/orange/teal/emerald (3.19-3.77:1) and rendered
+// dark navy in light mode for blue/emerald/pink/purple/rose, none of which have
+// a white-text override in index.css. Stage identity is carried by `bar` and
+// `text`, which pass on every palette entry. Don't add it back — a count badge
+// doesn't need to re-encode the stage hue.
+export const STAGE_COLOR_CLASSES: Record<StageColorKey, { text: string; bar: string }> = {
+  indigo:  { text: 'text-indigo-400',  bar: 'bg-indigo-500' },
+  blue:    { text: 'text-blue-400',    bar: 'bg-blue-500' },
+  teal:    { text: 'text-teal-400',    bar: 'bg-teal-500' },
+  emerald: { text: 'text-emerald-400', bar: 'bg-emerald-500' },
+  green:   { text: 'text-green-400',   bar: 'bg-green-500' },
+  amber:   { text: 'text-amber-400',   bar: 'bg-amber-500' },
+  orange:  { text: 'text-orange-400',  bar: 'bg-orange-500' },
+  rose:    { text: 'text-rose-400',    bar: 'bg-rose-500' },
+  red:     { text: 'text-red-400',     bar: 'bg-red-500' },
+  pink:    { text: 'text-pink-400',    bar: 'bg-pink-500' },
+  purple:  { text: 'text-purple-400',  bar: 'bg-purple-500' },
+  violet:  { text: 'text-violet-400',  bar: 'bg-violet-500' },
+  gray:    { text: 'text-gray-400',    bar: 'bg-gray-600' },
+  slate:   { text: 'text-slate-400',   bar: 'bg-slate-500' },
 }
 
 // Matches the ids the old fixed 5-stage board used, so companies that never

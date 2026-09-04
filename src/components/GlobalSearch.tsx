@@ -4,7 +4,7 @@ import { useSharedCustomers } from '../hooks/useSharedCustomers'
 import {
   useSharedInvoices, useSharedProposals, useSharedTodos, useSharedExpenses,
 } from '../hooks/useSharedCollections'
-import { fullName, type CustomerItem, type CustomerCategory, CATEGORY_LABELS } from '../models/customer'
+import { fullName, displayName, type CustomerItem, type CustomerCategory, CATEGORY_LABELS } from '../models/customer'
 import { fmtCurrency } from '../models/invoice'
 import { useDebounce } from '../hooks/useDebounce'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
@@ -61,6 +61,7 @@ export default function GlobalSearch({ onClose }: Props) {
     if (!q) return []
     return allCustomers.filter(c =>
       fullName(c).toLowerCase().includes(q) ||
+      c.companyName.toLowerCase().includes(q) ||
       c.phone.includes(q) ||
       c.email.toLowerCase().includes(q) ||
       c.city.toLowerCase().includes(q) ||
@@ -191,10 +192,17 @@ export default function GlobalSearch({ onClose }: Props) {
                   <div key={cat}>
                     <SectionHeader label={CATEGORY_LABELS[cat]} />
                     {shown.map(c => {
-                      const name     = fullName(c)
-                      const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
+                      // A company name titles the result; the person's name moves to the subtitle.
+                      const hasCompany = c.companyName.trim() !== ''
+                      const name     = displayName(c)
+                      const initials = hasCompany
+                        ? name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+                        : [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
                       const color    = coloredAvatars ? avatarColor(name) : avatarOriginal()
-                      const sub      = [c.city, c.state].filter(Boolean).join(', ') || c.phone || ''
+                      const sub      = [
+                        hasCompany ? fullName(c) : '',
+                        [c.city, c.state].filter(Boolean).join(', ') || c.phone || '',
+                      ].filter(Boolean).join(' · ')
                       return (
                         <button
                           key={c.id}

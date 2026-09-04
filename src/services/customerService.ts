@@ -265,6 +265,18 @@ export async function bulkDelete(ids: string[]): Promise<void> {
   }
 }
 
+/**
+ * Sets or clears the "called" flag — the field /callback filters on.
+ *
+ * Vendors keep that flag in `salesman` while every other category keeps it in
+ * `callback` (see vendorFields in models/customer), so the category has to be
+ * passed in rather than assumed.
+ */
+export async function setCalledFlag(id: string, category: string, called: boolean): Promise<void> {
+  const field = category.toLowerCase() === 'vendor' ? 'salesman' : 'callback'
+  await updateDoc(doc(db, COLLECTION, id), { [field]: called ? 'Yes' : 'No' })
+}
+
 export async function setFollowUpDate(id: string, date: Date | null): Promise<void> {
   await updateDoc(doc(db, COLLECTION, id), {
     followUpDate: date ? Timestamp.fromDate(date) : null,

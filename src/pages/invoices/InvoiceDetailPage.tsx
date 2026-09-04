@@ -642,7 +642,7 @@ export default function InvoiceDetailPage() {
       )}
 
       {/* ── INVOICE DOCUMENT ──────────────────────────────── */}
-      <div className="print-doc bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">
+      <div className="print-doc paper bg-white rounded-2xl shadow-lg overflow-hidden text-gray-900">
 
         {/* Header band */}
         <div className="print-accent bg-slate-800 px-8 py-6 flex items-start justify-between gap-4">

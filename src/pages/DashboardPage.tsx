@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom'
 import { getDoc, doc } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { usePageTitle } from '../hooks/usePageTitle'
-import { fetchSnapshot, type SnapshotData, type SaleEntry } from '../services/snapshotService'
-import { formatCurrency, fullName, categoryMatches } from '../models/customer'
+import { fetchSnapshot, type SnapshotData, type SaleEntry, type SnapshotPeriod } from '../services/snapshotService'
+import { formatCurrency, fullName, displayName, categoryMatches } from '../models/customer'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
 import { usePickerStore } from '../stores/pickerStore'
@@ -17,7 +17,7 @@ import OnboardingChecklist from '../components/OnboardingChecklist'
 const SnapshotChart = lazy(() => import('../components/SnapshotChart'))
 import { esc } from '../utils/exportUtils'
 import { subscribeToTodos } from '../services/todoService'
-import { subscribeToExpensesToday } from '../services/expenseService'
+import { subscribeToExpensesInRange } from '../services/expenseService'
 import { subscribeToFollowUps, subscribeToCustomers, REALTIME_LIMIT } from '../services/customerService'
 import { subscribeToAllActivities } from '../services/activityService'
 import { getGoals } from '../services/goalService'
@@ -36,8 +36,35 @@ import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
+import { dueMeta, isOverdue } from '../utils/dueDate'
+import { Icon, ICONS } from '../components/Icon'
+import CollapsibleSection from '../components/CollapsibleSection'
 
 const ACTIVITY_PREVIEW = 20
+
+// A company name outranks the person's name on a record row: it becomes the
+// title, and the person's name joins the subtitle — matching the record list,
+// pipeline and detail page.
+function recordRow(c: CustomerItem, detail: string) {
+  const hasCompany = c.companyName.trim() !== ''
+  const title = displayName(c)
+  return {
+    title,
+    sub: [hasCompany ? fullName(c) : '', detail].filter(Boolean).join(' · '),
+    initials: (hasCompany
+      ? title.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('')
+      : [c.first[0], c.lastname[0]].filter(Boolean).join('')
+    ).toUpperCase(),
+  }
+}
+
+// Name cell for the printed/emailed tables, which take plain strings.
+function nameCell(c: CustomerItem): string {
+  const person = fullName(c)
+  const company = c.companyName.trim()
+  if (!company) return person
+  return person ? `${company} (${person})` : company
+}
 const UPCOMING_WINDOW_DAYS = 7
 
 function fmtCompact(n: number): string {
@@ -57,8 +84,20 @@ function todayLabel() {
   return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 }
 
+const PERIODS: SnapshotPeriod[] = ['today', 'month', 'year']
+
+const PERIOD_TABS: Record<SnapshotPeriod, string> = { today: 'Today', month: 'Month', year: 'Year' }
+
+// Three phrasings of the selected period: the standalone heading ("Month"),
+// a title suffix ("Leads This Month") and an empty-state phrase ("no leads
+// this month"). The printout adds a fourth ("Monthly Snapshot").
+const PERIOD_SUFFIX: Record<SnapshotPeriod, string> = { today: 'Today', month: 'This Month', year: 'This Year' }
+const PERIOD_PHRASE: Record<SnapshotPeriod, string> = { today: 'today', month: 'this month', year: 'this year' }
+const PERIOD_TITLE:  Record<SnapshotPeriod, string> = { today: 'Daily', month: 'Monthly', year: 'Yearly' }
+
 export default function DashboardPage() {
   usePageTitle('Dashboard')
+  const [period, setPeriod] = useState<SnapshotPeriod>('today')
   const [data, setData] = useState<SnapshotData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -91,7 +130,7 @@ export default function DashboardPage() {
     setError(null)
     setToday(todayLabel())
     try {
-      setData(await fetchSnapshot())
+      setData(await fetchSnapshot(period))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -99,7 +138,7 @@ export default function DashboardPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [period])
 
   useEffect(() => {
     if (!user) { setTodosLoading(false); return }
@@ -112,12 +151,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) { setExpensesLoading(false); return }
-    const unsub = subscribeToExpensesToday(
+    setExpensesLoading(true)
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0)
+    const range = period === 'today'
+      ? { start: dayStart, end: endOfToday() }
+      : currentPeriodRange(period)
+    const unsub = subscribeToExpensesInRange(
+      range.start, range.end,
       items => { setExpensesToday(items); setExpensesLoading(false) },
       ()    => setExpensesLoading(false),
     )
     return unsub
-  }, [user, companyId])
+  }, [user, companyId, period])
 
   useEffect(() => {
     if (!user) { setFollowUpsLoading(false); return }
@@ -168,8 +213,9 @@ export default function DashboardPage() {
         const snap = await getDoc(doc(db, 'Customers', id))
         if (!snap.exists()) return null
         const d = snap.data() as Record<string, unknown>
-        const name = `${d.first ?? ''} ${d.lastname ?? ''}`.trim()
-        return [id, name || '—'] as [string, string]
+        const person  = `${d.first ?? ''} ${d.lastname ?? ''}`.trim()
+        const company = typeof d.companyName === 'string' ? d.companyName.trim() : ''
+        return [id, company || person || '—'] as [string, string]
       } catch { return null }
     })).then(results => {
       const map = new Map<string, string>()
@@ -182,6 +228,9 @@ export default function DashboardPage() {
   const chartEntries = data ? CHART_ENTRIES(data) : null
 
   const monthRange = useMemo(() => currentPeriodRange('month'), [])
+
+  // Subtitle for the selected tab: today's date, "September 2026" or "2026".
+  const periodDateLabel = period === 'today' ? today : currentPeriodRange(period).label
 
   const monthActuals = useMemo<GoalValues>(() => {
     const inPeriod = allCustomers.filter(c =>
@@ -251,6 +300,36 @@ export default function DashboardPage() {
     return ranked[0] ?? null
   }, [allCustomers, monthRange])
 
+  // Triage counts for the Needs Attention block. Deliberately independent of
+  // the period tabs: "what needs me right now" is always today, whereas the
+  // tabs rescope the strips and lists below to today or this month.
+  const overdueFollowUps = useMemo(
+    () => followUps.filter(c => c.followUpDate && isOverdue(c.followUpDate)).length,
+    [followUps],
+  )
+
+  // isOverdue comes from the shared util so this can't disagree with /todo
+  // about which tasks are late.
+  const overdueTasks = useMemo(
+    () => todos.filter(t => !t.isCompleted && t.dueDate && isOverdue(t.dueDate)).length,
+    [todos],
+  )
+
+  const appointmentsTodayCount = useMemo(() => {
+    const start = new Date(); start.setHours(0, 0, 0, 0)
+    const end = new Date(start.getTime() + 86_400_000)
+    return allCustomers.filter(c => c.isActive && c.startDate && c.startDate >= start && c.startDate < end).length
+  }, [allCustomers])
+
+  // One formatter for one metric. The mobile card used fmtCompact and the sm+
+  // card formatCurrency on the same figure, so resizing the window turned
+  // $12,480.00 into $12.5k. fmtCompact wins because it's what the Sales card
+  // beside it already uses, and it fits the 3-column mobile grid.
+  const expensesTotal = useMemo(
+    () => expensesToday.reduce((sum, e) => sum + e.amount, 0),
+    [expensesToday],
+  )
+
   const upcomingAppointments = useMemo(() => {
     const startBound = endOfToday()
     const endBound = new Date(startBound.getTime() + UPCOMING_WINDOW_DAYS * 86_400_000)
@@ -291,7 +370,7 @@ export default function DashboardPage() {
 
     const todayTable = buildTable(
       ['', 'Leads', 'Appts', 'Customers', 'Sales', 'Jobs', 'Expenses'],
-      [['Today',
+      [[PERIOD_TABS[period],
         String(snap.leadsToday.length),
         String(snap.appointmentsToday.length),
         String(snap.customersToday.length),
@@ -313,33 +392,33 @@ export default function DashboardPage() {
     )
 
     const leadsSect = snap.leadsToday.length ? section(
-      'Leads Today', String(snap.leadsToday.length),
+      `Leads ${PERIOD_SUFFIX[period]}`, String(snap.leadsToday.length),
       buildTable(
         ['Name', 'Phone', 'Location', 'Email', 'Salesman', 'Callback', 'Ad #'],
         snap.leadsToday.map(c => [
-          fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
+          nameCell(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
           c.email, c.salesman, c.callback, c.adNo,
         ]),
       )
     ) : ''
 
     const apptsSect = snap.appointmentsToday.length ? section(
-      'Appointments Today', String(snap.appointmentsToday.length),
+      `Appointments ${PERIOD_SUFFIX[period]}`, String(snap.appointmentsToday.length),
       buildTable(
         ['Name', 'Phone', 'Location', 'Salesman', 'Appt Date', 'Callback'],
         snap.appointmentsToday.map(c => [
-          fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
+          nameCell(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
           c.salesman, c.startDate ? fmtDate(c.startDate) : '', c.callback,
         ]),
       )
     ) : ''
 
     const customersSect = snap.customersToday.length ? section(
-      'Customers Today', String(snap.customersToday.length),
+      `Customers ${PERIOD_SUFFIX[period]}`, String(snap.customersToday.length),
       buildTable(
         ['Name', 'Phone', 'Location', 'Email', 'Salesman', 'Amount'],
         snap.customersToday.map(c => [
-          fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
+          nameCell(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
           c.email, c.salesman, c.amount > 0 ? formatCurrency(c.amount) : '',
         ]),
       )
@@ -347,7 +426,7 @@ export default function DashboardPage() {
 
     const salesTotal2 = snap.salesToday.reduce((s, c) => s + c.amount, 0)
     const salesSect = snap.salesToday.length ? section(
-      'Sales Today', formatCurrency(salesTotal2),
+      `Sales ${PERIOD_SUFFIX[period]}`, formatCurrency(salesTotal2),
       buildTable(
         ['Invoice #', 'Name', 'Phone', 'Amount'],
         snap.salesToday.map(s => [
@@ -362,7 +441,7 @@ export default function DashboardPage() {
       buildTable(
         ['Name', 'Phone', 'Location', 'Salesman', 'Contractor', 'Job', 'Product', 'Start', 'Completion'],
         snap.jobsStartingToday.map(c => [
-          fullName(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
+          nameCell(c), c.phone, [c.city, c.state].filter(Boolean).join(', '),
           c.salesman, c.contractor, c.job, c.product,
           c.startDate ? fmtDate(c.startDate) : '', c.completionDate ? fmtDate(c.completionDate) : '',
         ]),
@@ -370,7 +449,7 @@ export default function DashboardPage() {
     ) : ''
 
     const expensesSect = expensesToday.length ? section(
-      'Expenses Today', formatCurrency(expenseTotal),
+      `Expenses ${PERIOD_SUFFIX[period]}`, formatCurrency(expenseTotal),
       buildTable(
         ['Title', 'Category', 'Amount'],
         expensesToday.map(e => [e.title, e.category, formatCurrency(e.amount)]),
@@ -394,7 +473,7 @@ export default function DashboardPage() {
       buildTable(
         ['Name', 'Phone', 'Follow-up Date'],
         followUps.map(c => [
-          fullName(c),
+          nameCell(c),
           c.phone,
           c.followUpDate ? fmtDate(c.followUpDate) : '',
         ]),
@@ -465,7 +544,7 @@ export default function DashboardPage() {
       buildTable(
         ['Name', 'Phone', 'Appt Date'],
         upcomingAppointments.map(c => [
-          fullName(c), c.phone, c.startDate ? fmtDate(c.startDate) : '',
+          nameCell(c), c.phone, c.startDate ? fmtDate(c.startDate) : '',
         ]),
       )
     ) : ''
@@ -511,11 +590,11 @@ export default function DashboardPage() {
   </style>
 </head>
 <body>
-  <h1>Daily Snapshot</h1>
-  <p class="sub">${dateStr}</p>
+  <h1>${PERIOD_TITLE[period]} Snapshot</h1>
+  <p class="sub">${period === 'today' ? dateStr : periodDateLabel}</p>
 
   <div class="summary-section">
-    <div class="summary-label">Today</div>
+    <div class="summary-label">${PERIOD_TABS[period]}</div>
     ${todayTable}
   </div>
 
@@ -556,7 +635,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Snapshot</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{today}</p>
+          <p className="text-sm text-gray-400 mt-0.5">{periodDateLabel}</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -564,23 +643,57 @@ export default function DashboardPage() {
             disabled={loading}
             className="btn-secondary text-sm px-3 py-1.5"
           >
-            {loading ? '…' : '↻ Refresh'}
+            <span className="flex items-center gap-1.5">
+              <Icon d={ICONS.refresh} className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </span>
           </button>
           <button
             onClick={handlePrint}
             disabled={loading || !data}
             className="text-sm font-medium px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            🖨 Print
+            <span className="flex items-center gap-1.5">
+              <Icon d={ICONS.printer} className="w-4 h-4" />
+              Print
+            </span>
           </button>
         </div>
+      </div>
+
+      <NeedsAttentionCard
+        overdueFollowUps={overdueFollowUps}
+        overdueTasks={overdueTasks}
+        appointmentsToday={appointmentsTodayCount}
+        unreadChats={unreadChats}
+        loading={followUpsLoading || todosLoading || allCustomersLoading}
+      />
+
+      {/* Period tabs — drive every "today"/"this month" figure below */}
+      <div className="flex gap-1.5" role="tablist" aria-label="Snapshot period">
+        {PERIODS.map(p => (
+          <button
+            key={p}
+            role="tab"
+            aria-selected={period === p}
+            onClick={() => setPeriod(p)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+              period === p ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            {PERIOD_TABS[p]}
+          </button>
+        ))}
       </div>
 
       <OnboardingChecklist />
 
       {customersHitCap && (
         <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
-          ⚠ These stats only reflect the first {REALTIME_LIMIT.toLocaleString()} customer records — contact support to raise this limit.
+          <span className="flex items-start gap-2">
+            <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>These stats only reflect the first {REALTIME_LIMIT.toLocaleString()} customer records — contact support to raise this limit.</span>
+          </span>
         </div>
       )}
 
@@ -590,43 +703,42 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Today stat strip */}
+      {/* Today / Month stat strip */}
       <section>
-        <p className="section-header">Today</p>
+        <p className="section-header">{PERIOD_TABS[period]}</p>
         {/* Mobile: two rows of 3; sm+: single row of 6 */}
         <div className="sm:hidden space-y-2">
           <div className="grid grid-cols-3 gap-2">
-            <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}        color="text-indigo-400" loading={loading} />
-            <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} color="text-orange-400" loading={loading} />
-            <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}    color="text-indigo-300" loading={loading} />
+            <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)} loading={loading} />
+            <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} loading={loading} />
+            <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)} loading={loading} />
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)} color="text-teal-400"   loading={loading} />
-            <StatCard title="Expense"  value={fmtCompact(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
-            <StatCard title="Sales"    value={fmtCompact(salesTotal)}                      color="text-green-400"  loading={loading} />
+            <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}   loading={loading} />
+            <StatCard title="Expense"  value={fmtCompact(expensesTotal)} loading={expensesLoading} to="/expenses" />
+            <StatCard title="Sales"    value={fmtCompact(salesTotal)}  loading={loading} />
           </div>
         </div>
         <div className="hidden sm:grid gap-2" style={{ gridTemplateColumns: 'repeat(5, 1fr) 1.4fr' }}>
-          <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)}         color="text-indigo-400" loading={loading} />
-          <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)}  color="text-orange-400" loading={loading} />
-          <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)}     color="text-indigo-300" loading={loading} />
-          <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}  color="text-teal-400"   loading={loading} />
-          <StatCard title="Expense"  value={formatCurrency(expensesToday.reduce((s, e) => s + e.amount, 0))} color="text-amber-400" loading={expensesLoading} to="/expenses" />
-          <StatCard title="Sales"    value={fmtCompact(salesTotal)}                       color="text-green-400"  loading={loading} />
+          <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)} loading={loading} />
+          <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} loading={loading} />
+          <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)} loading={loading} />
+          <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}   loading={loading} />
+          <StatCard title="Expense"  value={fmtCompact(expensesTotal)} loading={expensesLoading} to="/expenses" />
+          <StatCard title="Sales"    value={fmtCompact(salesTotal)}  loading={loading} />
         </div>
       </section>
 
-      {/* All-time totals */}
-      <section>
-        <p className="section-header">Overall</p>
-        <div className="grid grid-cols-5 gap-2">
-          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)}          color="text-indigo-400" loading={loading} />
-          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)}       color="text-indigo-300" loading={loading} />
-          <StatCard title="Active Tasks"     value={String(todos.length)}                         color="text-violet-400" loading={todosLoading} to="/todo" />
-          <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)} color="text-green-400"  loading={loading} />
-          <StatCard title="Unread Chats"     value={String(unreadChats)}                          color="text-sky-400"    loading={false} to="/chat" />
+      {/* All-time totals — reference, not triage: these never change day to day. */}
+      <CollapsibleSection title="Overall totals">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)} loading={loading} />
+          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)} loading={loading} />
+          <StatCard title="Active Tasks"     value={String(todos.length)} loading={todosLoading} to="/todo" />
+          <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)}  loading={loading} />
+          <StatCard title="Unread Chats"     value={String(unreadChats)}    loading={false} to="/chat" />
         </div>
-      </section>
+      </CollapsibleSection>
 
       {/* Goals / Pipeline / Proposals / Jobs Pipeline */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
@@ -643,9 +755,9 @@ export default function DashboardPage() {
             onClick={() => setChartOpen(v => !v)}
             className="w-full flex items-center justify-between text-left"
           >
-            <p className="text-xs font-semibold text-gray-400">Today at a Glance</p>
+            <p className="text-xs font-semibold text-gray-400">{PERIOD_TABS[period]} at a Glance</p>
             <svg
-              className={`w-4 h-4 text-gray-500 transition-transform ${chartOpen ? 'rotate-180' : ''}`}
+              className={`w-4 h-4 text-gray-400 transition-transform ${chartOpen ? 'rotate-180' : ''}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
@@ -678,36 +790,117 @@ export default function DashboardPage() {
         <UpcomingAppointmentsCard items={upcomingAppointments} loading={allCustomersLoading} />
       </div>
 
-      {/* Expenses Today */}
-      <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} />
+      {/* Expenses */}
+      <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} period={period} />
 
-      {/* Leads today */}
+      {/* Browsable record lists — reference material behind one heading, so
+          they stop competing with the triage block and the period figures. */}
+      <CollapsibleSection title={`Records ${PERIOD_SUFFIX[period]}`}>
+      {/* Leads */}
       <ListSection
-        title="Leads Today" color="text-indigo-400" badgeColor="bg-indigo-600"
-        items={data?.leadsToday} loading={loading} emptyMsg="No leads today" viewAllTo="/leads"
+        title={`Leads ${PERIOD_SUFFIX[period]}`}
+        items={data?.leadsToday} loading={loading} emptyMsg={`No leads ${PERIOD_PHRASE[period]}`} viewAllTo="/leads"
       />
 
       {/* Appointments */}
       <ListSection
-        title="Appointments Today" color="text-orange-400" badgeColor="bg-orange-600"
-        items={data?.appointmentsToday} loading={loading} emptyMsg="No appointments today" viewAllTo="/calendar"
+        title={`Appointments ${PERIOD_SUFFIX[period]}`}
+        items={data?.appointmentsToday} loading={loading} emptyMsg={`No appointments ${PERIOD_PHRASE[period]}`} viewAllTo="/calendar"
       />
 
       {/* Customers */}
       <ListSection
-        title="Customers Today" color="text-indigo-300" badgeColor="bg-indigo-500"
-        items={data?.customersToday} loading={loading} emptyMsg="No customers today" viewAllTo="/customers"
+        title={`Customers ${PERIOD_SUFFIX[period]}`}
+        items={data?.customersToday} loading={loading} emptyMsg={`No customers ${PERIOD_PHRASE[period]}`} viewAllTo="/customers"
       />
 
       {/* Sales */}
-      <SalesTodayCard items={data?.salesToday} loading={loading} />
+      <SalesTodayCard items={data?.salesToday} loading={loading} period={period} />
 
       {/* Jobs */}
       <ListSection
-        title="Jobs in Progress" color="text-teal-400" badgeColor="bg-teal-600"
-        items={data?.jobsStartingToday} loading={loading} emptyMsg="No jobs starting today" viewAllTo="/jobs"
+        title="Jobs in Progress"
+        items={data?.jobsStartingToday} loading={loading} emptyMsg={`No jobs starting ${PERIOD_PHRASE[period]}`} viewAllTo="/jobs"
       />
+      </CollapsibleSection>
     </div>
+  )
+}
+
+/**
+ * Action-first triage. The dashboard previously opened with fourteen
+ * equal-weight sections, so "what needs me today?" had to be reconstructed by
+ * reading the whole page. This promotes the four signals that represent unmet
+ * obligations, and only those — every other block on the page is either a
+ * performance figure or a reference list.
+ *
+ * Period-independent by design: it sits above the period tabs because overdue
+ * work is overdue regardless of whether you're looking at today or the month.
+ */
+function NeedsAttentionCard({
+  overdueFollowUps, overdueTasks, appointmentsToday, unreadChats, loading,
+}: {
+  overdueFollowUps: number
+  overdueTasks: number
+  appointmentsToday: number
+  unreadChats: number
+  loading: boolean
+}) {
+  const items = [
+    { count: overdueFollowUps, label: 'overdue follow-up',  to: '/customers', urgent: true },
+    { count: overdueTasks,     label: 'overdue task',       to: '/todo',      urgent: true },
+    { count: appointmentsToday, label: 'appointment today', to: '/calendar',  urgent: false },
+    { count: unreadChats,      label: 'unread message',     to: '/chat',      urgent: false },
+  ].filter(i => i.count > 0)
+
+  if (loading) {
+    return (
+      <section className="card p-4">
+        <div className="animate-pulse flex flex-wrap gap-3">
+          <div className="h-10 w-40 bg-gray-700 rounded-lg" />
+          <div className="h-10 w-36 bg-gray-700/60 rounded-lg" />
+        </div>
+      </section>
+    )
+  }
+
+  // An empty state that says so, rather than a card that silently vanishes —
+  // "nothing needs you" is itself the answer the page exists to give.
+  if (items.length === 0) {
+    return (
+      <section className="card p-4 flex items-center gap-2.5">
+        <svg className="w-5 h-5 text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+        </svg>
+        <p className="text-sm font-medium text-gray-100">You&rsquo;re all caught up</p>
+        <p className="text-sm text-gray-400">No overdue work, appointments or unread messages.</p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="card p-4">
+      <div className="flex flex-wrap gap-2">
+        {items.map(i => (
+          <Link
+            key={i.label}
+            to={i.to}
+            className={`flex items-baseline gap-2 px-3 py-2 rounded-lg border transition-colors ${
+              i.urgent
+                ? 'bg-red-500/10 border-red-500/40 hover:bg-red-500/20'
+                : 'bg-gray-800 border-gray-700 hover:bg-gray-700/60'
+            }`}
+          >
+            <span className={`text-xl font-bold tabular-nums leading-none ${i.urgent ? 'text-red-300' : 'text-gray-100'}`}>
+              {i.count}
+            </span>
+            <span className={`text-sm ${i.urgent ? 'text-red-200' : 'text-gray-300'}`}>
+              {i.label}{i.count === 1 ? '' : 's'}
+            </span>
+          </Link>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -725,31 +918,75 @@ const PRIORITY_TEXT: Record<Todo['priority'], string> = {
 
 const MAX_TASKS = 5
 
+/**
+ * The dashboard had eleven inline spinners collapsed into a single 44px-tall
+ * row, inside cards that grow to ~300px once loaded. With seven independent
+ * loading flags resolving at different times, every block shoved the ones
+ * below it down as it filled — the page churned for seconds before settling.
+ *
+ * These two skeletons mirror the geometry of the content they stand in for, so
+ * a card occupies its final height from first paint and data swaps in without
+ * moving anything. They also make the page speak one loading language:
+ * animate-pulse, matching the record lists and /todo.
+ */
+function RowsSkeleton({ rows = MAX_TASKS }: { rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+          <div className="w-8 h-8 rounded-full bg-gray-700 shrink-0" />
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <div className="h-3.5 bg-gray-700 rounded" style={{ width: `${68 - i * 6}%` }} />
+            <div className="h-3 bg-gray-700/60 rounded w-1/3" />
+          </div>
+          <div className="h-3 w-12 bg-gray-700/60 rounded shrink-0" />
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** For `card p-4` panels: stacked label/value lines rather than avatar rows. */
+function LinesSkeleton({ lines = 3, bar = false }: { lines?: number; bar?: boolean }) {
+  return (
+    <div className="animate-pulse space-y-3">
+      {bar && <div className="h-2 rounded-full bg-gray-700" />}
+      {Array.from({ length: lines }).map((_, i) => (
+        <div key={i} className="space-y-1.5">
+          <div className="flex items-baseline justify-between">
+            <div className="h-3 w-20 bg-gray-700 rounded" />
+            <div className="h-3 w-14 bg-gray-700/60 rounded" />
+          </div>
+          {!bar && <div className="h-1.5 rounded-full bg-gray-700/60" style={{ width: `${80 - i * 15}%` }} />}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
   const preview = todos.slice(0, MAX_TASKS)
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <p className="section-header mb-0 text-violet-400">Tasks</p>
+          <p className="section-header mb-0">Tasks · active</p>
           {todos.length > 0 && (
-            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-violet-600">
+            <span className="text-xs font-semibold text-gray-200 px-2 py-0.5 rounded-full bg-gray-700 tabular-nums">
               {todos.length}
             </span>
           )}
         </div>
-        <Link to="/todo" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <Link to="/todo" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card divide-y divide-gray-700/50 flex-1">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : todos.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">No active tasks</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No active tasks</p>
         ) : (
           <>
             {preview.map(todo => {
@@ -767,11 +1004,14 @@ function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-gray-100 truncate">{todo.title}</p>
-                    {todo.dueDate && (
-                      <p className="text-xs text-indigo-400 mt-0.5">
-                        Due {todo.dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </p>
-                    )}
+                    {todo.dueDate && (() => {
+                      // Same treatment as /todo, from the shared helper: the
+                      // flat indigo date here carried no urgency AND was built
+                      // from a bare toLocaleDateString(), so it showed the day
+                      // before for anyone west of UTC.
+                      const due = dueMeta(todo.dueDate, todo.isCompleted)
+                      return <p className={`text-xs mt-0.5 ${due.cls}`}>{due.label}</p>
+                    })()}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[todo.priority]}`} />
@@ -792,32 +1032,30 @@ function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
   )
 }
 
-function ExpensesTodayCard({ expenses, loading }: { expenses: Expense[]; loading: boolean }) {
+function ExpensesTodayCard({ expenses, loading, period }: { expenses: Expense[]; loading: boolean; period: SnapshotPeriod }) {
   const preview = expenses.slice(0, MAX_TASKS)
   const total   = expenses.reduce((s, e) => s + e.amount, 0)
   return (
     <section>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <p className="section-header mb-0 text-amber-400">Expenses Today</p>
+          <p className="section-header mb-0">Expenses {PERIOD_SUFFIX[period]}</p>
           {expenses.length > 0 && (
             <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-amber-600">
               {formatCurrency(total)}
             </span>
           )}
         </div>
-        <Link to="/expenses" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <Link to="/expenses" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : expenses.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">No expenses today</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No expenses {PERIOD_PHRASE[period]}</p>
         ) : (
           <>
             {preview.map(expense => {
@@ -835,7 +1073,7 @@ function ExpensesTodayCard({ expenses, loading }: { expenses: Expense[]; loading
                     <p className="text-sm text-gray-100 truncate">{expense.title}</p>
                     <p className="text-xs text-gray-400 mt-0.5">{expense.category}</p>
                   </div>
-                  <span className="text-sm font-semibold text-amber-400 shrink-0">{formatCurrency(expense.amount)}</span>
+                  <span className="text-sm font-semibold text-gray-100 shrink-0">{formatCurrency(expense.amount)}</span>
                 </Link>
               )
             })}
@@ -873,32 +1111,30 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0 text-rose-400">Follow-ups</p>
+        <p className="section-header mb-0">Follow-ups · scheduled</p>
         {overdueOrToday.length > 0 && (
           <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-red-600">
             {overdueOrToday.length} due
           </span>
         )}
         {upcoming.length > 0 && (
-          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-gray-600">
+          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-slate-600">
             +{upcoming.length} upcoming
           </span>
         )}
       </div>
       <div className="card divide-y divide-gray-700/50 flex-1">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : error ? (
           <p className="px-4 py-3 text-sm text-red-400">{error}</p>
         ) : items.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">No follow-ups due</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No follow-ups due</p>
         ) : (
           <>
             {preview.map(c => {
               const label = followUpLabel(c.followUpDate!)
+              const row = recordRow(c, c.phone)
               return (
                 <Link
                   key={c.id}
@@ -907,8 +1143,8 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
                 >
                   <span className="text-base shrink-0">🔔</span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
-                    {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+                    <p className="text-sm font-medium text-gray-100 truncate">{row.title || '—'}</p>
+                    {row.sub && <p className="text-xs text-gray-400 truncate">{row.sub}</p>}
                   </div>
                   <span className={`text-xs font-semibold shrink-0 ${label.color}`}>{label.text}</span>
                 </Link>
@@ -951,15 +1187,16 @@ function ActivityTimelineCard({
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <p className="section-header mb-0 text-sky-400">Recent Activity</p>
+          <p className="section-header mb-0">Recent Activity</p>
           {!loading && activities.length > 0 && (
             <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-sky-600">
               {activities.length}
             </span>
           )}
         </div>
-        <Link to="/activity" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <Link to="/activity" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card px-4 py-3 flex-1">
@@ -976,7 +1213,7 @@ function ActivityTimelineCard({
             ))}
           </div>
         ) : activities.length === 0 ? (
-          <p className="text-sm text-gray-500 py-1">No activity logged yet</p>
+          <p className="text-sm text-gray-400 py-1">No activity logged yet</p>
         ) : (
           <div className="relative max-h-[420px] overflow-y-auto">
             <div className="absolute left-3.5 top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
@@ -988,7 +1225,21 @@ function ActivityTimelineCard({
                 return (
                   <div key={a.id} className={`relative flex gap-3 ${isLast ? 'pb-0' : 'pb-4'}`}>
                     <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 z-10">
-                      <span className="text-xs leading-none">{meta.icon}</span>
+                      {a.type === 'call' ? (
+                        // Emoji glyphs can't be tinted, so calls use a currentColor SVG phone
+                        <svg
+                          className="w-3.5 h-3.5 text-green-400"
+                          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                          aria-hidden="true"
+                        >
+                          <path
+                            strokeLinecap="round" strokeLinejoin="round"
+                            d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.94 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z"
+                          />
+                        </svg>
+                      ) : (
+                        <span className="text-xs leading-none">{meta.icon}</span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0 pt-0.5">
                       <div className="flex items-baseline gap-1.5">
@@ -1001,8 +1252,8 @@ function ActivityTimelineCard({
                         <span className="text-xs text-gray-700 ml-auto shrink-0">{timeAgo(a.createdAt)}</span>
                       </div>
                       <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                        <span className="text-xs text-gray-500 shrink-0">{meta.label}</span>
-                        <span className="text-xs text-gray-600 shrink-0">·</span>
+                        <span className="text-xs text-gray-400 shrink-0">{meta.label}</span>
+                        <span className="text-xs text-gray-400 shrink-0">·</span>
                         <span className="text-xs text-gray-400 truncate" title={a.userName}>{a.userName}</span>
                       </div>
                       {a.note && (
@@ -1021,11 +1272,9 @@ function ActivityTimelineCard({
 }
 
 function ListSection({
-  title, color, badgeColor, items, loading, emptyMsg, viewAllTo,
+  title, items, loading, emptyMsg, viewAllTo,
 }: {
   title: string
-  color: string
-  badgeColor: string
   items?: CustomerItem[]
   loading: boolean
   emptyMsg: string
@@ -1036,25 +1285,23 @@ function ListSection({
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
-        <p className={`section-header mb-0 ${color}`}>{title}</p>
+        <p className="section-header mb-0">{title}</p>
         {items && items.length > 0 && (
-          <span className={`text-xs font-semibold text-white px-2 py-0.5 rounded-full ${badgeColor}`}>
+          <span className="text-xs font-semibold text-gray-200 px-2 py-0.5 rounded-full bg-gray-700 tabular-nums">
             {items.length}
           </span>
         )}
       </div>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : !items || items.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">{emptyMsg}</p>
+          <p className="px-4 py-3 text-sm text-gray-400">{emptyMsg}</p>
         ) : (
           <>
             {preview.map(c => {
-              const color = coloredAvatars ? avatarColor(fullName(c)) : avatarOriginal()
+              const row = recordRow(c, [c.city, c.state].filter(Boolean).join(', '))
+              const color = coloredAvatars ? avatarColor(row.title) : avatarOriginal()
               return (
               <Link
                 key={c.id}
@@ -1063,12 +1310,12 @@ function ListSection({
               >
                 <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: color.bg }}>
                   <span className="text-xs font-semibold" style={{ color: color.text }}>
-                    {[c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase() || '?'}
+                    {row.initials || '?'}
                   </span>
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
-                  {c.city && <p className="text-xs text-gray-400">{c.city}{c.state ? `, ${c.state}` : ''}</p>}
+                  <p className="text-sm font-medium text-gray-100 truncate">{row.title || '—'}</p>
+                  {row.sub && <p className="text-xs text-gray-400 truncate">{row.sub}</p>}
                 </div>
                 {c.amount > 0 && (
                   <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(c.amount)}</span>
@@ -1088,14 +1335,14 @@ function ListSection({
   )
 }
 
-function SalesTodayCard({ items, loading }: { items?: SaleEntry[]; loading: boolean }) {
+function SalesTodayCard({ items, loading, period }: { items?: SaleEntry[]; loading: boolean; period: SnapshotPeriod }) {
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const total = items?.reduce((s, e) => s + e.amount, 0) ?? 0
   const preview = items ? items.slice(0, MAX_TASKS) : []
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0 text-green-400">Sales Today</p>
+        <p className="section-header mb-0">Sales {PERIOD_SUFFIX[period]}</p>
         {items && items.length > 0 && (
           <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-green-600">
             {formatCurrency(total)}
@@ -1104,12 +1351,9 @@ function SalesTodayCard({ items, loading }: { items?: SaleEntry[]; loading: bool
       </div>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : !items || items.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">No sales today</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No sales {PERIOD_PHRASE[period]}</p>
         ) : (
           <>
             {preview.map(entry => {
@@ -1164,19 +1408,17 @@ function GoalsCard({
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0 text-emerald-400">Goals · {range.short}</p>
-        <Link to="/goals" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <p className="section-header mb-0">Goals · {range.short}</p>
+        <Link to="/goals" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card p-4 space-y-3 flex-1">
         {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <LinesSkeleton />
         ) : !hasTargets ? (
-          <p className="text-sm text-gray-500">No goals set for this month</p>
+          <p className="text-sm text-gray-400">No goals set for this month</p>
         ) : (
           rows.map(r => {
             const pct = r.target > 0 ? Math.min(100, Math.round((r.actual / r.target) * 100)) : 0
@@ -1185,7 +1427,7 @@ function GoalsCard({
                 <div className="flex items-baseline justify-between mb-1">
                   <span className="text-xs text-gray-400">{r.label}</span>
                   <span className="text-xs text-gray-300">
-                    {r.format(r.actual)} <span className="text-gray-600">/ {r.format(r.target)}</span>
+                    {r.format(r.actual)} <span className="text-gray-400">/ {r.format(r.target)}</span>
                   </span>
                 </div>
                 <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
@@ -1205,19 +1447,17 @@ function PipelineSummaryCard({ stages, counts, loading }: { stages: PipelineStag
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0 text-blue-400">Pipeline</p>
-        <Link to="/pipeline" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <p className="section-header mb-0">Pipeline · current</p>
+        <Link to="/pipeline" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <LinesSkeleton bar lines={2} />
         ) : total === 0 ? (
-          <p className="text-sm text-gray-500">No active leads or customers</p>
+          <p className="text-sm text-gray-400">No active leads or customers</p>
         ) : (
           <>
             <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
@@ -1251,36 +1491,34 @@ function ProposalSummaryCard({ stats, loading }: {
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0 text-violet-400">Proposals</p>
-        <Link to="/proposals" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <p className="section-header mb-0">Proposals · all time</p>
+        <Link to="/proposals" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <LinesSkeleton lines={2} />
         ) : !hasData ? (
-          <p className="text-sm text-gray-500">No proposals yet</p>
+          <p className="text-sm text-gray-400">No proposals yet</p>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <p className="text-sm font-bold text-blue-400">{fmtProposalCurrency(stats.pendingValue)}</p>
-              <p className="text-xs text-gray-500">Pending</p>
+              <p className="text-sm font-bold text-gray-100">{fmtProposalCurrency(stats.pendingValue)}</p>
+              <p className="text-xs text-gray-400">Pending</p>
             </div>
             <div>
               <p className="text-sm font-bold text-green-400">{fmtProposalCurrency(stats.acceptedValue)}</p>
-              <p className="text-xs text-gray-500">Accepted Value</p>
+              <p className="text-xs text-gray-400">Accepted Value</p>
             </div>
             <div>
               <p className="text-sm font-bold text-white">{stats.winRate}%</p>
-              <p className="text-xs text-gray-500">Win Rate</p>
+              <p className="text-xs text-gray-400">Win Rate</p>
             </div>
             <div>
-              <p className="text-sm font-bold text-amber-400">{stats.sentCount}</p>
-              <p className="text-xs text-gray-500">Awaiting Response</p>
+              <p className="text-sm font-bold text-gray-100">{stats.sentCount}</p>
+              <p className="text-xs text-gray-400">Awaiting Response</p>
             </div>
           </div>
         )}
@@ -1294,19 +1532,17 @@ function JobsPipelineSummaryCard({ counts, loading }: { counts: Record<JobStage,
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0 text-teal-400">Jobs Pipeline</p>
-        <Link to="/jobs" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <p className="section-header mb-0">Jobs Pipeline · current</p>
+        <Link to="/jobs" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <LinesSkeleton bar lines={2} />
         ) : total === 0 ? (
-          <p className="text-sm text-gray-500">No customer jobs on file</p>
+          <p className="text-sm text-gray-400">No customer jobs on file</p>
         ) : (
           <>
             <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
@@ -1342,22 +1578,20 @@ function TopPerformerCard({
   return (
     <section>
       <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0 text-yellow-400">Top {label} This Month</p>
-        <Link to="/leaderboard" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all →
+        <p className="section-header mb-0">Top {label} This Month</p>
+        <Link to="/leaderboard" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
       <div className="card p-4">
         {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <LinesSkeleton lines={1} />
         ) : !performer ? (
-          <p className="text-sm text-gray-500">No sales recorded this month</p>
+          <p className="text-sm text-gray-400">No sales recorded this month</p>
         ) : (
           <div className="flex items-center gap-3">
-            <span className="text-2xl shrink-0">🥇</span>
+            <Icon d={ICONS.trophy} className="w-6 h-6 shrink-0 text-yellow-400" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-gray-100 truncate">{performer.name}</p>
               <p className="text-xs text-gray-400">{performer.customers} sale{performer.customers === 1 ? '' : 's'}</p>
@@ -1375,7 +1609,7 @@ function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; l
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0 text-orange-400">Upcoming Appointments</p>
+        <p className="section-header mb-0">Upcoming Appointments · next {UPCOMING_WINDOW_DAYS}d</p>
         {items.length > 0 && (
           <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-orange-600">
             {items.length}
@@ -1384,15 +1618,14 @@ function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; l
       </div>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-gray-400 text-sm">
-            <span className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-            Loading…
-          </div>
+          <RowsSkeleton />
         ) : items.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-500">No appointments in the next {UPCOMING_WINDOW_DAYS} days</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No appointments in the next {UPCOMING_WINDOW_DAYS} days</p>
         ) : (
           <>
-            {preview.map(c => (
+            {preview.map(c => {
+              const row = recordRow(c, c.phone)
+              return (
               <Link
                 key={c.id}
                 to={`/records/${c.id}`}
@@ -1400,14 +1633,15 @@ function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; l
               >
                 <span className="text-base shrink-0">📅</span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-100 truncate">{fullName(c) || '—'}</p>
-                  {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+                  <p className="text-sm font-medium text-gray-100 truncate">{row.title || '—'}</p>
+                  {row.sub && <p className="text-xs text-gray-400 truncate">{row.sub}</p>}
                 </div>
-                <span className="text-xs font-semibold text-orange-400 shrink-0">
+                <span className="text-xs font-semibold text-gray-300 shrink-0">
                   {c.startDate!.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </span>
               </Link>
-            ))}
+              )
+            })}
             {items.length > MAX_TASKS && (
               <Link to="/calendar" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
                 +{items.length - MAX_TASKS} more

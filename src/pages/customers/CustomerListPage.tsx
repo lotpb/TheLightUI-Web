@@ -21,6 +21,7 @@ import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
 import { calculateHealthScore, healthBreakdown, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
 import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
+import { Icon, ICONS } from '../../components/Icon'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
 import type { SavedView } from '../../models/savedView'
 
@@ -82,39 +83,6 @@ function useClickOutside(
   }, [active, ref, onClose])
 }
 
-/** Inline icon matching this page's existing SVGs (strokeWidth 2, currentColor
- *  so it follows hover states). The shared ico() helper in config/navigation is
- *  strokeWidth 1.5 and single-path, which doesn't fit here. */
-function Icon({ d, className = 'w-4 h-4' }: { d: string | readonly string[]; className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-      {(Array.isArray(d) ? d : [d as string]).map((p, i) => (
-        <path key={i} strokeLinecap="round" strokeLinejoin="round" d={p} />
-      ))}
-    </svg>
-  )
-}
-
-// Heroicons v2 outline paths, replacing emoji (🏷 🖨 ⚠) and ASCII arrows (↑ ↓).
-// Those render from Apple Color Emoji or the UI font, so they can't inherit a
-// button's colour — the same trap index.css documents for .icon-star.
-const ICONS = {
-  tag: [
-    'M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z',
-    'M6 6h.008v.008H6V6Z',
-  ],
-  printer: 'M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m10.5 0a48.536 48.536 0 0 0-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5Zm-3 0h.008v.008H15V10.5Z',
-  uploadTray: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M7.5 7.5 12 3m0 0 4.5 4.5M12 3v13.5',
-  downloadTray: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3',
-  arrowUp: 'M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18',
-  arrowDown: 'M19.5 13.5 12 21m0 0-7.5-7.5M12 21V3',
-  warning: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z',
-  close: 'M6 18 18 6M6 6l12 12',
-  // ★/☆ render from Apple Color Emoji as a solid black star that ignores
-  // `color` outright — the .icon-star rule in index.css exists for exactly
-  // this. Use the path with that class, never the glyph.
-  star: 'M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z',
-} as const
 
 function QuickFilterButton({ label, active, onClick }: { label: ReactNode; active: boolean; onClick: () => void }) {
   return (

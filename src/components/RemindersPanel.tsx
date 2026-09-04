@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Notification, NotifType, RecentActivity } from '../hooks/useReminders'
+import type { Notification, NotifType, NotificationSupport, RecentActivity } from '../hooks/useReminders'
 import type { AppNotification } from '../models/notification'
 
 interface Props {
   notifications: Notification[]
   recentActivity: RecentActivity[]
   permission: NotificationPermission
+  notificationSupport: NotificationSupport
   onRequestPermission: () => void
   onClose: () => void
   appNotifications: AppNotification[]
@@ -59,7 +60,7 @@ const URGENCY_GROUPS: Array<{ key: Notification['urgency']; label: string; label
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
 export default function RemindersPanel({
-  notifications, recentActivity, permission, onRequestPermission, onClose,
+  notifications, recentActivity, permission, notificationSupport, onRequestPermission, onClose,
   appNotifications, onMarkNotificationRead, onMarkAllNotificationsRead,
 }: Props) {
   useEffect(() => {
@@ -178,21 +179,42 @@ export default function RemindersPanel({
           </div>
         )}
 
-        {/* Browser notification permission banner */}
+        {/* Browser notification permission banner. iPhone/iPad Safari has no
+            Notification API outside Home Screen web apps, so showing an
+            "Enable" button there would do nothing — give install steps instead. */}
         {permission !== 'granted' && (
           <div className="mx-3 mt-3 bg-indigo-900/30 border border-indigo-700/40 rounded-xl px-3 py-3">
-            <p className="text-xs text-indigo-300 font-medium">
-              {permission === 'denied'
-                ? 'Browser notifications are blocked. Enable them in your browser settings to get alerts.'
-                : 'Enable browser notifications to get alerts when follow-ups are due.'}
-            </p>
-            {permission !== 'denied' && (
-              <button
-                onClick={onRequestPermission}
-                className="mt-2 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition-colors"
-              >
-                Enable Notifications
-              </button>
+            {notificationSupport === 'needs-install' ? (
+              <>
+                <p className="text-xs text-indigo-300 font-medium">
+                  iPhone and iPad only allow notifications for Home Screen apps.
+                </p>
+                <ol className="mt-2 text-xs text-indigo-300/80 space-y-1 list-decimal list-inside">
+                  <li>Tap the Share button in Safari</li>
+                  <li>Choose “Add to Home Screen”</li>
+                  <li>Open TheLight from your Home Screen, then enable notifications here</li>
+                </ol>
+              </>
+            ) : notificationSupport === 'unsupported' ? (
+              <p className="text-xs text-indigo-300 font-medium">
+                This browser doesn’t support notifications. Reminders below still update live.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-indigo-300 font-medium">
+                  {permission === 'denied'
+                    ? 'Browser notifications are blocked. Enable them in your browser settings to get alerts.'
+                    : 'Enable browser notifications to get alerts when follow-ups are due.'}
+                </p>
+                {permission !== 'denied' && (
+                  <button
+                    onClick={onRequestPermission}
+                    className="mt-2 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    Enable Notifications
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}

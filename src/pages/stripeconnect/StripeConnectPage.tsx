@@ -75,21 +75,21 @@ export default function StripeConnectPage() {
                 </p>
             </div>
 
-            <div className="card p-4 mb-6 border-yellow-700/40 bg-yellow-950/20">
+            <div className="card p-4 mb-6 border-yellow-600/40 bg-yellow-900/20">
                 <p className="text-xs text-yellow-300">
                     <strong>Setup required:</strong> create a Connect platform at{' '}
-                    <span className="text-yellow-200">dashboard.stripe.com/connect</span>, set its OAuth redirect URI to{' '}
-                    <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-yellow-200">
+                    <span className="font-semibold">dashboard.stripe.com/connect</span>, set its OAuth redirect URI to{' '}
+                    <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-100">
                         https://us-central1-thelightui.cloudfunctions.net/stripeConnectCallback
-                    </code>, and configure the <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-yellow-200">STRIPE_CONNECT_CLIENT_ID</code>{' '}
+                    </code>, and configure the <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-100">STRIPE_CONNECT_CLIENT_ID</code>{' '}
                     Firebase secret before connecting.
                 </p>
-                <p className="text-xs text-yellow-400/80 mt-2">
+                <p className="text-xs text-yellow-300 mt-2">
                     Also register a <strong>second</strong> webhook endpoint in the Stripe dashboard with "Listen to
                     events on Connected accounts" checked, pointing at{' '}
-                    <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-yellow-200">{WEBHOOK_URL}</code> — this is
+                    <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-100">{WEBHOOK_URL}</code> — this is
                     separate from the existing invoice payment webhook and uses its own signing secret
-                    (<code className="px-1 py-0.5 rounded bg-gray-800">STRIPE_CONNECT_WEBHOOK_SECRET</code>). Skipping
+                    (<code className="px-1 py-0.5 rounded bg-gray-800 text-gray-100">STRIPE_CONNECT_WEBHOOK_SECRET</code>). Skipping
                     this means a connected company's payments will process but never mark the invoice paid.
                 </p>
             </div>
