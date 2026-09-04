@@ -416,98 +416,75 @@ export default function CustomerDetailPage() {
               </div>
             </div>
 
-            {/* Grouped rather than one flat grid of twelve identical chips, so
-                reaching for a document doesn't mean scanning past four exports.
+            {/* One grid, four across — twelve tiles land as three rows, which is
+                the layout this had before I split it into Contact / Create /
+                Share. The grouping was my idea and it wasn't wanted; the flat
+                grid is denser and it's what muscle memory expects.
 
-                Active stays a tile here — it was briefly moved onto the status
-                pill above, which made it hard to find. The pill is a readout
-                again and this is the only control for that state. What did stick
-                from that change is the confirmation: deactivating writes to
-                Firestore and drops the record out of the lists, and it used to
-                happen on one unconfirmed click. Reactivating doesn't ask, not
-                being the destructive direction. */}
-            <div className="mt-5 pt-4 border-t border-gray-700/50 space-y-3">
-              {(customer.phone || customer.email || customer.street) && (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Contact</p>
-                  <div className="grid grid-cols-4 gap-2">
-                    {customer.phone && (
-                      <ActionTile
-                        href={`tel:${customer.phone}`}
-                        icon={(
-                          <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-                          </svg>
-                        )}
-                        label="Call"
-                      />
-                    )}
-                    {customer.phone && (
-                      <ActionTile onClick={() => setCompose('sms')} icon={<Icon d={ICONS.chat} className="w-5 h-5" />} label="Message" />
-                    )}
-                    {customer.email && (
-                      <ActionTile onClick={() => setCompose('email')} icon={<Icon d={ICONS.envelope} className="w-5 h-5" />} label="Email" />
-                    )}
-                    {customer.street && (
-                      <ActionTile
-                        to={`/maps?address=${encodeURIComponent(
-                          [customer.street, customer.city, customer.state, customer.zip]
-                            .filter(Boolean).join(', ')
-                        )}`}
-                        icon={<Icon d={ICONS.mapPin} className="w-5 h-5" />}
-                        label="Map"
-                      />
-                    )}
-                    {/* Active sits here at your request — fifth cell, so with
-                        Call/Message/Email/Map above it wraps to the next line.
-                        It keeps the confirmation on deactivate: this writes to
-                        Firestore and hides the record from the lists, and it
-                        used to fire on a single click. */}
-                    <ActionTile
-                      onClick={() => customer.isActive ? setConfirmDeactivate(true) : handleToggleActive()}
-                      icon={<StarIcon className="w-5 h-5" filled={customer.isActive} />}
-                      label="Active"
-                      active={customer.isActive}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Create</p>
-                <div className="grid grid-cols-4 gap-2">
-                  <ActionTile to={`/proposals/new?customerId=${id}`} icon={<Icon d={ICONS.documentText} className="w-5 h-5" />} label="Proposal" />
-                  <ActionTile to={`/invoices/new?customerId=${id}`}  icon={<Icon d={ICONS.receipt} className="w-5 h-5" />}      label="Invoice" />
-                  <ActionTile to={`/records/${id}/quote`}            icon={<Icon d={ICONS.clipboard} className="w-5 h-5" />}    label="Quote" />
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Share</p>
-                <div className="grid grid-cols-4 gap-2">
-                  <ActionTile onClick={() => downloadVCF(customer)} icon={<Icon d={ICONS.user} className="w-5 h-5" />} label="Contact" />
-                  {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
-                    <ActionTile onClick={() => downloadICS(customer)} icon={<Icon d={ICONS.calendar} className="w-5 h-5" />} label="Calendar" />
+                Two things from that pass do stay. The icons are currentColor
+                SVGs rather than emoji, so they follow each tile's hover and
+                active state. And deactivating asks for confirmation: it writes
+                to Firestore and drops the record out of the record lists, and
+                it used to fire on one unconfirmed click. Reactivating doesn't
+                ask, not being the destructive direction. */}
+            <div className="grid grid-cols-4 gap-2 mt-5 pt-4 border-t border-gray-700/50">
+              {customer.phone && (
+                <ActionTile
+                  href={`tel:${customer.phone}`}
+                  icon={(
+                    <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                    </svg>
                   )}
-                  {/* The spinner is the same 20px box as the icon it replaces.
-                      The old '…' swap changed the glyph's metrics, so the tile
-                      jogged while the portal link was generating. */}
-                  <ActionTile
-                    onClick={handlePortalLink}
-                    icon={generatingPortal
-                      ? <span className="w-5 h-5 flex items-center justify-center">
-                          <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                        </span>
-                      : <Icon d={ICONS.link} className="w-5 h-5" />}
-                    label="Portal"
-                  />
-                  <ActionTile
-                    onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
-                    icon={<Icon d={ICONS.printer} className="w-5 h-5" />}
-                    label="Print"
-                  />
-                </div>
-              </div>
+                  label="Call"
+                />
+              )}
+              {customer.phone && (
+                <ActionTile onClick={() => setCompose('sms')} icon={<Icon d={ICONS.chat} className="w-5 h-5" />} label="Message" />
+              )}
+              {customer.email && (
+                <ActionTile onClick={() => setCompose('email')} icon={<Icon d={ICONS.envelope} className="w-5 h-5" />} label="Email" />
+              )}
+              {customer.street && (
+                <ActionTile
+                  to={`/maps?address=${encodeURIComponent(
+                    [customer.street, customer.city, customer.state, customer.zip]
+                      .filter(Boolean).join(', ')
+                  )}`}
+                  icon={<Icon d={ICONS.mapPin} className="w-5 h-5" />}
+                  label="Map"
+                />
+              )}
+              <ActionTile
+                onClick={() => customer.isActive ? setConfirmDeactivate(true) : handleToggleActive()}
+                icon={<StarIcon className="w-5 h-5" filled={customer.isActive} />}
+                label="Active"
+                active={customer.isActive}
+              />
+              <ActionTile to={`/proposals/new?customerId=${id}`} icon={<Icon d={ICONS.documentText} className="w-5 h-5" />} label="Proposal" />
+              <ActionTile to={`/invoices/new?customerId=${id}`}  icon={<Icon d={ICONS.receipt} className="w-5 h-5" />}      label="Invoice" />
+              <ActionTile to={`/records/${id}/quote`}            icon={<Icon d={ICONS.clipboard} className="w-5 h-5" />}    label="Quote" />
+              <ActionTile onClick={() => downloadVCF(customer)}  icon={<Icon d={ICONS.user} className="w-5 h-5" />}         label="Contact" />
+              {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
+                <ActionTile onClick={() => downloadICS(customer)} icon={<Icon d={ICONS.calendar} className="w-5 h-5" />} label="Calendar" />
+              )}
+              {/* The spinner is the same 20px box as the icon it replaces. The
+                  old '…' swap changed the glyph's metrics, so the tile jogged
+                  while the portal link was generating. */}
+              <ActionTile
+                onClick={handlePortalLink}
+                icon={generatingPortal
+                  ? <span className="w-5 h-5 flex items-center justify-center">
+                      <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    </span>
+                  : <Icon d={ICONS.link} className="w-5 h-5" />}
+                label="Portal"
+              />
+              <ActionTile
+                onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
+                icon={<Icon d={ICONS.printer} className="w-5 h-5" />}
+                label="Print"
+              />
             </div>
           </div>
 
