@@ -18,6 +18,8 @@ import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
 import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
+import { calculateHealthScore, healthBreakdown, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
+import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
 import { Icon, ICONS } from '../../components/Icon'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
@@ -150,23 +152,18 @@ export default function CustomerListPage() {
   const toast = useToast()
   const perms = usePermissions()
 
-  // NO health score on this list, and no invoice or service-plan listeners.
-  //
-  // e64a179 added useSharedInvoices + useSharedServicePlans here so the list's
-  // health badge would agree with /records/:id and /health. It broke /customers:
-  // the page sat on skeletons and never finished loading. Those two listeners
-  // were the only thing that distinguished /customers from /leads, /vendors and
-  // /employees on this shared component, and the three of them stayed fine
-  // throughout — so the fault was here. Opening them behind an `enabled` flag
-  // also meant tearing them down and recreating them on every navigation in and
-  // out of this route, which is the exact churn createSharedSubscription's own
-  // comment warns trips Firestore's "INTERNAL ASSERTION FAILED: Unexpected
-  // state" — after which snapshots stop arriving with no error raised.
-  //
-  // A working list without a score beats a list that never loads. The score is
-  // still correct on the record page and /health, which fetch per-customer.
-  // Reinstating it here needs a per-customer or aggregated read, not two
-  // company-wide listeners toggled by route.
+  // Health used to be computed here with calculateHealthScoreLight (recency +
+  // engagement only, scaled to 100) while the record page and /health used the
+  // full score. Same labels, same colours, different verdicts: a customer with
+  // overdue invoices read "Good" (70) on this list and "At Risk" (35) one click
+  // away. The list now uses the same full score as everywhere else, which needs
+  // invoices and service plans — opted out on the other three category routes
+  // so they don't open listeners whose data goes unused.
+  const isCustomerView = cat === 'Customer'
+  const { items: invoices, loading: invoicesLoading } = useSharedInvoices(isCustomerView)
+  const { items: servicePlans, loading: plansLoading } = useSharedServicePlans(isCustomerView)
+  const healthReady = isCustomerView && !invoicesLoading && !plansLoading
+
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -203,6 +200,7 @@ export default function CustomerListPage() {
   const [filterLeadStatus, setFilterLeadStatus] = useState('')
   const [filterQuality, setFilterQuality]       = useState<'' | 'hot' | 'stale'>('')
   const [filterAssignment, setFilterAssignment] = useState<'' | 'mine' | 'unassigned'>('')
+  const [filterHealth, setFilterHealth]         = useState<'' | HealthLabel>('')
   const [filterPaymentStatus, setFilterPaymentStatus] = useState('')
   // `salesman` is repurposed as a plain Yes/No flag for Employee ("is a
   // salesperson") and Vendor ("has callback") — a different field from the
@@ -249,6 +247,7 @@ export default function CustomerListPage() {
     setFilterLeadStatus('')
     setFilterQuality('')
     setFilterAssignment('')
+    setFilterHealth('')
     setFilterPaymentStatus('')
     setFilterSalesmanFlag('')
     setFilterProfession('')
@@ -519,15 +518,50 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
-  // Only the record subscription gates the list now. It used to also wait on the
-  // health filter's invoice and service-plan data, which is how a stalled
-  // listener turned into permanent skeletons.
-  const listLoading = loading
+  // calculateHealthScore filters the invoice and plan arrays by customerId
+  // internally. Both collections cap at 5,000 docs, so calling it per customer
+  // against the full arrays would be up to 25M comparisons per recompute.
+  // Pre-grouping makes each call O(1) — passing an already-narrowed array is
+  // equivalent, since the internal filter then just passes it through.
+  const invoicesByCustomer = useMemo(() => {
+    const m = new Map<string, typeof invoices>()
+    for (const inv of invoices) {
+      const list = m.get(inv.customerId)
+      if (list) list.push(inv)
+      else m.set(inv.customerId, [inv])
+    }
+    return m
+  }, [invoices])
+
+  const plansByCustomer = useMemo(() => {
+    const m = new Map<string, typeof servicePlans>()
+    for (const p of servicePlans) {
+      const list = m.get(p.customerId)
+      if (list) list.push(p)
+      else m.set(p.customerId, [p])
+    }
+    return m
+  }, [servicePlans])
+
+  const healthFor = useCallback(
+    (c: CustomerItem): CustomerHealth => calculateHealthScore(
+      c,
+      invoicesByCustomer.get(c.id) ?? [],
+      plansByCustomer.get(c.id) ?? [],
+    ),
+    [invoicesByCustomer, plansByCustomer],
+  )
+
+  // A health filter can't be applied until invoices and service plans arrive,
+  // so the list has to keep showing skeletons until then. Otherwise it renders
+  // every customer for a moment and snaps to the filtered set — the same
+  // flash-of-wrong-content the badge placeholder avoids.
+  const listLoading = loading || (!!filterHealth && !healthReady)
 
   const activeFilterCount = [
     filterSalesman, filterState, filterLeadSource, filterProduct,
     filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
-    filterLeadStatus, filterQuality, filterAssignment, filterPaymentStatus,
+    filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
     filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
   ].filter(Boolean).length
 
@@ -567,6 +601,7 @@ export default function CustomerListPage() {
     // Must use the same score the badge renders, or filtering by "At Risk"
     // returns a different set than the badges show. Skipped until the
     // collections load, so the filter can't silently match on partial data.
+    if (filterHealth && healthReady) items = items.filter(c => healthFor(c).label === filterHealth)
     if (filterPaymentStatus) items = items.filter(c => c.paymentStatus === filterPaymentStatus)
     // "No" has to mean "not yes" rather than literally 'no', the same way
     // filterCallback above treats it: on records where the flag was never set
@@ -613,15 +648,15 @@ export default function CustomerListPage() {
   }, [all, cat, debouncedSearch, showInactive, tagFilter, sortField, sortDir,
       filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
       filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
-      filterLeadStatus, filterQuality, filterAssignment, filterPaymentStatus, user,
+      filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus, user,
       filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
-      ])
+      healthReady, healthFor])
 
   // Reset to page 1 whenever anything changes the filtered set
   useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
     filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
     filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
-    filterLeadStatus, filterQuality, filterAssignment, filterPaymentStatus,
+    filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
     filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus])
 
   const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -1323,6 +1358,7 @@ export default function CustomerListPage() {
               selected={selectedIds.has(c.id)}
               onToggle={() => toggleOne(c.id)}
               showCheckbox={perms.canBulkAction}
+              health={healthReady ? healthFor(c) : null}
             />
           ))
         )}
@@ -1485,8 +1521,15 @@ export default function CustomerListPage() {
             onClick={() => setFilterAssignment(filterAssignment === 'unassigned' ? '' : 'unassigned')}
           />
 
-          {/* The Health quick filter went with the score — it needed the same two
-              company-wide listeners. See the note at the top of the component. */}
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Health</p>
+          {(['Excellent', 'Good', 'Fair', 'At Risk'] as HealthLabel[]).map(h => (
+            <QuickFilterButton
+              key={h}
+              label={h}
+              active={filterHealth === h}
+              onClick={() => setFilterHealth(filterHealth === h ? '' : h)}
+            />
+          ))}
 
           {/* Last of the data-derived groups to get capped — imported payment
               values can otherwise grow the sidebar past the record list. */}
@@ -1600,11 +1643,16 @@ function CustomerRow({
   selected,
   onToggle,
   showCheckbox = true,
+  health = null,
 }: {
   customer: CustomerItem
   selected: boolean
   onToggle: () => void
   showCheckbox?: boolean
+  /** Full health score, computed by the page. Null until the invoice and
+   *  service-plan collections have loaded, so the badge renders a placeholder
+   *  rather than briefly showing a label derived from partial data. */
+  health?: CustomerHealth | null
 }) {
   // A company name takes the row's title; the person's name drops to the subtitle.
   const showCompanyFirst = c.companyName.trim() !== ''
@@ -1750,6 +1798,26 @@ function CustomerRow({
               same styling, as a lead's deal value. */}
           {c.amount > 0 && lowerCat !== 'employee' && (
             <p className="text-sm font-semibold text-white tabular-nums">{formatCurrency(c.amount)}</p>
+          )}
+          {c.category.toLowerCase() === 'customer' && (
+            // rounded-md to match the lead score chip: both are computed
+            // quality readouts, so they share a silhouette. The number is shown
+            // for the same reason it is on leads — the four labels span
+            // 20-point bands, so 60 and 79 both read "Good".
+            health ? (
+              <span
+                title={healthBreakdown(health)}
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold border cursor-help ${health.badgeClass}`}
+              >
+                <span className={`w-1 h-1 rounded-full ${health.dotClass}`} />
+                {health.label}
+                <span className="tabular-nums font-bold">{health.score}</span>
+              </span>
+            ) : (
+              // Holds the slot while invoices and plans load, so rows don't
+              // reflow and no wrong label derived from partial data is shown.
+              <span className="inline-block h-[1.125rem] w-20 rounded-md bg-gray-700/50 animate-pulse" />
+            )
           )}
           {/* Payment state as a readout, not an action. Previously the row
               rendered a green "$ Paid" *button* only when the customer had NOT
