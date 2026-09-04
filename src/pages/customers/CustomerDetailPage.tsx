@@ -1295,6 +1295,7 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
   const [tasks, setTasks] = useState<Todo[]>([])
   const [notes, setNotes] = useState('')
   const [adding, setAdding] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const title = fullName(customer)
 
   useEffect(() => subscribeToCustomerTodos(customer.id, setTasks, () => {}), [customer.id])
@@ -1343,19 +1344,22 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
       </div>
 
       <form onSubmit={handleAdd} className="px-4 py-3 border-b border-gray-700/30 space-y-2">
-        <input
-          type="text"
-          value={title}
-          readOnly
-          disabled
-          className="input-field text-sm w-full opacity-70 cursor-not-allowed"
-        />
+        {/* A label, not a disabled input. This was a readOnly disabled
+            .input-field carrying the record's name — a text box you can't type
+            in, can't focus, and which announces itself as a disabled form
+            control to a screen reader. .input-field means editable everywhere
+            else on this page now, so borrowing it for static text is the same
+            false affordance the read-only dates had. */}
+        <p className="text-xs text-gray-400">
+          New task for <span className="text-gray-200 font-medium">{title}</span>
+        </p>
         <input
           type="text"
           value={notes}
           onChange={e => setNotes(e.target.value)}
-          placeholder="Notes (optional)…"
+          placeholder="What needs doing?"
           disabled={adding}
+          aria-label={`Task description for ${title}`}
           className="input-field text-sm w-full"
         />
         <div className="flex justify-end">
@@ -1408,13 +1412,38 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
               <span className={`text-xs px-2 py-0.5 rounded-full border shrink-0 ${TASK_PRIORITY_STYLES[t.priority]}`}>
                 {t.priority}
               </span>
-              <button
-                onClick={() => handleDelete(t)}
-                className="text-gray-400 hover:text-red-400 transition-colors shrink-0"
-                aria-label="Delete task"
-              >
-                ✕
-              </button>
+              {/* Asks first, and uses the shared close icon rather than a bare
+                  ✕ glyph with no hit target. Deleting a task destroys a record
+                  and had been a single unconfirmed click. The inline Delete /
+                  Cancel is the pattern the Documents tab already uses, so the
+                  page has one way of confirming a row-level delete. */}
+              {confirmDeleteId === t.id ? (
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => { setConfirmDeleteId(null); handleDelete(t) }}
+                    className="text-xs font-medium text-red-400 hover:text-red-300 px-1.5 py-1 rounded
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="text-xs text-gray-400 hover:text-gray-200 px-1.5 py-1 rounded
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(t.id)}
+                  className="p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-gray-700/50 transition-colors shrink-0
+                             focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  aria-label={`Delete task "${t.title}"`}
+                >
+                  <Icon d={ICONS.close} className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -2303,12 +2332,18 @@ function TagsSection({
           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${tagColor(tag)}`}
         >
           {tag}
+          {/* The shared close icon, not a bare × — that was a third codepoint
+              for "remove" on one page, alongside the ✕ on tasks and the icon
+              buttons everywhere else. Deliberately no confirmation: a tag is one
+              word and re-adding it is two clicks, so a dialog would cost more
+              than the mistake. */}
           <button
             onClick={() => removeTag(tag)}
-            className="opacity-60 hover:opacity-100 transition-opacity ml-0.5 leading-none"
+            className="p-0.5 -mr-1 rounded-full opacity-60 hover:opacity-100 transition-opacity
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             aria-label={`Remove tag ${tag}`}
           >
-            ×
+            <Icon d={ICONS.close} className="w-3 h-3" />
           </button>
         </span>
       ))}
