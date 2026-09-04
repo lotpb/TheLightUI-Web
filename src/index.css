@@ -215,6 +215,18 @@ html.light-mode .text-indigo-300 { color: #4f46e5 !important; } /* role badges *
 html.light-mode .text-teal-300   { color: #0f766e !important; }
 html.light-mode .text-yellow-300 { color: #a16207 !important; }
 html.light-mode .text-red-400    { color: #b91c1c !important; }
+/* The 400 shades of yellow and orange were the last standalone hues without a
+   light-mode variant, and they carry money: /commission renders every dollar
+   figure in text-yellow-400, which measures 1.53:1 on the white light-mode card
+   (#facc15 on #fff), and the overridden rate in text-orange-300 at 1.69:1. The
+   800 shades rather than the 700s the neighbours use, because both classes also
+   appear directly on the pale page background and on bg-gray-700 buttons, where
+   yellow-700 lands at 4.49:1 and 3.55:1 — under AA. yellow-800 clears 4.5:1 on
+   all three surfaces (6.85 / 6.25 / 4.94), orange-800 likewise (7.31 / 6.67 /
+   5.27). The two-and-three-class composite rules below outrank these, so the
+   tuned pill colours are unaffected. */
+html.light-mode .text-yellow-400 { color: #854d0e !important; }
+html.light-mode .text-orange-300 { color: #9a3412 !important; }
 /* The 200 shades are paler still, and every place they're used (idle sign-out
    banner, duplicate warnings, low-stock list, code chips) sits on a surface that
    goes white or pale-tinted in light mode, so they vanish without this. */

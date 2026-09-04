@@ -4,6 +4,7 @@ import { getCustomer, deleteCustomer, deactivateCustomer, updateCustomer, setFol
 import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerItem, type CustomerCategory } from '../../models/customer'
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
+import { Icon, ICONS } from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePickerStore } from '../../stores/pickerStore'
@@ -11,7 +12,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { subscribeToActivities, addActivity, deleteActivity } from '../../services/activityService'
 import { ACTIVITY_TYPES, type Activity, type ActivityType } from '../../models/activity'
 import { subscribeToDocuments, uploadDocument, deleteDocument } from '../../services/documentService'
-import { formatFileSize, fileIcon, type CustomerDocument } from '../../models/document'
+import { formatFileSize, fileIcon, type CustomerDocument, type FileKind } from '../../models/document'
 import { updateTags } from '../../services/customerService'
 import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor } from '../../utils/leadStatusColor'
@@ -79,7 +80,11 @@ function logRelatedError(label: string): (err: Error) => void {
 
 type TabKey = 'details' | 'related' | 'activity' | 'tasks' | 'texts' | 'email' | 'sequences' | 'documents'
 
-const TAB_DEFS: { key: TabKey; label: string; icon?: string }[] = [
+// Files used to carry a 📎 and the other seven nothing. The emoji rendered from
+// Apple Color Emoji, so it stayed the same colour whether or not the tab was
+// active while its label went white — and one icon among eight tabs reads as an
+// accident. Dropped rather than inventing seven more.
+const TAB_DEFS: { key: TabKey; label: string }[] = [
   { key: 'details',   label: 'Details' },
   { key: 'activity',  label: 'Activity' },
   { key: 'tasks',     label: 'Tasks' },
@@ -87,7 +92,7 @@ const TAB_DEFS: { key: TabKey; label: string; icon?: string }[] = [
   { key: 'texts',     label: 'Texts' },
   { key: 'email',     label: 'Email' },
   { key: 'sequences', label: 'Sequences' },
-  { key: 'documents', label: 'Files', icon: '📎' },
+  { key: 'documents', label: 'Files' },
 ]
 
 function DetailTabBar({
@@ -132,7 +137,6 @@ function DetailTabBar({
                 isActive ? 'text-white' : 'text-gray-400 hover:text-gray-300'
               }`}
             >
-              {tab.icon && <span className="text-base leading-none">{tab.icon}</span>}
               <span>{tab.label}</span>
               {count > 0 && (
                 <span className={`text-xs font-semibold rounded-full px-1.5 py-0.5 leading-none transition-colors ${
@@ -302,33 +306,47 @@ export default function CustomerDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
         {/* ── Sidebar: identity, status, actions, tags ─────────────────── */}
         <aside className="space-y-4 lg:sticky lg:top-6">
-          <div className="card px-4 py-2 text-center">
-            <h1 className="text-xl font-bold text-white leading-tight break-words">
-              {hasCompanyName
-                ? customer.companyName.trim()
-                : customer.category.toLowerCase() === 'vendor'
-                ? customer.first || '—'
-                : personName || '—'}
-            </h1>
-          </div>
+          {/* One identity card, left-aligned, name first.
+              The name used to live in a card of its own — a card doing the job
+              of a font size — above a second card that declared
+              `items-center text-center` and then had three of its four children
+              override it with `self-start text-left w-full`. So the block had two
+              alignments at once. Left wins: every FieldCell on the page is left,
+              and centred text in a 252px column rags badly on long names.
 
+              Hierarchy is now name > amount > subtitle. It ran the other way: the
+              h1 was text-xl while an employee's `adNo` was text-3xl and `amount`
+              text-2xl, so the identifier you navigated here for was the third
+              largest thing in its own header. The category subtitle also appears
+              verbatim in the Details tab (Profession for vendors, Department for
+              employees), which is the other reason it doesn't warrant 30px. */}
           <div className="card p-6 relative overflow-hidden">
             <div className="pointer-events-none absolute -top-20 -right-20 w-48 h-48 bg-indigo-600/10 rounded-full blur-3xl" />
 
-            <div className="relative flex flex-col items-center text-center gap-3">
+            <div className="relative flex flex-col items-start gap-3">
+              <div className="w-full space-y-1">
+                <h1 className="text-2xl font-bold text-white leading-tight break-words">
+                  {hasCompanyName
+                    ? customer.companyName.trim()
+                    : customer.category.toLowerCase() === 'vendor'
+                    ? customer.first || '—'
+                    : personName || '—'}
+                </h1>
+
+                {customer.category.toLowerCase() === 'vendor' && customer.profession && (
+                  <p className="text-sm text-gray-400">{customer.profession}</p>
+                )}
+
+                {customer.category.toLowerCase() === 'employee' && customer.adNo && (
+                  <p className="text-sm text-gray-400">{customer.adNo}</p>
+                )}
+              </div>
+
               {customer.amount > 0 && (
-                <p className="text-2xl font-bold text-green-400 -mt-1 self-start text-left w-full">{formatCurrency(customer.amount)}</p>
+                <p className="text-xl font-bold text-green-400 tabular-nums">{formatCurrency(customer.amount)}</p>
               )}
 
-              {customer.category.toLowerCase() === 'vendor' && (
-                <p className="text-lg font-semibold text-gray-300 self-start text-left w-full">{customer.profession || '—'}</p>
-              )}
-
-              {customer.category.toLowerCase() === 'employee' && (
-                <p className="text-3xl font-semibold text-gray-300 self-start text-left w-full">{customer.adNo || '—'}</p>
-              )}
-
-              <div className="flex flex-nowrap gap-1.5 justify-center overflow-x-auto max-w-full">
+              <div className="flex flex-nowrap gap-1.5 overflow-x-auto max-w-full">
                 {catLabel && (
                   <span className="inline-flex items-center shrink-0 text-xs font-medium bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full">
                     {catLabel}
@@ -368,10 +386,10 @@ export default function CustomerDetailPage() {
                 />
               )}
               {customer.phone && (
-                <ActionTile onClick={() => setCompose('sms')} icon="💬" label="Message" />
+                <ActionTile onClick={() => setCompose('sms')} icon={<Icon d={ICONS.chat} className="w-5 h-5" />} label="Message" />
               )}
               {customer.email && (
-                <ActionTile onClick={() => setCompose('email')} icon="✉️" label="Email" />
+                <ActionTile onClick={() => setCompose('email')} icon={<Icon d={ICONS.envelope} className="w-5 h-5" />} label="Email" />
               )}
               {customer.street && (
                 <ActionTile
@@ -379,7 +397,7 @@ export default function CustomerDetailPage() {
                     [customer.street, customer.city, customer.state, customer.zip]
                       .filter(Boolean).join(', ')
                   )}`}
-                  icon="🗺️"
+                  icon={<Icon d={ICONS.mapPin} className="w-5 h-5" />}
                   label="Map"
                 />
               )}
@@ -389,21 +407,28 @@ export default function CustomerDetailPage() {
                 label="Active"
                 active={customer.isActive}
               />
-              <ActionTile to={`/proposals/new?customerId=${id}`} icon="📝" label="Proposal" />
-              <ActionTile to={`/invoices/new?customerId=${id}`} icon="🧾" label="Invoice" />
-              <ActionTile to={`/records/${id}/quote`} icon="📋" label="Quote" />
-              <ActionTile onClick={() => downloadVCF(customer)} icon="👤" label="Contact" />
+              <ActionTile to={`/proposals/new?customerId=${id}`} icon={<Icon d={ICONS.documentText} className="w-5 h-5" />} label="Proposal" />
+              <ActionTile to={`/invoices/new?customerId=${id}`}  icon={<Icon d={ICONS.receipt} className="w-5 h-5" />}      label="Invoice" />
+              <ActionTile to={`/records/${id}/quote`}            icon={<Icon d={ICONS.clipboard} className="w-5 h-5" />}    label="Quote" />
+              <ActionTile onClick={() => downloadVCF(customer)}  icon={<Icon d={ICONS.user} className="w-5 h-5" />}         label="Contact" />
               {customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 0 && (
-                <ActionTile onClick={() => downloadICS(customer)} icon="📅" label="Calendar" />
+                <ActionTile onClick={() => downloadICS(customer)} icon={<Icon d={ICONS.calendar} className="w-5 h-5" />} label="Calendar" />
               )}
+              {/* The spinner is the same 20px box as the icon it replaces. The
+                  old '…' swap changed the glyph's metrics, so the tile jogged
+                  while the portal link was generating. */}
               <ActionTile
                 onClick={handlePortalLink}
-                icon={generatingPortal ? '…' : '🔗'}
+                icon={generatingPortal
+                  ? <span className="w-5 h-5 flex items-center justify-center">
+                      <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    </span>
+                  : <Icon d={ICONS.link} className="w-5 h-5" />}
                 label="Portal"
               />
               <ActionTile
                 onClick={() => printCustomer(customer, msg => toast(msg, 'error'))}
-                icon="🖨️"
+                icon={<Icon d={ICONS.printer} className="w-5 h-5" />}
                 label="Print"
               />
             </div>
@@ -455,7 +480,7 @@ export default function CustomerDetailPage() {
           <FieldGroup title="Contact">
             {hasCompanyName && <Field label="Name" value={personName} />}
             <Field label="Phone"    value={customer.phone} />
-            <Field label="Email"    value={customer.email || '—'} />
+            <Field label="Email"    value={customer.email} />
             {customer.category.toLowerCase() === 'vendor' && (
               <Field label="Web Page" value={customer.spouse} />
             )}
@@ -467,19 +492,19 @@ export default function CustomerDetailPage() {
             )}
             {customer.category.toLowerCase() === 'employee' && (
               <FieldRow>
-                <FieldCell label="Start Date"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
-                <FieldCell label="Termination"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+                <FieldCell label="Start Date"><DateValue>{formatDate(customer.startDate)}</DateValue></FieldCell>
+                <FieldCell label="Termination"><DateValue>{formatDate(customer.completionDate)}</DateValue></FieldCell>
               </FieldRow>
             )}
             {customer.category.toLowerCase() === 'customer' && (
               <FieldRow>
-                <FieldCell label="Start"><DateChip>{formatDate(customer.startDate) || '—'}</DateChip></FieldCell>
-                <FieldCell label="Complete"><DateChip>{formatDate(customer.completionDate) || '—'}</DateChip></FieldCell>
+                <FieldCell label="Start"><DateValue>{formatDate(customer.startDate)}</DateValue></FieldCell>
+                <FieldCell label="Complete"><DateValue>{formatDate(customer.completionDate)}</DateValue></FieldCell>
               </FieldRow>
             )}
             <FieldRow>
-              <FieldCell label="Date Added"><DateChip>{formatDate(customer.creationDate) || '—'}</DateChip></FieldCell>
-              <FieldCell label="Last Update"><DateChip>{formatDate(customer.lastUpdateDate) || '—'}</DateChip></FieldCell>
+              <FieldCell label="Date Added"><DateValue>{formatDate(customer.creationDate)}</DateValue></FieldCell>
+              <FieldCell label="Last Update"><DateValue>{formatDate(customer.lastUpdateDate)}</DateValue></FieldCell>
             </FieldRow>
           </FieldGroup>
         </div>
@@ -502,7 +527,7 @@ export default function CustomerDetailPage() {
           {customer.category.toLowerCase() !== 'vendor' && (
             customer.category.toLowerCase() === 'employee' ? (
               <FieldRow>
-                <FieldCell label="Salesperson">{customer.salesman || '—'}</FieldCell>
+                <FieldCell label="Salesperson">{customer.salesman}</FieldCell>
                 <FieldCell label="Emp. Status">
                   {customer.employeeStatus
                     ? <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
@@ -511,7 +536,7 @@ export default function CustomerDetailPage() {
                         customer.employeeStatus === 'On Leave' ? 'bg-yellow-500/20 text-yellow-300 border-yellow-600/30' :
                         'bg-gray-700 text-gray-400 border-gray-600/30'
                       }`}>{customer.employeeStatus}</span>
-                    : <span className="text-gray-400 text-sm">—</span>}
+                    : <EmptyValue />}
                 </FieldCell>
               </FieldRow>
             ) : (
@@ -523,8 +548,8 @@ export default function CustomerDetailPage() {
               {customer.category.toLowerCase() === 'vendor' && (
                 <>
                   <FieldRow>
-                    <FieldCell label="Profession">{customer.profession || '—'}</FieldCell>
-                    <FieldCell label="Manager">{customer.callback || '—'}</FieldCell>
+                    <FieldCell label="Profession">{customer.profession}</FieldCell>
+                    <FieldCell label="Manager">{customer.callback}</FieldCell>
                   </FieldRow>
                   <Field label="Payment Terms" value={customer.paymentTerms} />
                   <Field label="Tax ID"         value={customer.taxId} />
@@ -536,21 +561,21 @@ export default function CustomerDetailPage() {
           {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'employee' ? (
             (customer.salesman || customer.job) && (
               <FieldRow>
-                <FieldCell label={labels.salesman}>{customer.salesman || '—'}</FieldCell>
-                <FieldCell label={labels.job}>{customer.job || '—'}</FieldCell>
+                <FieldCell label={labels.salesman}>{customer.salesman}</FieldCell>
+                <FieldCell label={labels.job}>{customer.job}</FieldCell>
               </FieldRow>
             )
           ) : (
             <Field label={labels.job} value={customer.job} />
           )}
           {customer.category.toLowerCase() === 'customer' && (
-            <Field label={labels.contractor} value={customer.contractor || '—'} />
+            <Field label={labels.contractor} value={customer.contractor} />
           )}
           {customer.category.toLowerCase() !== 'vendor' && customer.category.toLowerCase() !== 'employee' ? (
             (customer.product || customer.quantity > 0) && (
               <FieldRow>
-                <FieldCell label={labels.product}>{customer.product || '—'}</FieldCell>
-                <FieldCell label="Quantity">{customer.quantity > 0 ? String(customer.quantity) : '—'}</FieldCell>
+                <FieldCell label={labels.product}>{customer.product}</FieldCell>
+                <FieldCell label="Quantity">{customer.quantity > 0 ? String(customer.quantity) : ''}</FieldCell>
               </FieldRow>
             )
           ) : (
@@ -562,12 +587,12 @@ export default function CustomerDetailPage() {
           {customer.category.toLowerCase() === 'employee' && (
             <>
               <FieldRow>
-                <FieldCell label="Department">{customer.adNo || '—'}</FieldCell>
-                <FieldCell label="Rating">{customer.rate || '—'}</FieldCell>
+                <FieldCell label="Department">{customer.adNo}</FieldCell>
+                <FieldCell label="Rating">{customer.rate}</FieldCell>
               </FieldRow>
               <FieldRow>
-                <FieldCell label="Pay Type">{customer.payType || '—'}</FieldCell>
-                <FieldCell label="Commission">{customer.commissionRate || '—'}</FieldCell>
+                <FieldCell label="Pay Type">{customer.payType}</FieldCell>
+                <FieldCell label="Commission">{customer.commissionRate}</FieldCell>
               </FieldRow>
               <FieldRow>
                 <FieldCell label="User Role">
@@ -577,14 +602,14 @@ export default function CustomerDetailPage() {
                           {r.charAt(0).toUpperCase() + r.slice(1)}
                         </span>
                       )})()
-                    : <span className="text-gray-400 text-sm">—</span>}
+                    : <EmptyValue />}
                 </FieldCell>
                 <FieldCell label="Last Login">
-                  <DateChip>
+                  <DateValue>
                     {linkedLastSeen
                       ? linkedLastSeen.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
-                      : customer.lastLogin || <span className="text-gray-400">—</span>}
-                  </DateChip>
+                      : customer.lastLogin || <EmptyValue />}
+                  </DateValue>
                 </FieldCell>
               </FieldRow>
             </>
@@ -595,13 +620,13 @@ export default function CustomerDetailPage() {
           <FieldGroup title="Customer Info">
             <Field label="Company Name"   value={customer.companyName} />
             <FieldRow>
-              <FieldCell label="Lead Source">{customer.leadSource || '—'}</FieldCell>
-              <FieldCell label="Spouse">{customer.spouse || '—'}</FieldCell>
+              <FieldCell label="Lead Source">{customer.leadSource}</FieldCell>
+              <FieldCell label="Spouse">{customer.spouse}</FieldCell>
             </FieldRow>
             {(customer.paymentStatus || customer.paymentTerms) && (
               <FieldRow>
-                <FieldCell label="Payment Status">{customer.paymentStatus || '—'}</FieldCell>
-                <FieldCell label="Payment Terms">{customer.paymentTerms || '—'}</FieldCell>
+                <FieldCell label="Payment Status">{customer.paymentStatus}</FieldCell>
+                <FieldCell label="Payment Terms">{customer.paymentTerms}</FieldCell>
               </FieldRow>
             )}
           </FieldGroup>
@@ -612,16 +637,16 @@ export default function CustomerDetailPage() {
             <FieldGroup title="Lead Info">
               <Field label="Company Name"   value={customer.companyName} />
               <FieldRow>
-                <FieldCell label="Lead Source">{customer.leadSource || '—'}</FieldCell>
+                <FieldCell label="Lead Source">{customer.leadSource}</FieldCell>
                 <FieldCell label="Lead Status">
                   {customer.leadStatus
                     ? <LeadStatusChip status={customer.leadStatus} />
-                    : <span className="text-gray-400">—</span>}
+                    : <EmptyValue />}
                 </FieldCell>
               </FieldRow>
               <FieldRow>
-                <FieldCell label="Last Contact"><DateChip>{formatISODateShort(customer.lastContactDate) || '—'}</DateChip></FieldCell>
-                <FieldCell label="Spouse">{customer.spouse || '—'}</FieldCell>
+                <FieldCell label="Last Contact"><DateValue>{formatISODateShort(customer.lastContactDate)}</DateValue></FieldCell>
+                <FieldCell label="Spouse">{customer.spouse}</FieldCell>
               </FieldRow>
             </FieldGroup>
           </>
@@ -630,7 +655,7 @@ export default function CustomerDetailPage() {
           <FieldGroup title="Personal">
             <FieldRow>
               <FieldCell label="Social Security"><SsnValue value={customer.spouse} /></FieldCell>
-              <FieldCell label="Driver License">{customer.driverLicense || '—'}</FieldCell>
+              <FieldCell label="Driver License">{customer.driverLicense}</FieldCell>
             </FieldRow>
             <DateField label="Birth Date" value={customer.birthDate} />
           </FieldGroup>
@@ -780,7 +805,7 @@ function CustomFieldsSection({ customer }: { customer: CustomerItem }) {
         <FieldRow key={i}>
           {pair.map(def => (
             <FieldCell key={def.id} label={def.label}>
-              {customer.customFields?.[def.key] || '—'}
+              {customer.customFields?.[def.key]}
             </FieldCell>
           ))}
         </FieldRow>
@@ -800,12 +825,39 @@ function FieldGroup({ title, children }: { title: string; children: React.ReactN
   )
 }
 
+/**
+ * The one placeholder for a field that exists but has no value.
+ *
+ * There were four: a bare '—' string that inherited the value's own text-base
+ * gray-200 and so looked exactly like real data, two different muted spans, and
+ * `Field` returning null so the row vanished. Which you got depended on which
+ * component a line happened to use, so inside a single card Phone disappeared
+ * when blank while Email showed a dash — leaving no way to tell an empty field
+ * from one that doesn't apply to this record type.
+ *
+ * "Always render, dash when empty" is the rule, and the two-column FieldRow grid
+ * settles it: hiding one cell of a pair would collapse the row's alignment, so
+ * showing every applicable field is the only convention that serves both
+ * layouts. Which fields *apply* stays with the category conditionals in the JSX,
+ * where that decision is explicit.
+ */
+function EmptyValue() {
+  return <span className="text-gray-400">—</span>
+}
+
+/** The values React renders as nothing, so the dash can stand in for them. */
+function isBlank(v: React.ReactNode): boolean {
+  return v === null || v === undefined || v === '' || v === false
+}
+
 // Label sits above its value; used both standalone and inside multi-column FieldRow grids.
 function FieldCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
       <p className="text-sm text-gray-400 mb-1">{label}</p>
-      <div className="text-base text-gray-200 break-words">{children}</div>
+      <div className="text-base text-gray-200 break-words">
+        {isBlank(children) ? <EmptyValue /> : children}
+      </div>
     </div>
   )
 }
@@ -828,7 +880,7 @@ function maskSsn(raw: string): string {
 
 function SsnValue({ value }: { value: string }) {
   const [revealed, setRevealed] = useState(false)
-  if (!value) return <span className="text-gray-400">—</span>
+  if (!value) return <EmptyValue />
   return (
     <div className="flex items-center gap-3">
       <span className="font-mono tracking-wide">{revealed ? value : maskSsn(value)}</span>
@@ -853,8 +905,10 @@ function SsnValue({ value }: { value: string }) {
   )
 }
 
+// Renders whether or not there's a value; FieldCell supplies the dash. The
+// early `if (!value) return null` is gone — that was the half of the page that
+// hid empty fields while every FieldRow showed them.
 function Field({ label, value }: { label: string; value: string }) {
-  if (!value) return null
   return (
     <div className="px-4 py-3">
       <FieldCell label={label}>{value}</FieldCell>
@@ -862,30 +916,37 @@ function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
-// Same colored pill the record list uses for lead status, sized like the date
-// chip beside it so both values read as controls rather than plain text.
+// A status badge — a legitimate non-interactive pattern, and the same pill the
+// record list uses. The old comment said it was sized to match the date chip "so
+// both values read as controls rather than plain text"; that intent is gone,
+// since neither is a control. The badge keeps its fill because the colour is
+// carrying the status. cursor: default is redundant once nothing invites a click.
 function LeadStatusChip({ status }: { status: string }) {
   return (
-    <div className={`inline-block w-auto rounded-lg px-3 py-0.5 text-sm font-medium ${leadStatusColor(status)}`} style={{ cursor: 'default' }}>
+    <span className={`inline-block rounded-lg px-3 py-0.5 text-sm font-medium ${leadStatusColor(status)}`}>
       {status}
-    </div>
+    </span>
   )
 }
 
-// Matches the Follow-up section's date chip so every date value shares the same background.
-function DateChip({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="input-field inline-block w-auto text-sm py-1.5" style={{ cursor: 'default' }}>
-      {children}
-    </div>
-  )
+/**
+ * A date value: plain text, like every other read-only value on the page.
+ *
+ * This was a div carrying `.input-field` — the actual text-input utility, with
+ * bg-gray-700 and a border — plus cursor: default to stop the caret appearing.
+ * Up to eleven dates per record rendered as boxes indistinguishable from the
+ * genuinely editable date field in Follow-up right below them, on a page whose
+ * real editing lives behind the Edit button. tabular-nums so the dates in a
+ * two-column row align.
+ */
+function DateValue({ children }: { children: React.ReactNode }) {
+  return <span className="tabular-nums">{children}</span>
 }
 
 function DateField({ label, value }: { label: string; value: string }) {
-  if (!value) return null
   return (
     <div className="px-4 py-3">
-      <FieldCell label={label}><DateChip>{value}</DateChip></FieldCell>
+      <FieldCell label={label}><DateValue>{value}</DateValue></FieldCell>
     </div>
   )
 }
@@ -965,7 +1026,12 @@ function FollowUpSection({
         )}
       </div>
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-        <div style={{ position: 'relative', display: 'inline-block' }}>
+        {/* .input-field stays here — this one really is a control, and now that
+            the read-only DateValues have stopped borrowing the same styling, the
+            box means "editable" again. focus-within because the actual <input>
+            is the transparent overlay below it, so keyboard focus used to land
+            on an element with nothing to show for it. */}
+        <div className="relative inline-block rounded-lg focus-within:ring-2 focus-within:ring-indigo-500">
           <div className="input-field text-sm py-1.5" style={{ minWidth: '130px', cursor: 'pointer', userSelect: 'none' }}>
             {followUpDate
               ? (() => { const d = followUpDate; const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${mo[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}` })()
@@ -2319,8 +2385,9 @@ function ComposeModal({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-gray-700 shrink-0">
           <div>
-            <p className="text-sm font-semibold text-white">
-              {isEmail ? '✉️ Email' : '💬 Text'} {name}
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-white">
+              <Icon d={isEmail ? ICONS.envelope : ICONS.chat} className="w-4 h-4 shrink-0" />
+              {isEmail ? 'Email' : 'Text'} {name}
             </p>
             <p className="text-xs text-gray-400">
               {isEmail ? customer.email : customer.phone}
@@ -2409,6 +2476,13 @@ function ComposeModal({
 
 // ── Documents ─────────────────────────────────────────────────────────────────
 
+const FILE_KIND_ICONS: Record<FileKind, string | readonly string[]> = {
+  image:       ICONS.photo,
+  document:    ICONS.documentText,
+  spreadsheet: ICONS.tableGrid,
+  other:       ICONS.paperclip,
+}
+
 function DocumentsSection({ customerId, onCount }: { customerId: string; onCount?: (n: number) => void }) {
   const user = useAuthStore(s => s.user)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -2485,7 +2559,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
           onClick={() => fileRef.current?.click()}
           className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-gray-400 cursor-pointer hover:bg-gray-700/20 transition-colors"
         >
-          <span className="text-3xl">📎</span>
+          <Icon d={ICONS.paperclip} className="w-8 h-8" />
           <p className="text-sm">Drop files here or click Attach</p>
           <p className="text-xs text-gray-600">Max 10 MB per file</p>
         </div>
@@ -2516,7 +2590,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
               key={d.id}
               className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-700/20 transition-colors"
             >
-              <span className="text-xl shrink-0">{fileIcon(d.mimeType)}</span>
+              <Icon d={FILE_KIND_ICONS[fileIcon(d.mimeType)]} className="w-5 h-5 shrink-0 text-gray-400" />
               <div className="flex-1 min-w-0">
                 <a
                   href={d.url}
@@ -2796,22 +2870,89 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
   )
 }
 
+/**
+ * Mirrors the loaded page: max-w-6xl, the same [300px_1fr] two-column grid, the
+ * same card stack in each column.
+ *
+ * It used to be a max-w-2xl single column built around a 64px circular avatar —
+ * a layout this page doesn't have and an avatar it never renders. So the record
+ * didn't fade in, it jumped: a 672px centred column became a 1152px two-column
+ * grid, every card moved, and the most prominent thing in the placeholder turned
+ * out not to exist.
+ */
 function LoadingSkeleton() {
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6 animate-pulse space-y-4">
-      <div className="h-4 bg-gray-700 rounded w-16" />
-      <div className="card p-6">
-        <div className="flex gap-5">
-          <div className="w-16 h-16 rounded-full bg-gray-700" />
-          <div className="flex-1 space-y-3 pt-1">
-            <div className="h-6 bg-gray-700 rounded w-48" />
-            <div className="h-4 bg-gray-700/60 rounded w-24" />
-          </div>
+    <div className="max-w-6xl mx-auto px-4 py-6 animate-pulse">
+      {/* Back + actions */}
+      <div className="flex items-start justify-between mb-6 gap-2">
+        <div className="h-4 bg-gray-700 rounded w-14 mt-1" />
+        <div className="flex gap-2">
+          <div className="h-8 bg-gray-700 rounded-lg w-14" />
+          <div className="h-8 bg-gray-700 rounded-lg w-16" />
         </div>
       </div>
-      <div className="card p-4 space-y-2">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-4 bg-gray-700 rounded" style={{ width: `${60 + i * 8}%` }} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
+        <aside className="space-y-4">
+          {/* Name */}
+          <div className="card px-4 py-2 flex justify-center">
+            <div className="h-7 bg-gray-700 rounded w-40" />
+          </div>
+          {/* Identity + action tiles */}
+          <div className="card p-6 space-y-5">
+            <div className="flex flex-wrap gap-1.5 justify-center">
+              <div className="h-6 bg-gray-700 rounded-full w-20" />
+              <div className="h-6 bg-gray-700 rounded-full w-16" />
+            </div>
+            <div className="grid grid-cols-4 gap-2 pt-4 border-t border-gray-700/50">
+              {Array.from({ length: 12 }).map((_, i) => (
+                <div key={i} className="h-[62px] bg-gray-700/60 rounded-2xl" />
+              ))}
+            </div>
+          </div>
+          {/* Tags, Follow-up, Called */}
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="card p-4 space-y-2.5">
+              <div className="h-3 bg-gray-700 rounded w-20" />
+              <div className="h-7 bg-gray-700/60 rounded w-32" />
+            </div>
+          ))}
+        </aside>
+
+        <main className="min-w-0">
+          {/* Tab bar */}
+          <div className="border-b border-gray-800 mb-6 flex gap-6 pb-3 pt-1">
+            {[52, 60, 44, 54, 40, 42].map((w, i) => (
+              <div key={i} className="h-4 bg-gray-700 rounded shrink-0" style={{ width: w }} />
+            ))}
+          </div>
+          {/* Details tab: two half-width groups, then two full-width ones */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FieldGroupSkeleton rows={3} />
+              <FieldGroupSkeleton rows={3} />
+            </div>
+            <FieldGroupSkeleton rows={2} />
+            <FieldGroupSkeleton rows={4} />
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function FieldGroupSkeleton({ rows }: { rows: number }) {
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+        <div className="h-4 bg-gray-700 rounded w-24" />
+      </div>
+      <div className="divide-y divide-gray-700/30">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="px-4 py-3 space-y-1.5">
+            <div className="h-3.5 bg-gray-700/60 rounded w-20" />
+            <div className="h-4 bg-gray-700 rounded" style={{ width: `${45 + ((i * 17) % 40)}%` }} />
+          </div>
         ))}
       </div>
     </div>
