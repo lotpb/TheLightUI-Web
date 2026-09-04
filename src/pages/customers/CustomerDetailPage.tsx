@@ -327,8 +327,12 @@ export default function CustomerDetailPage() {
         </button>
         <div className="flex gap-2 flex-wrap justify-end">
           <Link to={`/records/${id}/edit`} className="btn-secondary text-sm px-3 py-1.5">Edit</Link>
-          <button onClick={() => setConfirmOpen(true)} disabled={deleting} className="btn-danger text-sm px-3 py-1.5">
-            {deleting ? '…' : 'Delete'}
+          <button onClick={() => setConfirmOpen(true)} disabled={deleting} className="btn-danger inline-flex items-center gap-1.5 text-sm px-3 py-1.5">
+            {/* The label stays. Swapping it for '…' collapsed the button to a
+                12px stub mid-action, right under the pointer, and threw away
+                what the button was. Same fix as the Portal tile's spinner. */}
+            {deleting && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+            Delete
           </button>
         </div>
       </div>
@@ -1363,8 +1367,9 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
           className="input-field text-sm w-full"
         />
         <div className="flex justify-end">
-          <button type="submit" disabled={adding || !canSubmit} className="btn-primary text-sm px-4">
-            {adding ? '…' : 'Add'}
+          <button type="submit" disabled={adding || !canSubmit} className="btn-primary inline-flex items-center gap-1.5 text-sm px-4">
+            {adding && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+            Add
           </button>
         </div>
       </form>
@@ -1605,12 +1610,14 @@ function EmailThreadSection({
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No email messages yet</p>
       ) : (
       <div className="divide-y divide-gray-700/30">
+        {/* The row is no longer a click target. It carried onClick markEmailRead
+            on a bare <div> — no role, no tabIndex, no cursor or hover change —
+            so it was invisible to keyboard and screen readers, and selecting
+            text in a message silently marked it read. Marking read is now an
+            explicit labelled button, which also gives the unread state a name:
+            it used to be a 6px dot whose only label was a title attribute. */}
         {messages.map(m => (
-          <div
-            key={m.id}
-            className="px-4 py-3"
-            onClick={() => { if (m.direction === 'inbound' && !m.read) markEmailRead(m.id) }}
-          >
+          <div key={m.id} className="px-4 py-3">
             <div className="flex items-baseline gap-2 flex-wrap">
               <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
                 m.direction === 'outbound' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-green-500/20 text-green-300'
@@ -1618,7 +1625,17 @@ function EmailThreadSection({
                 {m.direction === 'outbound' ? 'Sent' : 'Received'}
               </span>
               {m.direction === 'inbound' && !m.read && (
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" title="Unread" />
+                <button
+                  type="button"
+                  onClick={() => markEmailRead(m.id)}
+                  title="Mark as read"
+                  className="inline-flex items-center gap-1 text-xs font-semibold px-1.5 py-0.5 rounded
+                             bg-yellow-900/40 text-yellow-400 hover:bg-yellow-900/60 transition-colors
+                             focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
+                  Unread
+                </button>
               )}
               <span className="text-xs text-gray-400">{fmtTime(m.createdAt)}</span>
             </div>
@@ -2067,9 +2084,10 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
           <button
             onClick={handleAdd}
             disabled={saving || !note.trim()}
-            className="btn-primary text-sm px-4 py-2 self-end disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            className="btn-primary inline-flex items-center gap-1.5 text-sm px-4 py-2 self-end disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
           >
-            {saving ? '…' : 'Save'}
+            {saving && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+            Save
           </button>
         </div>
       </div>
@@ -2899,9 +2917,10 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
             <button
               onClick={() => setEnrollOpen(v => !v)}
               disabled={!!enrolling}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40"
             >
-              {enrolling ? '…' : '+ Enroll'}
+              {enrolling && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+              + Enroll
             </button>
             {enrollOpen && (
               <div className="absolute right-0 top-full mt-1 w-52 max-h-72 overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50">
