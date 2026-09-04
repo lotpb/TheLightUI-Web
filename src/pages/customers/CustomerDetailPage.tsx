@@ -392,23 +392,15 @@ export default function CustomerDetailPage() {
                     {catLabel}
                   </span>
                 )}
-                {/* The status readout is also the control that sets it — see the
-                    note on the action grid below. */}
-                <button
-                  type="button"
-                  onClick={() => customer.isActive ? setConfirmDeactivate(true) : handleToggleActive()}
-                  aria-pressed={customer.isActive}
-                  title={customer.isActive ? 'Deactivate this record' : 'Reactivate this record'}
-                  className={`inline-flex items-center gap-1 shrink-0 text-xs font-medium px-2.5 py-1 rounded-full border
-                              transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-                    customer.isActive
-                      ? 'bg-green-500/15 text-green-400 border-green-600/40 hover:bg-green-500/25'
-                      : 'bg-gray-700/50 text-gray-400 border-gray-500 hover:bg-gray-700'
-                  }`}
-                >
+                {/* A readout, not a control. The Active tile in the action grid
+                    below is the toggle, so this doesn't need to be one too —
+                    one state, one control. Keeps the status dot it gained. */}
+                <span className={`inline-flex items-center gap-1 shrink-0 text-xs font-medium px-2.5 py-1 rounded-full ${
+                  customer.isActive ? 'bg-green-500/15 text-green-400' : 'bg-gray-700/50 text-gray-400'
+                }`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${customer.isActive ? 'bg-green-400' : 'bg-gray-400'}`} />
                   {customer.isActive ? 'Active' : 'Inactive'}
-                </button>
+                </span>
                 {customer.rate && (
                   <span className="inline-flex items-center gap-1 shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
                     <StarIcon className="w-3 h-3" filled />
@@ -424,19 +416,16 @@ export default function CustomerDetailPage() {
               </div>
             </div>
 
-            {/* Grouped, and no longer holding a state toggle.
-                Twelve identical chips in three anonymous rows put "Print" and
-                "Contact" in the same visual class as a write that deactivates
-                the record — and that write fired on a single click with no
-                confirmation. The Active tile is gone: a star means favourite or
-                bookmark, not status, and the same state was already displayed as
-                the Active/Inactive pill directly above. That pill is now the
-                control, which removes the duplicate and puts the toggle next to
-                the thing it describes. Deactivating asks first; reactivating
-                doesn't, since it isn't the destructive direction.
+            {/* Grouped rather than one flat grid of twelve identical chips, so
+                reaching for a document doesn't mean scanning past four exports.
 
-                Labels rather than one flat grid so reaching for a document
-                doesn't mean scanning past four exports. */}
+                Active stays a tile here — it was briefly moved onto the status
+                pill above, which made it hard to find. The pill is a readout
+                again and this is the only control for that state. What did stick
+                from that change is the confirmation: deactivating writes to
+                Firestore and drops the record out of the lists, and it used to
+                happen on one unconfirmed click. Reactivating doesn't ask, not
+                being the destructive direction. */}
             <div className="mt-5 pt-4 border-t border-gray-700/50 space-y-3">
               {(customer.phone || customer.email || customer.street) && (
                 <div>
@@ -469,6 +458,17 @@ export default function CustomerDetailPage() {
                         label="Map"
                       />
                     )}
+                    {/* Active sits here at your request — fifth cell, so with
+                        Call/Message/Email/Map above it wraps to the next line.
+                        It keeps the confirmation on deactivate: this writes to
+                        Firestore and hides the record from the lists, and it
+                        used to fire on a single click. */}
+                    <ActionTile
+                      onClick={() => customer.isActive ? setConfirmDeactivate(true) : handleToggleActive()}
+                      icon={<StarIcon className="w-5 h-5" filled={customer.isActive} />}
+                      label="Active"
+                      active={customer.isActive}
+                    />
                   </div>
                 </div>
               )}
