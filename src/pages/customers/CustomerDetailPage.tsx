@@ -337,7 +337,7 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
         {/* ── Sidebar: identity, status, actions, tags ─────────────────── */}
         <aside className="space-y-4 lg:sticky lg:top-6">
           {/* One identity card, left-aligned, name first.
@@ -380,35 +380,42 @@ export default function CustomerDetailPage() {
                 <p className="text-xl font-bold text-green-400 tabular-nums">{formatCurrency(customer.amount)}</p>
               )}
 
-              {/* Wraps rather than scrolling. flex-nowrap + overflow-x-auto hid
-                  the overflow with no scrollbar, fade or affordance, and in the
-                  fixed 300px sidebar it overflowed as a matter of course: the
-                  card's interior is 252px and category + Active + rating +
-                  Called measure about 269px, so the last pill was simply gone.
-                  Desktop-only, since below lg the column is full width. */}
+              {/* All four pills on one line, which is why the sidebar is 340px
+                  rather than 300px.
+                  At 300px the card's interior was 252px against roughly 295px of
+                  pills — widest case being "Customers" + "Inactive" + a rating +
+                  "Called" — so they never fitted. 340px gives 292px of interior,
+                  and px-2 instead of px-2.5 brings the pills to about 273px:
+                  one line with ~19px spare. whitespace-nowrap stops a label
+                  breaking mid-word inside its own pill.
+
+                  flex-wrap stays as the fallback. It replaced flex-nowrap +
+                  overflow-x-auto, which hid any overflow with no scrollbar,
+                  fade or affordance — so an unexpectedly long label now drops to
+                  a second line instead of vanishing. */}
               <div className="flex flex-wrap gap-1.5 max-w-full">
                 {catLabel && (
-                  <span className="inline-flex items-center shrink-0 text-xs font-medium bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full">
+                  <span className="inline-flex items-center shrink-0 text-xs font-medium bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded-full whitespace-nowrap">
                     {catLabel}
                   </span>
                 )}
                 {/* A readout, not a control. The Active tile in the action grid
                     below is the toggle, so this doesn't need to be one too —
                     one state, one control. Keeps the status dot it gained. */}
-                <span className={`inline-flex items-center gap-1 shrink-0 text-xs font-medium px-2.5 py-1 rounded-full ${
+                <span className={`inline-flex items-center gap-1 shrink-0 text-xs font-medium px-2 py-1 rounded-full whitespace-nowrap ${
                   customer.isActive ? 'bg-green-500/15 text-green-400' : 'bg-gray-700/50 text-gray-400'
                 }`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${customer.isActive ? 'bg-green-400' : 'bg-gray-400'}`} />
                   {customer.isActive ? 'Active' : 'Inactive'}
                 </span>
                 {customer.rate && (
-                  <span className="inline-flex items-center gap-1 shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2.5 py-1 rounded-full">
+                  <span className="inline-flex items-center gap-1 shrink-0 text-xs font-medium bg-yellow-500/15 text-yellow-300 px-2 py-1 rounded-full whitespace-nowrap">
                     <StarIcon className="w-3 h-3" filled />
                     {customer.rate}
                   </span>
                 )}
                 {(customer.category.toLowerCase() === 'vendor' ? customer.salesman : customer.callback).toLowerCase() === 'yes' && (
-                  <span className="inline-flex items-center shrink-0 gap-1 text-xs font-medium bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full">
+                  <span className="inline-flex items-center shrink-0 gap-1 text-xs font-medium bg-green-500/15 text-green-400 px-2 py-1 rounded-full whitespace-nowrap">
                     <svg className="w-3 h-3 fill-current shrink-0" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
                     Called
                   </span>
@@ -3035,7 +3042,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
 }
 
 /**
- * Mirrors the loaded page: max-w-6xl, the same [300px_1fr] two-column grid, the
+ * Mirrors the loaded page: max-w-6xl, the same [340px_1fr] two-column grid, the
  * same card stack in each column.
  *
  * It used to be a max-w-2xl single column built around a 64px circular avatar —
@@ -3056,7 +3063,7 @@ function LoadingSkeleton() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
         <aside className="space-y-4">
           {/* Name */}
           <div className="card px-4 py-2 flex justify-center">
