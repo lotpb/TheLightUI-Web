@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
+import { initializeFirestore, memoryLocalCache } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 import { getFunctions } from 'firebase/functions'
 import { getMessaging, isSupported, type Messaging } from 'firebase/messaging'
@@ -17,9 +17,28 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig)
 
 export const auth    = getAuth(app)
-export const db      = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-})
+
+/**
+ * In-memory cache, not IndexedDB persistence.
+ *
+ * This was persistentLocalCache({ tabManager: persistentMultipleTabManager() }).
+ * Multi-tab persistence elects a primary tab to own the IndexedDB lease; if that
+ * lease goes stale — a tab left open, a crashed tab, a corrupt local database —
+ * the other tabs wait for it and snapshots simply stop arriving. No error is
+ * raised, so onSnapshot's error handler never runs and every screen in the app
+ * sits on its loading state indefinitely. Because the bad state lives in
+ * IndexedDB it also survives a reload, which is what makes it look like a code
+ * regression when it isn't one.
+ *
+ * memoryLocalCache doesn't touch IndexedDB at all, so a poisoned local database
+ * can't block reads and there is no lease to contend over. The cost is offline
+ * reads and a cold cache on each page load; correctness of a listener that
+ * always resolves is worth more than that here.
+ *
+ * To restore offline support, put persistentLocalCache back — but pair it with
+ * a real failure path, because this mode fails silently by design.
+ */
+export const db = initializeFirestore(app, { localCache: memoryLocalCache() })
 export const storage   = getStorage(app)
 export const functions = getFunctions(app)
 
