@@ -74,4 +74,23 @@ export const ICONS = {
   // Hand-drawn rather than Heroicons: their table-cells path is ~1.5kB of
   // per-cell border segments, which is absurd at the 16px this renders at.
   tableGrid: 'M3.75 6.75h16.5v10.5H3.75zM3.75 10.5h16.5M3.75 14.25h16.5M9 6.75v10.5M15 6.75v10.5',
+  home: 'm2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25',
 } as const
+
+/**
+ * Icon per activity type, for the three surfaces that render an activity feed:
+ * /dashboard, /activity and the record page's Activity tab.
+ *
+ * ACTIVITY_TYPES used to carry `icon: '📞'` and friends, so all three drew from
+ * Apple Color Emoji — which ignores `color`, meaning the glyph on a selected
+ * `bg-indigo-600` type pill stayed the same shade as the glyph on an unselected
+ * grey one. It lives here rather than in models/activity because a model has no
+ * business importing from components/, the same reason fileIcon returns a kind.
+ */
+export const ACTIVITY_ICONS: Record<'call' | 'text' | 'email' | 'visit' | 'note', string | readonly string[]> = {
+  call:  ICONS.phone,
+  text:  ICONS.chat,
+  email: ICONS.envelope,
+  visit: ICONS.home,
+  note:  ICONS.pencil,
+}

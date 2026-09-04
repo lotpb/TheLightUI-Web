@@ -37,7 +37,7 @@ import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
 import { dueMeta, isOverdue } from '../utils/dueDate'
-import { Icon, ICONS } from '../components/Icon'
+import { Icon, ICONS, ACTIVITY_ICONS } from '../components/Icon'
 import CollapsibleSection from '../components/CollapsibleSection'
 
 const ACTIVITY_PREVIEW = 20
@@ -1238,7 +1238,7 @@ function ActivityTimelineCard({
                           />
                         </svg>
                       ) : (
-                        <span className="text-xs leading-none">{meta.icon}</span>
+                        <Icon d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note} className="w-3.5 h-3.5 text-gray-400" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0 pt-0.5">

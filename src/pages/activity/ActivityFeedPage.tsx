@@ -5,6 +5,7 @@ import { subscribeToAllActivities } from '../../services/activityService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { fullName, type CustomerItem } from '../../models/customer'
 import { ACTIVITY_TYPES, type Activity, type ActivityType } from '../../models/activity'
+import { Icon, ACTIVITY_ICONS } from '../../components/Icon'
 import { useAuthStore } from '../../stores/authStore'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ export default function ActivityFeedPage() {
                   : 'bg-gray-800 text-gray-400 hover:text-gray-200'
               }`}
             >
-              <span>{t.icon}</span>
+              <Icon d={ACTIVITY_ICONS[t.value]} className="w-3.5 h-3.5 shrink-0" />
               <span>{t.label} ({count})</span>
             </button>
           )
@@ -177,7 +178,7 @@ export default function ActivityFeedPage() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="card p-12 text-center space-y-2">
-          <p className="text-3xl">📝</p>
+          <Icon d={ACTIVITY_ICONS.note} className="w-8 h-8 mx-auto text-gray-400" />
           <p className="text-gray-400 text-sm">
             {enriched.length === 0
               ? 'No activity logged yet. Open a customer record to add the first entry.'
@@ -206,7 +207,7 @@ export default function ActivityFeedPage() {
                       >
                         {/* Icon bubble */}
                         <div className="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 z-10">
-                          <span className="text-sm leading-none">{meta.icon}</span>
+                          <Icon d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note} className="w-4 h-4 text-gray-400" />
                         </div>
 
                         {/* Content */}
