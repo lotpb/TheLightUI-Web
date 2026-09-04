@@ -523,7 +523,6 @@ export default function CustomerDetailPage() {
               <TagsSection
                 customerId={id!}
                 tags={customer.tags ?? []}
-                allTags={[]}
                 onUpdate={tags => setCustomer({ ...customer, tags })}
               />
               {customer.category.toLowerCase() === 'lead' && (
@@ -1262,12 +1261,26 @@ function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?
               <span className="text-gray-300 font-medium capitalize">{entry.action}</span>
               {' by '}{entry.changedBy} · {fmtTime(entry.createdAt)}
             </p>
+            {/* Three tiers, not one. The <li> was text-gray-400 and the field
+                name inside it carried a redundant text-gray-400, so
+                "Phone: 555-1234 → 555-9999" read as one undifferentiated run
+                with only the new value lifted a shade. The field name now
+                anchors the line, the old value stays muted because it's history,
+                and the new value is the emphasis — it's the thing you came to
+                the audit log to see. */}
             {entry.changes.length > 0 && (
               <ul className="mt-1 space-y-0.5">
                 {entry.changes.map((c, i) => (
                   <li key={i} className="text-xs text-gray-400">
-                    <span className="text-gray-400">{fieldLabel(c.field)}</span>
-                    {': '}{c.from || '(empty)'} → <span className="text-gray-300">{c.to || '(empty)'}</span>
+                    <span className="text-gray-300 font-medium">{fieldLabel(c.field)}</span>
+                    {': '}
+                    {c.from
+                      ? <span className="text-gray-400">{c.from}</span>
+                      : <span className="text-gray-400 italic">empty</span>}
+                    {' → '}
+                    {c.to
+                      ? <span className="text-gray-100 font-medium">{c.to}</span>
+                      : <span className="text-gray-400 italic">empty</span>}
                   </li>
                 ))}
               </ul>
@@ -2304,15 +2317,28 @@ function HealthScoreBadge({
 
 // ── Tags ──────────────────────────────────────────────────────────────────────
 
+/**
+ * No `allTags` / no autocomplete.
+ *
+ * The datalist, the `list=` binding and the filtering were all wired to a prop
+ * the page passed as `allTags={[]}`, so it could never suggest anything — an
+ * autocomplete that looked functional and was structurally incapable of
+ * producing a suggestion.
+ *
+ * Removed rather than powered because the only source of company-wide tags is
+ * useSharedCustomers, and mounting that here would open a 5,000-document
+ * listener on a single-record page to feed an autocomplete. If tag consistency
+ * matters, the right fix is a small distinct-tags aggregate, not the whole
+ * customer collection. addTag still lowercases, which handles the common
+ * "Urgent" vs "urgent" split on its own.
+ */
 function TagsSection({
   customerId,
   tags,
-  allTags,
   onUpdate,
 }: {
   customerId: string
   tags: string[]
-  allTags: string[]
   onUpdate: (tags: string[]) => void
 }) {
   const [adding, setAdding] = useState(false)
@@ -2338,9 +2364,6 @@ function TagsSection({
     onUpdate(next)
     await updateTags(customerId, next)
   }
-
-  const suggestions = allTags.filter(t => !tags.includes(t) && t.includes(input.toLowerCase()))
-  const listId = `tag-suggestions-${customerId}`
 
   return (
     <div className="flex flex-wrap items-center gap-2 py-1">
@@ -2368,13 +2391,10 @@ function TagsSection({
 
       {adding ? (
         <div className="flex items-center gap-1">
-          <datalist id={listId}>
-            {suggestions.map(s => <option key={s} value={s} />)}
-          </datalist>
           <input
             ref={inputRef}
-            list={listId}
             value={input}
+            aria-label="New tag name"
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') { e.preventDefault(); addTag(input) }
@@ -2382,7 +2402,7 @@ function TagsSection({
             }}
             onBlur={() => { if (!input.trim()) { setAdding(false) } }}
             placeholder="tag name…"
-            className="bg-gray-800 border border-gray-600 rounded-full px-3 py-1 text-xs text-white placeholder-gray-500 outline-none focus:border-indigo-500 w-28"
+            className="bg-gray-800 border border-gray-600 rounded-full px-3 py-1 text-xs text-white placeholder-gray-400 outline-none focus:border-indigo-500 w-28"
           />
           <button
             onClick={() => addTag(input)}
