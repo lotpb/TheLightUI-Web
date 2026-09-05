@@ -313,6 +313,20 @@ export function formatCurrency(cents: number, currency: string = 'USD'): string 
   return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(cents)
 }
 
+/**
+ * Money with the cents kept. formatCurrency drops them (maximumFractionDigits:
+ * 0), which is right for deal totals and commission sums but wrong for a unit
+ * price: /catalog accepts prices at step="0.01" and then displayed 12.50 as
+ * "$13", 0.99 as "$1" and 149.95 as "$150" — a price list that disagreed with
+ * the invoice it populates. Separate function rather than a change to
+ * formatCurrency, which has eighteen call sites that all want whole dollars.
+ */
+export function formatCurrencyPrecise(amount: number, currency: string = 'USD'): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(amount)
+}
+
 export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'> & { category?: string }): string {
   if (c.category?.toLowerCase() === 'vendor') return c.first || ''
   return [c.first, c.lastname].filter(Boolean).join(' ')

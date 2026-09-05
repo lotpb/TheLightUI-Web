@@ -7,7 +7,8 @@ import type { CatalogItem } from '../../models/catalogItem'
 import { UNIT_OPTIONS, stockLevel, STOCK_LEVEL_LABELS, STOCK_LEVEL_COLORS } from '../../models/catalogItem'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
-import { formatCurrency } from '../../models/customer'
+import { formatCurrencyPrecise } from '../../models/customer'
+import { Icon, ICONS } from '../../components/Icon'
 
 const EMPTY_FORM = {
   name: '', description: '', price: '', unit: 'each', category: '',
@@ -16,10 +17,18 @@ const EMPTY_FORM = {
 
 type FormState = typeof EMPTY_FORM
 
+/** Name or price, within each category group. */
+type SortKey = 'name' | 'price'
+
+/** The group that holds everything without a category, pinned last. */
+const UNCATEGORIZED = 'Uncategorized'
+
 function ItemForm({
-  initial, onSave, onCancel,
+  initial, embedded, onSave, onCancel,
 }: {
   initial?: CatalogItem
+  /** Drops the card chrome for use inside a list row, which is already a card. */
+  embedded?: boolean
   onSave: (f: FormState) => Promise<void>
   onCancel: () => void
 }) {
@@ -48,8 +57,11 @@ function ItemForm({
   }
 
   return (
-    <form onSubmit={submit} className="card p-4 space-y-3 border border-indigo-500/30">
-      <p className="text-sm font-semibold text-white">{initial ? 'Edit Item' : 'New Item'}</p>
+    <form
+      onSubmit={submit}
+      className={embedded ? 'space-y-3' : 'card p-4 space-y-3 border border-indigo-500/30'}
+    >
+      {!embedded && <p className="text-sm font-semibold text-white">New Item</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -139,6 +151,11 @@ function ItemForm({
                 onChange={e => set('lowStockThreshold', e.target.value)}
                 className="input-field w-full text-sm py-1.5"
               />
+              {/* A threshold of 0 silently disables the warning for this item,
+                  since stockLevel only reports 'low' at or below it. */}
+              {form.trackInventory && parseInt(form.lowStockThreshold) === 0 && (
+                <p className="text-xs text-gray-400 mt-1">0 means never warn about low stock.</p>
+              )}
             </div>
           </div>
         )}
@@ -149,9 +166,10 @@ function ItemForm({
         <button
           type="submit"
           disabled={saving || !form.name.trim()}
-          className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 transition-colors"
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 transition-colors"
         >
-          {saving ? 'Saving…' : initial ? 'Save Changes' : 'Add Item'}
+          {saving && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+          {initial ? 'Save Changes' : 'Add Item'}
         </button>
       </div>
     </form>
@@ -169,6 +187,8 @@ export default function CatalogPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [editId, setEditId]   = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<SortKey>('name')
+  const [lowOnly, setLowOnly] = useState(false)
 
   useEffect(() => {
     const unsub = subscribeToCatalog(
@@ -178,88 +198,151 @@ export default function CatalogPage() {
     return unsub
   }, [companyId])
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(i =>
-      i.name.toLowerCase().includes(q) ||
-      i.description.toLowerCase().includes(q) ||
-      i.category.toLowerCase().includes(q),
-    )
-  }, [items, search])
-
   const lowStockItems = useMemo(
     () => items.filter(i => { const lvl = stockLevel(i); return lvl === 'low' || lvl === 'out' }),
     [items],
   )
 
-  // Group by category
+  // Only honoured while there's something low. Otherwise restocking the last
+  // item would hide the banner — and with it the "Show all" button — leaving the
+  // filter stuck on and the list permanently empty with no way back.
+  const lowFilterActive = lowOnly && lowStockItems.length > 0
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    let out = items
+    if (lowFilterActive) {
+      const lowIds = new Set(lowStockItems.map(i => i.id))
+      out = out.filter(i => lowIds.has(i.id))
+    }
+    if (!q) return out
+    return out.filter(i =>
+      i.name.toLowerCase().includes(q) ||
+      i.description.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q),
+    )
+  }, [items, search, lowFilterActive, lowStockItems])
+
+  // Grouped by category, with a deliberate order in both dimensions. Items used
+  // to appear in whatever order the subscription returned, and "Uncategorized"
+  // sorted under U — between "Parts" and "Warranty" — rather than after the
+  // real categories.
   const grouped = useMemo(() => {
     const map = new Map<string, CatalogItem[]>()
     for (const item of filtered) {
-      const cat = item.category.trim() || 'Uncategorized'
+      const cat = item.category.trim() || UNCATEGORIZED
       if (!map.has(cat)) map.set(cat, [])
       map.get(cat)!.push(item)
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [filtered])
+    for (const list of map.values()) {
+      list.sort((a, b) => sortKey === 'price'
+        ? a.price - b.price || a.name.localeCompare(b.name)
+        : a.name.localeCompare(b.name))
+    }
+    return [...map.entries()].sort(([a], [b]) => {
+      if (a === UNCATEGORIZED) return 1
+      if (b === UNCATEGORIZED) return -1
+      return a.localeCompare(b)
+    })
+  }, [filtered, sortKey])
 
   async function handleAdd(f: FormState) {
-    await addCatalogItem(
-      f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
-      f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
-    )
-    setShowAdd(false)
-    toast('Item added', 'success')
+    try {
+      await addCatalogItem(
+        f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
+        f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
+      )
+      setShowAdd(false)
+      toast('Item added', 'success')
+    } catch {
+      toast('Could not add that item', 'error')
+    }
   }
 
   async function handleEdit(id: string, f: FormState) {
-    await updateCatalogItem(
-      id, f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
-      f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
-    )
-    setEditId(null)
-    toast('Item updated', 'success')
+    try {
+      await updateCatalogItem(
+        id, f.name.trim(), f.description.trim(), parseFloat(f.price) || 0, f.unit, f.category.trim(),
+        f.trackInventory, parseInt(f.stockQty) || 0, parseInt(f.lowStockThreshold) || 0,
+      )
+      setEditId(null)
+      toast('Item updated', 'success')
+    } catch {
+      toast('Could not save that item', 'error')
+    }
   }
 
+  // Every mutation reports failure now. These four were bare awaits, so a
+  // rejected write produced an unhandled rejection and a UI that looked like it
+  // had succeeded — on the stock stepper that means the number on screen no
+  // longer matches Firestore.
   async function handleAdjustStock(id: string, delta: number) {
-    await adjustStock(id, delta)
+    try {
+      await adjustStock(id, delta)
+    } catch {
+      toast('Could not update stock', 'error')
+    }
   }
 
   async function handleDelete(id: string) {
-    await deleteCatalogItem(id)
-    setDeleteId(null)
-    toast('Item removed', 'success')
+    try {
+      await deleteCatalogItem(id)
+      setDeleteId(null)
+      toast('Item removed', 'success')
+    } catch {
+      toast('Could not remove that item', 'error')
+    }
   }
+
+  const lowNames = lowStockItems.slice(0, 4).map(i => i.name)
+  const lowExtra = lowStockItems.length - lowNames.length
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-white">Product Catalog</h1>
           <p className="text-sm text-gray-400 mt-0.5">Items you can add to invoices in one click</p>
         </div>
-        {!showAdd && (
-          <button
-            onClick={() => { setShowAdd(true); setEditId(null) }}
-            className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors"
-          >
-            + Add Item
-          </button>
-        )}
+        {/* Stays mounted and goes disabled while the form is open. Unmounting it
+            made the page's one "add" affordance vanish at the moment of adding,
+            and reflowed the header. */}
+        <button
+          onClick={() => { setShowAdd(true); setEditId(null) }}
+          disabled={showAdd}
+          className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium
+                     hover:bg-indigo-500 disabled:opacity-40 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+        >
+          <Icon d={ICONS.plus} className="w-4 h-4 shrink-0" />
+          Add Item
+        </button>
       </div>
 
-      {/* Low stock banner */}
+      {/* Low stock banner. Was an unbounded comma-joined list of every low item's
+          name with nothing clickable in it — thirty low items was a paragraph you
+          then had to search for by hand. Caps the names and offers the filter
+          instead. bg-yellow-900/30 + text-yellow-400 rather than
+          bg-yellow-950/20 + yellow-300, because those two have light-mode rules
+          and the originals measured 1.13:1 there. */}
       {lowStockItems.length > 0 && (
-        <div className="card p-3 border-yellow-700/40 bg-yellow-950/20 flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-yellow-300">
-            ⚠ {lowStockItems.length} item{lowStockItems.length !== 1 ? 's' : ''} low or out of stock:
-          </span>
-          <span className="text-sm text-yellow-200">
-            {lowStockItems.map(i => i.name).join(', ')}
-          </span>
+        <div className="card p-3 border-yellow-700/30 bg-yellow-900/30 flex items-start gap-2 flex-wrap">
+          <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5 text-yellow-400" />
+          <p className="text-sm text-yellow-400 flex-1 min-w-0">
+            {lowStockItems.length} item{lowStockItems.length !== 1 ? 's' : ''} low or out of stock
+            {lowNames.length > 0 && <>: {lowNames.join(', ')}{lowExtra > 0 && ` and ${lowExtra} more`}</>}
+          </p>
+          <button
+            onClick={() => setLowOnly(v => !v)}
+            aria-pressed={lowFilterActive}
+            className="shrink-0 text-xs font-medium px-2 py-1 rounded-lg bg-yellow-900/40 text-yellow-400
+                       hover:bg-yellow-900/60 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            {lowFilterActive ? 'Show all' : 'Show only these'}
+          </button>
         </div>
       )}
 
@@ -271,15 +354,48 @@ export default function CatalogPage() {
         />
       )}
 
-      {/* Search */}
+      {/* Search + sort */}
       {items.length > 0 && (
-        <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search items…"
-          className="input-field w-full text-sm py-2"
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[12rem]">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search items…"
+              aria-label="Search catalog items by name, description or category"
+              className="input-field w-full text-sm py-2 pr-9"
+            />
+            {/* Clearing used to mean selecting the text and deleting it. */}
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded text-gray-400
+                           hover:text-gray-200 hover:bg-gray-700/50 transition-colors
+                           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.close} className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-xs text-gray-400">Sort</span>
+            {(['name', 'price'] as SortKey[]).map(k => (
+              <button
+                key={k}
+                onClick={() => setSortKey(k)}
+                aria-pressed={sortKey === k}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize transition-colors
+                            focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  sortKey === k ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* List */}
@@ -287,92 +403,115 @@ export default function CatalogPage() {
         <div className="card animate-pulse h-40" />
       ) : items.length === 0 ? (
         <div className="card p-12 text-center">
-          <p className="text-3xl mb-3">📦</p>
+          <Icon d={ICONS.tag} className="w-8 h-8 mx-auto mb-3 text-gray-400" />
           <p className="text-gray-400 text-sm">No items in your catalog yet.</p>
-          <p className="text-gray-600 text-xs mt-1">Add products and services to quickly populate invoices.</p>
+          <p className="text-gray-400 text-xs mt-1">Add products and services to quickly populate invoices.</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card p-8 text-center">
-          <p className="text-gray-500 text-sm">No items match "{search}"</p>
+        <div className="card p-8 text-center space-y-3">
+          <p className="text-gray-400 text-sm">
+            {lowFilterActive && !search.trim()
+              ? 'Nothing matches — the low-stock filter is on.'
+              : `No items match "${search}"`}
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            {search && (
+              <button onClick={() => setSearch('')} className="text-sm text-indigo-400 hover:text-indigo-300">
+                Clear search
+              </button>
+            )}
+            {lowFilterActive && (
+              <button onClick={() => setLowOnly(false)} className="text-sm text-indigo-400 hover:text-indigo-300">
+                Show all items
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
           {grouped.map(([category, catItems]) => (
             <div key={category}>
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">{category}</p>
+              <p className="card-section-title mb-2 px-1">{category}</p>
               <div className="card divide-y divide-gray-700/40">
                 {catItems.map(item => (
-                  editId === item.id ? (
-                    <div key={item.id} className="p-3">
-                      <ItemForm
-                        initial={item}
-                        onSave={f => handleEdit(item.id, f)}
-                        onCancel={() => setEditId(null)}
-                      />
-                    </div>
-                  ) : (
-                    <div key={item.id} className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-800/30 transition-colors">
+                  <div key={item.id} className="px-4 py-3 hover:bg-gray-800/30 transition-colors">
+                    <div className="flex items-center gap-3">
                       {/* Name + desc */}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-200 truncate">{item.name}</p>
                         {item.description && (
-                          <p className="text-xs text-gray-500 truncate mt-0.5">{item.description}</p>
+                          <p className="text-xs text-gray-400 truncate mt-0.5">{item.description}</p>
                         )}
                       </div>
 
                       {/* Stock */}
                       {item.trackInventory && (
                         <div className="shrink-0 flex items-center gap-1.5">
+                          {/* Icons rather than − (U+2212) and + as typeset text,
+                              so they inherit the button's disabled state. */}
                           <button
                             onClick={() => handleAdjustStock(item.id, -1)}
                             disabled={item.stockQty <= 0}
-                            className="w-6 h-6 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm leading-none disabled:opacity-30 transition-colors"
+                            aria-label={`Decrease stock of ${item.name}`}
+                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-gray-700 hover:bg-gray-600
+                                       text-gray-300 disabled:opacity-30 transition-colors
+                                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                           >
-                            −
+                            <Icon d={ICONS.minus} className="w-3.5 h-3.5" />
                           </button>
                           <div className="text-center w-12">
-                            <p className="text-sm font-semibold text-gray-200">{item.stockQty}</p>
+                            <p className="text-sm font-semibold text-gray-200 tabular-nums">{item.stockQty}</p>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${STOCK_LEVEL_COLORS[stockLevel(item)]}`}>
                               {STOCK_LEVEL_LABELS[stockLevel(item)]}
                             </span>
                           </div>
                           <button
                             onClick={() => handleAdjustStock(item.id, 1)}
-                            className="w-6 h-6 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm leading-none transition-colors"
+                            aria-label={`Increase stock of ${item.name}`}
+                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-gray-700 hover:bg-gray-600
+                                       text-gray-300 transition-colors
+                                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                           >
-                            +
+                            <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       )}
 
-                      {/* Price + unit */}
+                      {/* Price + unit. The unit is what the price is denominated
+                          in — "per hr" vs "per job" changes the quote — so it's
+                          gray-400 (5.78:1) rather than gray-600 (1.94:1). */}
                       <div className="shrink-0 text-right">
-                        <p className="text-sm font-semibold text-green-400">{formatCurrency(item.price)}</p>
-                        <p className="text-xs text-gray-600">per {item.unit}</p>
+                        <p className="text-sm font-semibold text-green-400 tabular-nums">{formatCurrencyPrecise(item.price)}</p>
+                        <p className="text-xs text-gray-400">per {item.unit}</p>
                       </div>
 
-                      {/* Actions */}
-                      <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {/* Actions. Were opacity-0 group-hover:opacity-100, which
+                          on a touch device meant there was no way to edit or
+                          delete a catalogue item at all. */}
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
-                          onClick={() => { setEditId(item.id); setShowAdd(false) }}
-                          className="p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+                          onClick={() => { setEditId(editId === item.id ? null : item.id); setShowAdd(false) }}
+                          aria-label={`Edit ${item.name}`}
+                          aria-expanded={editId === item.id}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors
+                                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                           title="Edit"
                         >
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
-                          </svg>
+                          <Icon d={ICONS.pencil} className="w-3.5 h-3.5" />
                         </button>
                         {deleteId === item.id ? (
                           <div className="flex items-center gap-1">
                             <button
                               onClick={() => handleDelete(item.id)}
-                              className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded"
+                              className="text-xs font-medium text-red-400 hover:text-red-300 px-2 py-1 rounded
+                                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                             >
                               Delete
                             </button>
                             <button
                               onClick={() => setDeleteId(null)}
-                              className="text-xs text-gray-500 hover:text-gray-300 px-1 py-1"
+                              className="text-xs text-gray-400 hover:text-gray-200 px-1 py-1 rounded
+                                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                             >
                               Cancel
                             </button>
@@ -380,17 +519,32 @@ export default function CatalogPage() {
                         ) : (
                           <button
                             onClick={() => setDeleteId(item.id)}
-                            className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-gray-700 transition-colors"
+                            aria-label={`Delete ${item.name}`}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-gray-700 transition-colors
+                                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                             title="Delete"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                            </svg>
+                            <Icon d={ICONS.trash} className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
                     </div>
-                  )
+
+                    {/* The form opens beneath the row instead of replacing it, so
+                        the item you're editing stays on screen and the rows below
+                        don't jump. `embedded` drops the form's own card and indigo
+                        border, which nested a card inside this one. */}
+                    {editId === item.id && (
+                      <div className="mt-3 pt-3 border-t border-gray-700/40">
+                        <ItemForm
+                          initial={item}
+                          embedded
+                          onSave={f => handleEdit(item.id, f)}
+                          onCancel={() => setEditId(null)}
+                        />
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
@@ -399,7 +553,7 @@ export default function CatalogPage() {
       )}
 
       {items.length > 0 && (
-        <p className="text-xs text-gray-600 text-center pb-2">
+        <p className="text-xs text-gray-400 text-center pb-2">
           {items.length} item{items.length !== 1 ? 's' : ''} · shared with your team · used in invoices
         </p>
       )}
