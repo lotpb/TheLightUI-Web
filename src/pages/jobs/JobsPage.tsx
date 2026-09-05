@@ -10,6 +10,7 @@ import { useSharedCustomers } from '../../hooks/useSharedCustomers'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 import PipelineJobsTabs from '../../components/PipelineJobsTabs'
+import { Icon, ICONS } from '../../components/Icon'
 
 const DAY_MS = 86_400_000
 const COLLECTION = 'Customers'
@@ -17,8 +18,36 @@ const COLLECTION = 'Customers'
 function fmtDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+/**
+ * Local calendar date, not UTC.
+ *
+ * This used toISOString().slice(0, 10), so for anyone west of UTC the date
+ * input pre-filled the previous day — in the one control whose entire job is
+ * picking a date.
+ */
 function toDateInputStr(d: Date | null | undefined): string {
-  return d ? d.toISOString().slice(0, 10) : ''
+  if (!d) return ''
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/**
+ * A clock that advances, so the board does too.
+ *
+ * `now` was memoised once per mount, and every stage derivation and the overdue
+ * count read it — so on a board left open all day a job whose start date
+ * arrived never moved from Scheduled to In Progress and nothing ever became
+ * overdue. JobCard also called its own new Date(), so a card could read
+ * "2d overdue" while sitting in a column bucketed against a stale clock.
+ */
+function useNow(intervalMs = 60_000): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), intervalMs)
+    return () => clearInterval(id)
+  }, [intervalMs])
+  return now
 }
 function addDays(d: Date, n: number): Date {
   const copy = new Date(d)
@@ -66,9 +95,12 @@ export default function JobsPage() {
   const coloredAvatars = usePrefStore(s => s.coloredAvatars)
   const { items: all, loading, hitCap } = useSharedCustomers()
 
-  const now = useMemo(() => new Date(), [])
+  const now = useNow()
 
   const [search, setSearch] = useState('')
+  // Per-column "show more", so a busy column can be expanded in place rather
+  // than sending you to an unfiltered customer list.
+  const [expanded, setExpanded] = useState<Partial<Record<JobStage, boolean>>>({})
 
   // Drag state
   const [draggingId,    setDraggingId]    = useState<string | null>(null)
@@ -112,7 +144,11 @@ export default function JobsPage() {
 
   const totalActive = columns.active.reduce((s, c) => s + c.amount, 0)
   const totalComplete = columns.complete.reduce((s, c) => s + c.amount, 0)
-  const overdueCount = columns.active.filter(c => c.completionDate && c.completionDate.getTime() < Date.now()).length
+  const totalScheduled = columns.scheduled.reduce((s, c) => s + c.amount, 0)
+  // Reads the same clock the columns do. This used Date.now() while the buckets
+  // used the frozen `now`, so the strip's overdue figure and the red text on
+  // the cards could disagree.
+  const overdueCount = columns.active.filter(c => c.completionDate && c.completionDate.getTime() < now.getTime()).length
 
   // Drag handlers
   function onDragStart(id: string) {
@@ -186,29 +222,44 @@ export default function JobsPage() {
       />
 
       {hitCap && (
-        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4">
-          ⚠ Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some jobs may not appear on this board — contact support to raise this limit.
+        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4 flex items-start gap-2">
+          <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+          Showing the first {REALTIME_LIMIT.toLocaleString()} records only. Some jobs may not appear on this board — contact support to raise this limit.
         </div>
       )}
 
-      {/* Summary strip */}
-      {!loading && (columns.active.length > 0 || columns.complete.length > 0 || overdueCount > 0) && (
+      {/* Summary strip. It was gated on active/complete/overdue all being zero,
+          so a shop that hadn't started anything yet — only Pending and
+          Scheduled work — got no summary at all, and neither of those stages
+          ever showed a total. Shows whenever there's a job on the board. */}
+      {!loading && (columns.pending.length + columns.scheduled.length + columns.active.length + columns.complete.length) > 0 && (
         <div className="flex gap-3 mb-4 flex-wrap">
+          {columns.pending.length > 0 && (
+            <div className="bg-gray-800 border border-gray-700 rounded-xl px-4 py-2 flex items-center gap-3">
+              <span className="text-xs text-gray-300 font-medium tabular-nums">{columns.pending.length} pending</span>
+            </div>
+          )}
+          {columns.scheduled.length > 0 && (
+            <div className="bg-blue-900/40 border border-blue-700/40 rounded-xl px-4 py-2 flex items-center gap-3">
+              <span className="text-xs text-blue-400 font-medium tabular-nums">{columns.scheduled.length} scheduled</span>
+              {totalScheduled > 0 && <span className="text-sm font-semibold text-blue-400 tabular-nums">{formatCurrency(totalScheduled)}</span>}
+            </div>
+          )}
           {columns.active.length > 0 && (
             <div className="bg-teal-900/30 border border-teal-700/40 rounded-xl px-4 py-2 flex items-center gap-3">
-              <span className="text-xs text-teal-400 font-medium">{columns.active.length} in progress</span>
-              {totalActive > 0 && <span className="text-sm font-semibold text-teal-300">{formatCurrency(totalActive)}</span>}
+              <span className="text-xs text-teal-400 font-medium tabular-nums">{columns.active.length} in progress</span>
+              {totalActive > 0 && <span className="text-sm font-semibold text-teal-400 tabular-nums">{formatCurrency(totalActive)}</span>}
             </div>
           )}
           {overdueCount > 0 && (
             <div className="bg-red-900/30 border border-red-700/40 rounded-xl px-4 py-2 flex items-center gap-3">
-              <span className="text-xs text-red-400 font-medium">{overdueCount} overdue</span>
+              <span className="text-xs text-red-400 font-medium tabular-nums">{overdueCount} overdue</span>
             </div>
           )}
           {columns.complete.length > 0 && (
             <div className="bg-green-900/30 border border-green-700/40 rounded-xl px-4 py-2 flex items-center gap-3">
-              <span className="text-xs text-green-400 font-medium">{columns.complete.length} complete</span>
-              {totalComplete > 0 && <span className="text-sm font-semibold text-green-300">{formatCurrency(totalComplete)}</span>}
+              <span className="text-xs text-green-400 font-medium tabular-nums">{columns.complete.length} complete</span>
+              {totalComplete > 0 && <span className="text-sm font-semibold text-green-400 tabular-nums">{formatCurrency(totalComplete)}</span>}
             </div>
           )}
         </div>
@@ -234,23 +285,27 @@ export default function JobsPage() {
                   <div className="flex items-center gap-2 mb-3">
                     <div className={`h-1 w-4 rounded-full ${barClass}`} />
                     <span className={`text-sm font-semibold ${colorClass}`}>{label}</span>
-                    <span className={`text-xs font-bold text-white px-2 py-0.5 rounded-full ${badgeClass}`}>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full tabular-nums ${badgeClass}`}>
                       {items.length}
                     </span>
                   </div>
                   {items.length === 0 ? (
-                    <p className="text-xs text-gray-500 pl-6">{emptyMsg}</p>
+                    <p className="text-xs text-gray-400 pl-6">{emptyMsg}</p>
                   ) : (
                     <div className="space-y-2">
-                      {items.slice(0, MAX_PER_COL).map(c => (
-                        <JobCard key={c.id} customer={c} stage={id} coloredAvatars={coloredAvatars}
+                      {(expanded[id] ? items : items.slice(0, MAX_PER_COL)).map(c => (
+                        <JobCard key={c.id} customer={c} stage={id} now={now} coloredAvatars={coloredAvatars}
                           isDragging={false} onDragStart={() => {}} onDragEnd={() => {}} draggable={false}
                           onMove={targetStage => moveCard(c.id, targetStage)} />
                       ))}
-                      {items.length > MAX_PER_COL && (
-                        <Link to="/customers" className="block text-xs text-center text-indigo-400 hover:text-indigo-300 py-2">
-                          +{items.length - MAX_PER_COL} more →
-                        </Link>
+                      {items.length > MAX_PER_COL && !expanded[id] && (
+                        <button
+                          type="button"
+                          onClick={() => setExpanded(e => ({ ...e, [id]: true }))}
+                          className="block w-full text-xs text-center text-indigo-400 hover:text-indigo-300 py-2"
+                        >
+                          Show {items.length - MAX_PER_COL} more
+                        </button>
                       )}
                     </div>
                   )}
@@ -263,7 +318,7 @@ export default function JobsPage() {
           <div className="hidden md:flex gap-3 overflow-x-auto pb-4 items-start">
             {STAGE_CONFIG.map(({ id, label, colorClass, barClass, badgeClass, emptyMsg }) => {
               const items = columns[id]
-              const shown = items.slice(0, MAX_PER_COL)
+              const shown = expanded[id] ? items : items.slice(0, MAX_PER_COL)
               const overflow = items.length - shown.length
               const isOver = dragOverStage === id
               return (
@@ -280,7 +335,7 @@ export default function JobsPage() {
                   <div className={`h-1 ${barClass}`} />
                   <div className="flex items-center justify-between px-3 py-3">
                     <span className={`text-sm font-semibold ${colorClass}`}>{label}</span>
-                    <span className={`text-xs font-bold text-white px-2 py-0.5 rounded-full ${badgeClass}`}>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full tabular-nums ${badgeClass}`}>
                       {items.length}
                     </span>
                   </div>
@@ -291,13 +346,14 @@ export default function JobsPage() {
                   )}
                   <div className="flex flex-col gap-2 px-2 pb-3 overflow-y-auto" style={{ maxHeight: 'calc(100dvh - 240px)' }}>
                     {shown.length === 0 && !isOver ? (
-                      <p className="text-xs text-gray-500 text-center py-8">{emptyMsg}</p>
+                      <p className="text-xs text-gray-400 text-center py-8">{emptyMsg}</p>
                     ) : (
                       shown.map(c => (
                         <JobCard
                           key={c.id}
                           customer={c}
                           stage={id}
+                          now={now}
                           coloredAvatars={coloredAvatars}
                           draggable
                           isDragging={draggingId === c.id}
@@ -307,10 +363,18 @@ export default function JobsPage() {
                         />
                       ))
                     )}
+                    {/* Expands the column instead of navigating to an
+                        unfiltered customer list, which threw away the stage
+                        context you were looking at. */}
                     {overflow > 0 && (
-                      <Link to="/customers" className="text-xs text-center text-indigo-400 hover:text-indigo-300 py-2 transition-colors">
-                        +{overflow} more →
-                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(e => ({ ...e, [id]: true }))}
+                        className="text-xs text-center text-indigo-400 hover:text-indigo-300 py-2 transition-colors
+                                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+                      >
+                        Show {overflow} more
+                      </button>
                     )}
                   </div>
                 </div>
@@ -357,6 +421,10 @@ function JobScheduleModal({
   const resultStage = start && completion ? deriveStageFromDates(start, completion, new Date()) : null
   const matches = resultStage === targetStage
   const targetLabel = STAGE_CONFIG.find(s => s.id === targetStage)?.label ?? targetStage
+  // The only genuine blocker: a completion on or before the start isn't a
+  // schedule at all. Landing in a different column than the one you dropped on
+  // is a fact to report, not an error to prevent.
+  const canSave = !!start && !!completion && completion > start
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
@@ -364,14 +432,14 @@ function JobScheduleModal({
         <h3 className="text-base font-semibold text-white mb-1">Set Job Dates</h3>
         <p className="text-xs text-gray-400 mb-4">Choose a start and completion date to move this job to {targetLabel}.</p>
 
-        <label className="block text-xs text-gray-500 mb-1">Start date</label>
+        <label className="block text-xs text-gray-400 mb-1">Start date</label>
         <input
           type="date"
           value={startStr}
           onChange={e => setStartStr(e.target.value)}
           className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white mb-3 focus:outline-none focus:border-orange-500"
         />
-        <label className="block text-xs text-gray-500 mb-1">Completion date</label>
+        <label className="block text-xs text-gray-400 mb-1">Completion date</label>
         <input
           type="date"
           value={endStr}
@@ -379,20 +447,32 @@ function JobScheduleModal({
           className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white mb-2 focus:outline-none focus:border-orange-500"
         />
 
+        {/* Says where the dates will file the job, and lets you save anyway.
+            Confirm used to be disabled until the dates happened to imply the
+            column you dropped on — so the modal took a deliberate action, then
+            refused it and asked you to change your mind. The dates are the
+            truth; the column follows from them. */}
         {!matches && start && completion && (
-          <p className="text-xs text-amber-400 mb-3">
-            These dates would land in "{STAGE_CONFIG.find(s => s.id === resultStage)?.label ?? resultStage}" instead — adjust to match {targetLabel}.
+          <p className="flex items-start gap-1.5 text-xs text-amber-400 mb-3">
+            <Icon d={ICONS.warning} className="w-3.5 h-3.5 shrink-0 mt-px" />
+            These dates put this job in "{STAGE_CONFIG.find(s => s.id === resultStage)?.label ?? resultStage}", not {targetLabel}.
+          </p>
+        )}
+        {completion && start && completion <= start && (
+          <p className="flex items-start gap-1.5 text-xs text-red-400 mb-3">
+            <Icon d={ICONS.warning} className="w-3.5 h-3.5 shrink-0 mt-px" />
+            The completion date must be after the start date.
           </p>
         )}
 
         <div className="flex gap-2 justify-end mt-2">
           <button onClick={onCancel} className="btn-secondary text-sm px-4 py-2">Cancel</button>
           <button
-            onClick={() => { if (start && completion && matches) onConfirm(start, completion) }}
-            disabled={!start || !completion || !matches}
+            onClick={() => { if (canSave && start && completion) onConfirm(start, completion) }}
+            disabled={!canSave}
             className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
           >
-            Confirm
+            {matches ? 'Confirm' : `Save as ${STAGE_CONFIG.find(s => s.id === resultStage)?.label ?? resultStage}`}
           </button>
         </div>
       </div>
@@ -405,6 +485,7 @@ function JobScheduleModal({
 function JobCard({
   customer: c,
   stage,
+  now,
   coloredAvatars,
   draggable,
   isDragging,
@@ -414,6 +495,9 @@ function JobCard({
 }: {
   customer: CustomerItem
   stage: JobStage
+  /** The page's clock, so the card and the column it sits in agree. It used to
+   *  call its own new Date() while the buckets read a frozen one. */
+  now: Date
   coloredAvatars: boolean
   draggable: boolean
   isDragging: boolean
@@ -425,7 +509,6 @@ function JobCard({
   const initials = [c.first[0], c.lastname[0]].filter(Boolean).join('').toUpperCase()
   const color   = coloredAvatars ? avatarColor(name) : avatarOriginal()
 
-  const now = new Date()
   const daysUntilComplete = stage === 'active' && c.completionDate
     ? Math.ceil((c.completionDate.getTime() - now.getTime()) / DAY_MS)
     : null
@@ -503,28 +586,18 @@ function JobCard({
           )}
         </div>
 
-        {/* Location + directions */}
+        {/* Location only. The directions link moved out of this <Link> — an
+            <a> cannot contain another <a>, so the browser was un-nesting them
+            and the card's own navigation became unreliable. It now sits in the
+            trailing action rail beside the stage menu, which is where the
+            other routes put interactive content that can't live inside a link. */}
         {(c.city || c.street) && (
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs text-gray-500 truncate">{[c.city, c.state].filter(Boolean).join(', ')}</p>
-            <a
-              href={directionsUrl(c)}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={e => e.stopPropagation()}
-              title="Get directions"
-              className="text-indigo-400 hover:text-indigo-300 shrink-0"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 1.447-.894L9 7m0 13l6-3m-6-10l6 3m0 0l5.447-2.724A1 1 0 0 1 21 5.618v10.764a1 1 0 0 1-.553.894L15 20m0-13v13" />
-              </svg>
-            </a>
-          </div>
+          <p className="text-xs text-gray-400 truncate">{[c.city, c.state].filter(Boolean).join(', ')}</p>
         )}
 
         {/* Dates */}
         {stage !== 'pending' && (
-          <div className="text-xs text-gray-500 space-y-0.5">
+          <div className="text-xs text-gray-400 space-y-0.5">
             {stage === 'scheduled' && (
               <p>Starts {c.startDate ? fmtDate(c.startDate) : ''}</p>
             )}
@@ -536,24 +609,46 @@ function JobCard({
               </p>
             )}
             {stage === 'complete' && (
-              <p className="text-green-500/70">Completed {c.completionDate ? fmtDate(c.completionDate) : ''}</p>
+              <p className="text-green-400">Completed {c.completionDate ? fmtDate(c.completionDate) : ''}</p>
             )}
           </div>
         )}
 
         {/* Salesman */}
         {c.salesman && (
-          <p className="text-xs text-gray-500 truncate">{c.salesman}</p>
+          <p className="text-xs text-gray-400 truncate">{c.salesman}</p>
         )}
       </Link>
-      <div className="relative shrink-0 pt-2 pr-1" ref={menuRef}>
+      {/* Trailing action rail: the two controls that can't live inside the
+          card's <Link>. */}
+      <div className="relative shrink-0 flex flex-col items-center gap-1 pt-2 pr-1" ref={menuRef}>
+        {(c.city || c.street) && (
+          <a
+            href={directionsUrl(c)}
+            target="_blank"
+            rel="noopener noreferrer"
+            draggable={false}
+            title="Get directions"
+            aria-label={`Get directions to ${name || 'this job'}`}
+            className="w-7 h-7 flex items-center justify-center rounded-full text-indigo-400 hover:text-indigo-300 hover:bg-gray-700/60 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            <Icon d={ICONS.mapPin} className="w-4 h-4" />
+          </a>
+        )}
+        {/* This is the only way to move a card on a touch device — HTML5 drag
+            events never fire from a touch gesture — so it's a real 28px icon
+            button rather than a ⋯ text character at 1.94:1. */}
         <button
           type="button"
           onClick={() => setMenuOpen(v => !v)}
-          className="w-6 h-6 flex items-center justify-center rounded-full text-gray-500 hover:text-gray-200 hover:bg-gray-700/60 transition-colors"
-          aria-label="Move to another stage"
+          title="Move to another stage"
+          aria-label={`Move ${name || 'this job'} to another stage`}
+          aria-expanded={menuOpen}
+          className="w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-200 hover:bg-gray-700/60 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
-          ⋯
+          <Icon d={ICONS.ellipsis} className="w-4 h-4" />
         </button>
         {menuOpen && (
           <div className="absolute right-0 top-full mt-1 w-40 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">

@@ -204,6 +204,7 @@ html.light-mode .bg-teal-600,
    `${cfg.dot} text-white`, and text-white resolves to --color-white — dark navy
    in light mode — so the active chip's label went dark-on-saturated for five of
    the six event types. */
+html.light-mode .bg-blue-600,
 html.light-mode .bg-rose-500,
 html.light-mode .bg-teal-500,
 html.light-mode .bg-green-500,
@@ -252,6 +253,10 @@ html.light-mode .text-teal-400   { color: #115e59 !important; }
    so they don't need the 800s the yellows did. */
 html.light-mode .text-rose-400   { color: #be123c !important; }
 html.light-mode .text-violet-400 { color: #6d28d9 !important; }
+/* /jobs' Scheduled column label, at 2.54:1 on a white card — the only stage of
+   the four whose name was unreadable in light mode. blue-700 clears AA on card,
+   page and bg-gray-700 (6.70/6.12/4.83). */
+html.light-mode .text-blue-400   { color: #1d4ed8 !important; }
 /* The 200 shades are paler still, and every place they're used (idle sign-out
    banner, duplicate warnings, low-stock list, code chips) sits on a surface that
    goes white or pale-tinted in light mode, so they vanish without this. */
