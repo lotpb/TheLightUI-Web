@@ -8,6 +8,7 @@ import type { Todo } from '../../models/todo'
 import type { ServicePlan } from '../../models/servicePlan'
 import { useAuthStore } from '../../stores/authStore'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { Icon, ICONS } from '../../components/Icon'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,16 +25,27 @@ interface CalEvent {
   linkTo:    string
 }
 
-const EVENT_CONFIG: Record<EventType, { label: string; color: string; dot: string; bg: string; icon: string }> = {
-  'appt':         { label: 'Appointment', color: 'text-indigo-400', dot: 'bg-indigo-500',  bg: 'bg-indigo-500/15 text-indigo-200',  icon: '📅' },
-  'job-start':    { label: 'Job Start',   color: 'text-teal-400',   dot: 'bg-teal-500',    bg: 'bg-teal-500/15 text-teal-200',      icon: '🔨' },
-  'job-complete': { label: 'Job Done',    color: 'text-green-400',  dot: 'bg-green-500',   bg: 'bg-green-500/15 text-green-200',    icon: '✅' },
-  'followup':     { label: 'Follow-up',   color: 'text-rose-400',   dot: 'bg-rose-500',    bg: 'bg-rose-500/15 text-rose-200',      icon: '🔔' },
-  'task':         { label: 'Task',        color: 'text-violet-400', dot: 'bg-violet-500',  bg: 'bg-violet-500/15 text-violet-200',  icon: '☐'  },
-  'serviceplan':  { label: 'Service',     color: 'text-amber-400',  dot: 'bg-amber-500',   bg: 'bg-amber-500/15 text-amber-200',    icon: '↻'  },
+/**
+ * `icon` is an SVG path, not an emoji.
+ *
+ * It held 📅 🔨 ✅ 🔔 ☐ ↻ — four colour emoji that ignore `color` and two text
+ * dingbats that don't, so inside EventRow's hue-tinted circle four of the six
+ * clashed with the ring they sat in and two matched it. As currentColor paths
+ * they all take the type's hue, and in the month grid they give each type a
+ * distinct *shape*, which is what stops that view being colour-only.
+ */
+const EVENT_CONFIG: Record<EventType, { label: string; color: string; dot: string; bg: string; icon: string | readonly string[] }> = {
+  'appt':         { label: 'Appointment', color: 'text-indigo-400', dot: 'bg-indigo-500',  bg: 'bg-indigo-500/15 text-indigo-200',  icon: ICONS.calendar },
+  'job-start':    { label: 'Job Start',   color: 'text-teal-400',   dot: 'bg-teal-500',    bg: 'bg-teal-500/15 text-teal-200',      icon: ICONS.wrench },
+  'job-complete': { label: 'Job Done',    color: 'text-green-400',  dot: 'bg-green-500',   bg: 'bg-green-500/15 text-green-200',    icon: ICONS.checkCircle },
+  'followup':     { label: 'Follow-up',   color: 'text-rose-400',   dot: 'bg-rose-500',    bg: 'bg-rose-500/15 text-rose-200',      icon: ICONS.bell },
+  'task':         { label: 'Task',        color: 'text-violet-400', dot: 'bg-violet-500',  bg: 'bg-violet-500/15 text-violet-200',  icon: ICONS.clipboard },
+  'serviceplan':  { label: 'Service',     color: 'text-amber-400',  dot: 'bg-amber-500',   bg: 'bg-amber-500/15 text-amber-200',    icon: ICONS.refresh },
 }
 
 const DOT_PRIORITY: EventType[] = ['followup', 'appt', 'task', 'serviceplan', 'job-start', 'job-complete']
+/** How many upcoming days the list view renders before it stops. */
+const LIST_DAY_LIMIT = 60
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -115,15 +127,52 @@ function buildEventMap(
   return map
 }
 
+/**
+ * Only as many weeks as the month actually spans.
+ *
+ * This padded unconditionally to 42 cells, so a five-week month got a sixth row
+ * made entirely of greyed next-month dates — about 60px of dead grid, and the
+ * month's shape changed between, say, February and August for no reason.
+ */
 function getCalendarDays(year: number, month: number): Date[] {
   const firstDay    = new Date(year, month, 1).getDay()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const days: Date[] = []
   for (let i = firstDay - 1; i >= 0; i--) days.push(new Date(year, month, -i))
   for (let d = 1; d <= daysInMonth; d++)  days.push(new Date(year, month, d))
+  const cells = Math.ceil(days.length / 7) * 7
   let next = 1
-  while (days.length < 42) days.push(new Date(year, month + 1, next++))
+  while (days.length < cells) days.push(new Date(year, month + 1, next++))
   return days
+}
+
+/**
+ * Today's key, refreshed when the day rolls over.
+ *
+ * This was a module-level `const`, computed once when the bundle loaded — so on
+ * a tab left open past midnight "Today" stayed ringed on yesterday's cell and
+ * the Today button navigated to the wrong date. This is a page people leave
+ * open all day.
+ */
+function useTodayKey(): string {
+  const [key, setKey] = useState(() => dateKey(new Date()))
+  useEffect(() => {
+    const now  = new Date()
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5)
+    const id = setTimeout(() => setKey(dateKey(new Date())), next.getTime() - now.getTime())
+    return () => clearTimeout(id)
+  }, [key])
+  return key
+}
+
+/** Per-type counts for a day, for the month cell's accessible summary. */
+function summarise(events: CalEvent[]): string {
+  if (events.length === 0) return 'No events'
+  const counts = new Map<EventType, number>()
+  for (const e of events) counts.set(e.type, (counts.get(e.type) ?? 0) + 1)
+  return [...counts.entries()]
+    .map(([t, n]) => `${n} ${EVENT_CONFIG[t].label}${n === 1 ? '' : 's'}`)
+    .join(', ')
 }
 
 function getWeekDays(anchor: Date): Date[] {
@@ -146,12 +195,11 @@ function fmtDay(d: Date): string {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 }
 
-const TODAY_KEY = dateKey(new Date())
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
   usePageTitle('Calendar')
+  const TODAY_KEY = useTodayKey()
   const companyId = useAuthStore(s => s.companyId)
   const user      = useAuthStore(s => s.user)
   const isReady   = useAuthStore(s => s.isReady)
@@ -165,7 +213,7 @@ export default function CalendarPage() {
   const [repFilter,  setRepFilter]  = useState('')
 
   const [viewDate, setViewDate] = useState(() => new Date())
-  const [selectedKey, setSelectedKey] = useState<string>(TODAY_KEY)
+  const [selectedKey, setSelectedKey] = useState<string>(() => dateKey(new Date()))
 
   useEffect(() => {
     setLoading(true)
@@ -275,7 +323,10 @@ export default function CalendarPage() {
       arr.push(e)
       groups.set(k, arr)
     }
-    return [...groups.entries()].slice(0, 60)
+    // Capped, and the caller is told so. This silently sliced to 60 day-groups
+    // with nothing on screen indicating there was more beyond it.
+    const all = [...groups.entries()]
+    return { groups: all.slice(0, LIST_DAY_LIMIT), truncated: all.length > LIST_DAY_LIMIT }
   }, [eventMap, filterType])
 
   return (
@@ -287,7 +338,9 @@ export default function CalendarPage() {
           <h1 className="text-2xl font-bold text-white">Calendar</h1>
           <p className="text-sm text-gray-400 mt-0.5">Appointments, jobs, follow-ups, tasks and service plans</p>
         </div>
+        <label htmlFor="cal-rep" className="sr-only">Filter by rep</label>
         <select
+          id="cal-rep"
           value={repFilter}
           onChange={e => setRepFilter(e.target.value)}
           className="input-field text-sm py-1.5 w-36 shrink-0"
@@ -295,6 +348,14 @@ export default function CalendarPage() {
           <option value="">All Reps</option>
           {reps.map(r => <option key={r} value={r}>{r}</option>)}
         </select>
+        {/* The calendar was read-only: every event linked out to a record, a
+            task or /service-plans, and nothing linked in — no way to add
+            anything, and clicking a free day only selected it. Tasks are the
+            one event type this app creates directly, so that's the action. */}
+        <Link to="/todo" className="btn-primary inline-flex items-center gap-1.5 text-sm px-3 py-1.5 shrink-0">
+          <Icon d={ICONS.plus} className="w-4 h-4 shrink-0" />
+          New Task
+        </Link>
       </div>
 
       {/* View toggle + nav */}
@@ -317,15 +378,11 @@ export default function CalendarPage() {
           <>
             <div className="flex items-center gap-1">
               <button onClick={prevPeriod} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
+                <Icon d={ICONS.chevronLeft} className="w-4 h-4" />
               </button>
               <span className="text-sm font-medium text-gray-200 min-w-[180px] text-center">{monthLabel}</span>
               <button onClick={nextPeriod} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
+                <Icon d={ICONS.chevronRight} className="w-4 h-4" />
               </button>
             </div>
             <button onClick={goToday} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
@@ -380,7 +437,7 @@ export default function CalendarPage() {
               <div className="card overflow-hidden select-none">
                 <div className="grid grid-cols-7 border-b border-gray-700/50">
                   {WEEKDAYS.map(w => (
-                    <div key={w} className="py-2 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    <div key={w} className="py-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                       {w}
                     </div>
                   ))}
@@ -393,16 +450,29 @@ export default function CalendarPage() {
                     const isToday     = key === TODAY_KEY
                     const isSelected  = key === selectedKey
                     const events      = (eventMap.get(key) ?? []).filter(e => filterType === 'all' || e.type === filterType)
-                    const visibleDots = events.slice(0, 3)
-                    const overflow    = events.length - visibleDots.length
+                    // One icon per *type* present, not one per event: three
+                    // anonymous 6px dots told you nothing about what was on a
+                    // day, and colour was the only channel — indigo-500 at
+                    // 3.29:1 and violet-500 at 3.47:1 are adjacent in hue and
+                    // barely over the 3:1 non-text floor, so a colour-blind
+                    // reader got nothing from this grid at all. Distinct shapes
+                    // carry the type; the count carries the volume.
+                    const typesPresent = [...new Set(events.map(e => e.type))]
+                      .sort((a, b) => DOT_PRIORITY.indexOf(a) - DOT_PRIORITY.indexOf(b))
+                    const visibleTypes = typesPresent.slice(0, 3)
+                    const hiddenTypes  = typesPresent.length - visibleTypes.length
                     const isLastInRow = i % 7 === 6
 
                     return (
                       <button
                         key={i}
                         onClick={() => setSelectedKey(key)}
+                        aria-label={`${day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} — ${summarise(events)}`}
+                        aria-pressed={isSelected}
+                        title={summarise(events)}
                         className={[
-                          'relative flex flex-col items-start p-1.5 min-h-[60px] border-b border-gray-800/40 text-left transition-colors',
+                          'relative flex flex-col items-start p-1.5 min-h-[64px] border-b border-gray-800/40 text-left transition-colors',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500',
                           !isLastInRow ? 'border-r border-gray-800/40' : '',
                           isToday ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/50' : '',
                           isSelected ? 'bg-indigo-600/15' : !isToday ? 'hover:bg-gray-800/40' : '',
@@ -417,19 +487,26 @@ export default function CalendarPage() {
                           'inline-flex items-center justify-center w-6 h-6 text-xs font-semibold rounded-full mb-1 shrink-0',
                           isToday    ? 'bg-indigo-500 text-white' :
                           isSelected ? 'bg-gray-600 text-white'   :
-                          inMonth    ? 'text-gray-200'             : 'text-gray-600',
+                          inMonth    ? 'text-gray-200'             : 'text-gray-400',
                         ].join(' ')}>
                           {day.getDate()}
                         </span>
 
-                        {visibleDots.length > 0 && (
-                          <div className="flex items-center gap-0.5 flex-wrap">
-                            {visibleDots.map((e, ei) => (
-                              <span key={ei} className={`w-1.5 h-1.5 rounded-full shrink-0 ${EVENT_CONFIG[e.type].dot}`} />
+                        {events.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {visibleTypes.map(t => (
+                              <Icon
+                                key={t}
+                                d={EVENT_CONFIG[t].icon}
+                                className={`w-3 h-3 shrink-0 ${EVENT_CONFIG[t].color}`}
+                              />
                             ))}
-                            {overflow > 0 && (
-                              <span className="text-[9px] text-gray-500 leading-none">+{overflow}</span>
+                            {hiddenTypes > 0 && (
+                              <span className="text-[10px] text-gray-400 leading-none">+{hiddenTypes}</span>
                             )}
+                            <span className="text-[10px] font-semibold text-gray-300 leading-none tabular-nums ml-auto">
+                              {events.length}
+                            </span>
                           </div>
                         )}
                       </button>
@@ -450,7 +527,7 @@ export default function CalendarPage() {
                 </div>
                 <div className="card divide-y divide-gray-700/50">
                   {selectedEvents.length === 0 ? (
-                    <p className="px-4 py-4 text-sm text-gray-500">
+                    <p className="px-4 py-4 text-sm text-gray-400">
                       {allSelectedEvents.length > 0 ? 'No matching events — try "All"' : 'No events on this day'}
                     </p>
                   ) : (
@@ -464,13 +541,18 @@ export default function CalendarPage() {
           {/* ── WEEK VIEW ───────────────────────────────────────────────────── */}
           {view === 'week' && (
             <div className="flex flex-col md:flex-row gap-4">
-              <div className="card overflow-hidden flex-1 min-w-0">
-                <div className="grid grid-cols-7 border-b border-gray-700/50">
+              {/* Scrolls rather than squeezing. Seven columns inside
+                  max-w-4xl minus the 260px mini-month left each day about
+                  87px, which is why the event cards had dropped to 9–10px
+                  type. A 108px floor per column plus horizontal scroll lets the
+                  text be legible instead. */}
+              <div className="card overflow-x-auto flex-1 min-w-0">
+                <div className="grid grid-cols-7 border-b border-gray-700/50 min-w-[756px]">
                   {weekDays.map((day, i) => {
                     const isToday = sameDay(day, new Date())
                     return (
                       <div key={i} className={`py-3 text-center ${i > 0 ? 'border-l border-gray-700/50' : ''}`}>
-                        <p className="text-xs text-gray-500">{WEEKDAYS[day.getDay()]}</p>
+                        <p className="text-xs text-gray-400">{WEEKDAYS[day.getDay()]}</p>
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold mx-auto mt-0.5 ${
                           isToday ? 'bg-indigo-600 text-white' : 'text-gray-300'
                         }`}>
@@ -480,7 +562,7 @@ export default function CalendarPage() {
                     )
                   })}
                 </div>
-                <div className="grid grid-cols-7">
+                <div className="grid grid-cols-7 min-w-[756px]">
                   {weekDays.map((day, i) => {
                     const key    = dateKey(day)
                     const events = (eventMap.get(key) ?? []).filter(e => filterType === 'all' || e.type === filterType)
@@ -492,11 +574,16 @@ export default function CalendarPage() {
                             <Link
                               key={j}
                               to={e.linkTo}
-                              className={`block p-1.5 rounded-lg mb-1 ${cfg.bg} hover:opacity-80 transition-opacity`}
+                              title={`${e.name} — ${e.sub ?? cfg.label}${e.salesman ? ` · ${e.salesman}` : ''}`}
+                              className={`block p-1.5 rounded-lg mb-1 ${cfg.bg} hover:opacity-80 transition-opacity
+                                          focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500`}
                             >
-                              <p className="text-[10px] font-semibold truncate">{e.name}</p>
-                              <p className="text-[9px] opacity-70">{e.sub ?? cfg.label}</p>
-                              {e.salesman && <p className="text-[9px] opacity-60 truncate">{e.salesman}</p>}
+                              <p className="flex items-center gap-1 text-xs font-semibold">
+                                <Icon d={cfg.icon} className="w-3 h-3 shrink-0" />
+                                <span className="truncate">{e.name}</span>
+                              </p>
+                              <p className="text-[11px] opacity-80 truncate">{e.sub ?? cfg.label}</p>
+                              {e.salesman && <p className="text-[11px] opacity-70 truncate">{e.salesman}</p>}
                             </Link>
                           )
                         })}
@@ -513,7 +600,7 @@ export default function CalendarPage() {
                 </p>
                 <div className="grid grid-cols-7 gap-y-1">
                   {WEEKDAYS.map(w => (
-                    <div key={w} className="text-center text-[9px] font-semibold text-gray-600 uppercase">
+                    <div key={w} className="text-center text-[9px] font-semibold text-gray-400 uppercase">
                       {w[0]}
                     </div>
                   ))}
@@ -533,7 +620,7 @@ export default function CalendarPage() {
                           'relative flex items-center justify-center aspect-square rounded-md text-[10px] transition-colors',
                           isToday ? 'bg-indigo-500 text-white font-semibold' :
                           inWeek  ? 'bg-indigo-600/20 text-indigo-200' :
-                          inMonth ? 'text-gray-300 hover:bg-gray-800/60' : 'text-gray-600 hover:bg-gray-800/40',
+                          inMonth ? 'text-gray-300 hover:bg-gray-800/60' : 'text-gray-400 hover:bg-gray-800/40',
                         ].join(' ')}
                       >
                         {day.getDate()}
@@ -551,16 +638,16 @@ export default function CalendarPage() {
           {/* ── LIST VIEW ───────────────────────────────────────────────────── */}
           {view === 'list' && (
             <div className="space-y-4">
-              {upcomingList.length === 0 ? (
+              {upcomingList.groups.length === 0 ? (
                 <div className="card p-12 text-center space-y-2">
-                  <p className="text-3xl">📅</p>
+                  <Icon d={ICONS.calendar} className="w-8 h-8 mx-auto text-gray-400" />
                   <p className="text-gray-400 text-sm">No upcoming events found.</p>
-                  <p className="text-xs text-gray-600">Events are pulled from lead appointments, job dates, follow-ups, tasks and service plans.</p>
+                  <p className="text-xs text-gray-400">Events are pulled from lead appointments, job dates, follow-ups, tasks and service plans.</p>
                 </div>
               ) : (
-                upcomingList.map(([key, events]) => (
+                upcomingList.groups.map(([key, events]) => (
                   <div key={key}>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
                       {fmtDay(events[0].date)}
                     </p>
                     <div className="card divide-y divide-gray-700/30 overflow-hidden">
@@ -568,6 +655,11 @@ export default function CalendarPage() {
                     </div>
                   </div>
                 ))
+              )}
+              {upcomingList.truncated && (
+                <p className="text-xs text-gray-400 text-center">
+                  Showing the next {LIST_DAY_LIMIT} days with events. Use Month or Week view to look further ahead.
+                </p>
               )}
             </div>
           )}
@@ -586,20 +678,18 @@ function EventRow({ event: e }: { event: CalEvent }) {
       to={e.linkTo}
       className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
     >
-      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm ${cfg.dot} bg-opacity-20`}>
-        <span>{cfg.icon}</span>
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${cfg.dot} bg-opacity-20`}>
+        <Icon d={cfg.icon} className={`w-4 h-4 ${cfg.color}`} />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-gray-100 truncate">{e.name}</p>
         <div className="flex items-center gap-2 text-xs mt-0.5 flex-wrap">
-          {e.salesman && <span className="text-gray-500">{e.salesman}</span>}
-          {e.salesman && <span className="text-gray-700">·</span>}
+          {e.salesman && <span className="text-gray-400">{e.salesman}</span>}
+          {e.salesman && <span aria-hidden className="text-gray-400">·</span>}
           <span className={cfg.color}>{e.sub ?? cfg.label}</span>
         </div>
       </div>
-      <svg className="w-4 h-4 text-gray-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-      </svg>
+      <Icon d={ICONS.chevronRight} className="w-4 h-4 text-gray-400 shrink-0" />
     </Link>
   )
 }

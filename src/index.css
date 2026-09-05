@@ -200,6 +200,15 @@ html.light-mode .bg-orange-500,
 html.light-mode .bg-orange-600,
 html.light-mode .bg-sky-600,
 html.light-mode .bg-teal-600,
+/* The 500 shades of the /calendar event hues. Its selected filter chip applies
+   `${cfg.dot} text-white`, and text-white resolves to --color-white — dark navy
+   in light mode — so the active chip's label went dark-on-saturated for five of
+   the six event types. */
+html.light-mode .bg-rose-500,
+html.light-mode .bg-teal-500,
+html.light-mode .bg-green-500,
+html.light-mode .bg-violet-500,
+html.light-mode .bg-amber-500,
 html.light-mode .bg-green-700\/70,
 html.light-mode .bg-red-700\/70,
 html.light-mode .bg-slate-600,
@@ -236,6 +245,13 @@ html.light-mode .text-orange-300 { color: #9a3412 !important; }
    the pale page background and on bg-gray-700, where teal-700 drops to 3.95:1.
    teal-800 clears AA on all three (7.58 / 6.92 / 5.47). */
 html.light-mode .text-teal-400   { color: #115e59 !important; }
+/* The last two 400-level accents without a rule, at 2.69:1 and 2.72:1 on a
+   white card. They're /calendar's Follow-up and Task hues, carrying the event
+   kind on every row, and violet-400 is also a pipeline stage colour. The 700s
+   clear AA on card, page and bg-gray-700 (6.29/5.74/4.53 and 7.10/6.49/5.12),
+   so they don't need the 800s the yellows did. */
+html.light-mode .text-rose-400   { color: #be123c !important; }
+html.light-mode .text-violet-400 { color: #6d28d9 !important; }
 /* The 200 shades are paler still, and every place they're used (idle sign-out
    banner, duplicate warnings, low-stock list, code chips) sits on a surface that
    goes white or pale-tinted in light mode, so they vanish without this. */
