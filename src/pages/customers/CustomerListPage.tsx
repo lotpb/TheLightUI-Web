@@ -21,6 +21,7 @@ import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
 import { calculateHealthScore, healthBreakdown, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
 import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
+import ConfirmModal from '../../components/ConfirmModal'
 import { Icon, ICONS } from '../../components/Icon'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
 import type { SavedView } from '../../models/savedView'
@@ -160,9 +161,17 @@ export default function CustomerListPage() {
   // invoices and service plans — opted out on the other three category routes
   // so they don't open listeners whose data goes unused.
   const isCustomerView = cat === 'Customer'
-  const { items: invoices, loading: invoicesLoading } = useSharedInvoices(isCustomerView)
-  const { items: servicePlans, loading: plansLoading } = useSharedServicePlans(isCustomerView)
-  const healthReady = isCustomerView && !invoicesLoading && !plansLoading
+  const { items: invoices, loading: invoicesLoading, failed: invoicesFailed } = useSharedInvoices(isCustomerView)
+  const { items: servicePlans, loading: plansLoading, failed: plansFailed } = useSharedServicePlans(isCustomerView)
+
+  // Three states, not two. `healthReady` alone conflated "still loading" with
+  // "will never arrive", and the badge's placeholder is an animate-pulse — so a
+  // listener that never resolved left a grey pulse on every row indefinitely
+  // and the page read as permanently loading. A failed load now renders no
+  // badge, never a score derived from absent invoices.
+  const healthFailed  = isCustomerView && (invoicesFailed || plansFailed)
+  const healthLoading = isCustomerView && !healthFailed && (invoicesLoading || plansLoading)
+  const healthReady   = isCustomerView && !healthLoading && !healthFailed
 
   const [all, setAll] = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -231,6 +240,8 @@ export default function CustomerListPage() {
   const [assignOpen, setAssignOpen]   = useState(false)
   const [bulkWorking, setBulkWorking] = useState(false)
   const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false)
+  const [deleteViewTarget, setDeleteViewTarget] = useState<SavedView | null>(null)
   const closeAssign = useCallback(() => setAssignOpen(false), [])
   useClickOutside(assignRef, closeAssign, assignOpen)
 
@@ -302,8 +313,17 @@ export default function CustomerListPage() {
     }
   }
 
+  // Was a bare await: no confirmation, no error handling, behind a hover-only
+  // control. A saved view is shared configuration, and this was the least
+  // protected destructive action on the page.
   async function handleDeleteView(view: SavedView) {
-    await deleteSavedView(view.id)
+    setDeleteViewTarget(null)
+    try {
+      await deleteSavedView(view.id)
+      toast(`Deleted view "${view.name}".`, 'success')
+    } catch {
+      toast('Could not delete that view.', 'error')
+    }
   }
 
   // Clear selection when category or filter changes
@@ -339,8 +359,13 @@ export default function CustomerListPage() {
   function selectAll()  { setSelectedIds(new Set(allFilteredIds)) }
   function clearSelection() { setSelectedIds(new Set()) }
 
+  // Asks first. This hides every selected record from the list, and with
+  // "Select all" one button to its left the selection can be thousands of
+  // records — yet it sat in the same grey treatment as Export, which changes
+  // nothing. The single-record equivalent on /records/:id already confirms.
   async function handleBulkDeactivate() {
     const ids = [...selectedIds]
+    setConfirmDeactivate(false)
     setBulkWorking(true)
     try {
       // Employees carry a second status field that has to agree with `active`,
@@ -387,9 +412,41 @@ export default function CustomerListPage() {
     }
   }
 
+  // Both were `void setX(...)` inside the row — fire-and-forget, so a rejected
+  // write left the row showing the new value with no indication it hadn't
+  // persisted. Lifted here so they can report through the toast.
+  /** Clamped, and scrolls the list back to the top like Prev/Next always did. */
+  function goToPage(n: number) {
+    const next = Math.min(Math.max(1, n), pageCount)
+    setPage(next)
+    listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  async function handleMarkPaid(c: CustomerItem) {
+    try {
+      await setPaymentStatus(c.id, 'Paid')
+    } catch {
+      toast(`Could not mark ${displayName(c)} as paid.`, 'error')
+    }
+  }
+
+  async function handleSetEmployeeStatus(c: CustomerItem, status: string) {
+    try {
+      await setEmployeeStatus(c.id, status, status !== 'Inactive')
+    } catch {
+      toast(`Could not update ${displayName(c)}'s status.`, 'error')
+    }
+  }
+
+  // The only bulk handler that didn't report failure, on a page where the other
+  // three all do.
   async function handleBulkExport() {
     const toExport = filtered.filter(c => selectedIds.has(c.id))
-    await exportCustomersJSON(toExport)
+    try {
+      await exportCustomersJSON(toExport)
+    } catch {
+      toast('Export failed.', 'error')
+    }
   }
 
   async function handleBulkEmail(subject: string, body: string) {
@@ -803,9 +860,7 @@ export default function CustomerListPage() {
               className="btn-secondary text-sm flex items-center gap-1.5"
             >
               Sort By
-              <svg className={`w-3.5 h-3.5 transition-transform ${sortOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
+              <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${sortOpen ? 'rotate-180' : ''}`} />
             </button>
             {sortOpen && (
               <div className="absolute right-0 mt-1 w-40 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
@@ -835,9 +890,7 @@ export default function CustomerListPage() {
               className="btn-secondary text-sm flex items-center gap-1.5"
             >
               Actions
-              <svg className={`w-3.5 h-3.5 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
+              <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
             </button>
             {menuOpen && (
               <div className="absolute right-0 mt-1 w-44 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
@@ -933,10 +986,7 @@ export default function CustomerListPage() {
               viewsOpen ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
             }`}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12c1.5-4.5 5.25-7.5 9.75-7.5s8.25 3 9.75 7.5c-1.5 4.5-5.25 7.5-9.75 7.5S3.75 16.5 2.25 12Z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-            </svg>
+            <Icon d={ICONS.eye} className="w-4 h-4" />
             Views
             {savedViews.length > 0 && (
               <span className="bg-gray-700 text-gray-300 text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
@@ -958,12 +1008,17 @@ export default function CustomerListPage() {
                       >
                         {view.name}
                       </button>
+                      {/* Always visible: opacity-0 group-hover means the
+                          control doesn't exist on touch, so a saved view
+                          couldn't be deleted at all from a tablet. */}
                       <button
-                        onClick={() => handleDeleteView(view)}
+                        onClick={() => setDeleteViewTarget(view)}
                         title="Delete view"
-                        className="px-2.5 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        aria-label={`Delete view "${view.name}"`}
+                        className="shrink-0 p-2 mr-1 rounded text-gray-400 hover:text-red-400 hover:bg-gray-700/50 transition-colors
+                                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                       >
-                        ×
+                        <Icon d={ICONS.close} className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   ))}
@@ -997,9 +1052,7 @@ export default function CustomerListPage() {
               : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
           }`}
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v2a1 1 0 0 1-.293.707L13 13.414V19a1 1 0 0 1-.553.894l-4 2A1 1 0 0 1 7 21v-7.586L3.293 6.707A1 1 0 0 1 3 6V4Z" />
-          </svg>
+          <Icon d={ICONS.funnel} className="w-4 h-4" />
           Filters
           {activeFilterCount > 0 && (
             <span className="bg-indigo-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
@@ -1237,9 +1290,7 @@ export default function CustomerListPage() {
       {!loading && someSelected && perms.canBulkAction ? (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <button onClick={clearSelection} className="text-gray-400 hover:text-gray-200 transition-colors" aria-label="Clear selection">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+            <Icon d={ICONS.close} className="w-4 h-4" />
           </button>
           <span className="text-sm font-medium text-white">{selectedIds.size} selected</span>
           {selectedIds.size < allFilteredIds.size && (
@@ -1248,10 +1299,12 @@ export default function CustomerListPage() {
             </button>
           )}
           <div className="flex-1" />
+          {/* btn-danger, not the same grey as Export — this is the only button
+              in the row that changes records. */}
           <button
-            onClick={handleBulkDeactivate}
+            onClick={() => setConfirmDeactivate(true)}
             disabled={bulkWorking}
-            className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40"
+            className="btn-danger text-sm px-3 py-1.5 disabled:opacity-40"
           >
             Deactivate
           </button>
@@ -1263,9 +1316,7 @@ export default function CustomerListPage() {
               className="text-sm px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-40 flex items-center gap-1"
             >
               Assign {labels.salesman}
-              <svg className={`w-3.5 h-3.5 transition-transform ${assignOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
+              <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${assignOpen ? 'rotate-180' : ''}`} />
             </button>
             {assignOpen && (
               <div className="absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
@@ -1294,11 +1345,21 @@ export default function CustomerListPage() {
         </div>
       ) : (
         !listLoading && (
+          /* States the relationship between the two numbers on screen. The
+             category tab badge counts every record in the category, this line
+             counted the filtered set — so with filters on the tab said 412 and
+             this said 23, same question, two answers, no link between them.
+             It also names the search term, because switching category clears
+             the advanced filters but keeps the search, so half the query state
+             survives navigation and previously did so silently. */
           <p className="text-xs text-gray-400 mb-3">
             {pageCount > 1
-              ? `${rangeStart}–${rangeEnd} of ${filtered.length} records`
-              : `${filtered.length} ${filtered.length === 1 ? 'record' : 'records'}`}
+              ? `${rangeStart}–${rangeEnd} of ${filtered.length}`
+              : `${filtered.length}`}
+            {filtered.length !== categoryCounts[cat] && ` of ${categoryCounts[cat]}`}
+            {filtered.length === 1 ? ' record' : ' records'}
             {!showInactive && ' · active only'}
+            {debouncedSearch.trim() && ` · search "${debouncedSearch.trim()}"`}
             {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
           </p>
         )
@@ -1314,15 +1375,19 @@ export default function CustomerListPage() {
         {/* Select-all checkbox row — hidden for roles without bulk actions */}
         {!listLoading && filtered.length > 0 && perms.canBulkAction && (
           <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
+            {/* id + htmlFor: this was a bare checkbox with its label in a
+                sibling span, so it had no accessible name — and it's the
+                control that arms the bulk deactivate. */}
             <input
+              id="select-page"
               type="checkbox"
               checked={allPageSelected}
               onChange={togglePage}
               className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
             />
-            <span className="text-xs text-gray-400">
+            <label htmlFor="select-page" className="text-xs text-gray-400 cursor-pointer">
               {allPageSelected ? 'Deselect page' : 'Select page'}
-            </span>
+            </label>
           </div>
         )}
         {listLoading ? (
@@ -1359,36 +1424,76 @@ export default function CustomerListPage() {
               onToggle={() => toggleOne(c.id)}
               showCheckbox={perms.canBulkAction}
               health={healthReady ? healthFor(c) : null}
+              healthLoading={healthLoading}
+              onMarkPaid={() => handleMarkPaid(c)}
+              onSetEmployeeStatus={status => handleSetEmployeeStatus(c, status)}
             />
           ))
         )}
 
         {/* Pagination footer — only shown when there's more than one page */}
+        {/* First/last and a jump field. PAGE_SIZE is 50 against a 5,000-record
+            cap, so this can be a hundred pages — and "{page} / {pageCount}" was
+            a readout, making page 60 a 59-click journey with no way back to the
+            end. */}
         {!listLoading && pageCount > 1 && (
-          <div className="flex items-center justify-between px-4 py-3">
-            <button
-              onClick={() => { setPage(p => Math.max(1, p - 1)); listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
-              disabled={page === 1}
-              className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-              </svg>
-              Prev
-            </button>
-            <span className="text-xs text-gray-400 tabular-nums">
-              {page} / {pageCount}
-            </span>
-            <button
-              onClick={() => { setPage(p => Math.min(pageCount, p + 1)); listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
-              disabled={page === pageCount}
-              className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              Next
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
+          <div className="flex items-center justify-between gap-2 px-4 py-3">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => goToPage(1)}
+                disabled={page === 1}
+                aria-label="First page"
+                title="First page"
+                className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors
+                           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.chevronDoubleLeft} className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => goToPage(page - 1)}
+                disabled={page === 1}
+                className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <Icon d={ICONS.chevronLeft} className="w-4 h-4" />
+                Prev
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <label htmlFor="page-jump" className="sr-only">Jump to page</label>
+              <input
+                id="page-jump"
+                type="number"
+                min={1}
+                max={pageCount}
+                value={page}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10)
+                  if (Number.isFinite(n)) goToPage(n)
+                }}
+                className="input-field w-14 text-xs py-1 text-center tabular-nums"
+              />
+              <span className="tabular-nums whitespace-nowrap">of {pageCount}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => goToPage(page + 1)}
+                disabled={page === pageCount}
+                className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+                <Icon d={ICONS.chevronRight} className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => goToPage(pageCount)}
+                disabled={page === pageCount}
+                aria-label="Last page"
+                title="Last page"
+                className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors
+                           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.chevronDoubleRight} className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1624,6 +1729,25 @@ export default function CustomerListPage() {
           onClose={() => setEmailModalOpen(false)}
         />
       )}
+
+      {/* Bulk deactivate confirmation. This hides every selected record from
+          the list, and "Select all" sits one button away, so the selection can
+          be thousands. */}
+      <ConfirmModal
+        isOpen={confirmDeactivate}
+        message={`Deactivate ${selectedIds.size} ${selectedIds.size === 1 ? 'record' : 'records'}? They'll be hidden from this list until reactivated.`}
+        confirmLabel="Deactivate"
+        onConfirm={handleBulkDeactivate}
+        onCancel={() => setConfirmDeactivate(false)}
+      />
+
+      <ConfirmModal
+        isOpen={deleteViewTarget !== null}
+        message={deleteViewTarget ? `Delete the saved view "${deleteViewTarget.name}"? This cannot be undone.` : ''}
+        confirmLabel="Delete view"
+        onConfirm={() => deleteViewTarget && handleDeleteView(deleteViewTarget)}
+        onCancel={() => setDeleteViewTarget(null)}
+      />
     </div>
   )
 }
@@ -1644,11 +1768,21 @@ function CustomerRow({
   onToggle,
   showCheckbox = true,
   health = null,
+  healthLoading = false,
+  onMarkPaid,
+  onSetEmployeeStatus,
 }: {
   customer: CustomerItem
   selected: boolean
   onToggle: () => void
   showCheckbox?: boolean
+  /** True only while invoices/plans are genuinely in flight — see the page. */
+  healthLoading?: boolean
+  /** Both write to Firestore. The row used to `void` the promises, so a
+   *  rejected write left the new value on screen with nothing said. The page
+   *  owns them now so it can report failure through the toast. */
+  onMarkPaid: () => Promise<void>
+  onSetEmployeeStatus: (status: string) => Promise<void>
   /** Full health score, computed by the page. Null until the invoice and
    *  service-plan collections have loaded, so the badge renders a placeholder
    *  rather than briefly showing a label derived from partial data. */
@@ -1710,9 +1844,10 @@ function CustomerRow({
         >
           {selected ? (
             <div className="w-full h-full bg-indigo-600 flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-              </svg>
+              {/* icon-on-solid, not text-white: text-white resolves to the
+                  themed --color-white, which is dark navy in light mode, so the
+                  check rendered dark-on-indigo there. */}
+              <Icon d={ICONS.check} className="w-4 h-4 icon-on-solid" />
             </div>
           ) : (
             <>
@@ -1813,11 +1948,13 @@ function CustomerRow({
                 {health.label}
                 <span className="tabular-nums font-bold">{health.score}</span>
               </span>
-            ) : (
+            ) : healthLoading ? (
               // Holds the slot while invoices and plans load, so rows don't
               // reflow and no wrong label derived from partial data is shown.
+              // Only while genuinely in flight: gated on `health` alone this
+              // pulsed forever whenever a listener stalled.
               <span className="inline-block h-[1.125rem] w-20 rounded-md bg-gray-700/50 animate-pulse" />
-            )
+            ) : null
           )}
           {/* Payment state as a readout, not an action. Previously the row
               rendered a green "$ Paid" *button* only when the customer had NOT
@@ -1912,12 +2049,18 @@ function CustomerRow({
           an action rather than a second status chip. The old "$ Paid" was a
           green tinted pill — visually identical to the readouts beside it,
           while actually writing to Firestore on a single click. */}
+      {/* Fixed-width slot so the list's right edge doesn't move. Customers get
+          a button (only while unpaid), Employees a select, Leads and Vendors
+          nothing — so the trailing column's width used to change per category
+          *and* per row, shifting the readouts beside it. */}
+      <div className="shrink-0 self-start w-[5.5rem] flex justify-end">
       {c.category.toLowerCase() === 'customer' && c.paymentStatus !== 'Paid' && (
         <button
           type="button"
-          onClick={() => { void setPaymentStatus(c.id, 'Paid') }}
+          onClick={() => { void onMarkPaid() }}
           title={`Mark ${displayName(c)} as paid`}
-          className="shrink-0 self-start text-xs font-medium leading-none px-2 py-1.5 rounded-md bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+          className="text-xs font-medium leading-none px-2 py-1.5 rounded-md bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
           Mark paid
         </button>
@@ -1937,17 +2080,15 @@ function CustomerRow({
           // reachable. Colour still carries the status.
           <select
             value={status}
-            onChange={e => {
-              const nextStatus = e.target.value
-              void setEmployeeStatus(c.id, nextStatus, nextStatus !== 'Inactive')
-            }}
+            onChange={e => { void onSetEmployeeStatus(e.target.value) }}
             aria-label={`Employment status for ${displayName(c)}`}
-            className={`shrink-0 self-start text-xs font-medium leading-none pl-2 pr-1 py-1.5 rounded-md border bg-gray-800 cursor-pointer outline-none focus:border-indigo-500 ${employeeStatusClasses(status)}`}
+            className={`text-xs font-medium leading-none pl-2 pr-1 py-1.5 rounded-md border bg-gray-800 cursor-pointer outline-none focus:border-indigo-500 ${employeeStatusClasses(status)}`}
           >
             {EMPLOYEE_STATUS_CYCLE.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
         )
       })()}
+      </div>
     </div>
   )
 }
@@ -2084,10 +2225,13 @@ function BulkEmailModal({
       <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700/60">
           <h2 className="text-base font-semibold text-white">Send Email</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1.5 -mr-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            <Icon d={ICONS.close} className="w-5 h-5" />
           </button>
         </div>
 
@@ -2098,9 +2242,7 @@ function BulkEmailModal({
               ? 'bg-red-900/30 border border-red-700/50 text-red-300'
               : 'bg-indigo-900/30 border border-indigo-700/50 text-indigo-300'
           }`}>
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
-            </svg>
+            <Icon d={ICONS.envelope} className="w-4 h-4 shrink-0" />
             {emailCount === 0
               ? `None of the ${recipientCount} selected records have an email address.`
               : `${emailCount} of ${recipientCount} selected record${recipientCount !== 1 ? 's' : ''} have an email address.`}

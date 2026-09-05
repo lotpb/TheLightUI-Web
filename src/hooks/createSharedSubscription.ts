@@ -30,14 +30,32 @@ export interface SharedSnapshot<T> {
   loading: boolean
   /** True when the service hit its realtime document cap — results are partial. */
   hitCap: boolean
+  /**
+   * True when this collection could not be loaded: the listener errored, or it
+   * never delivered a first snapshot. Distinct from "loaded and empty" — a
+   * consumer deriving a value from it (a health score from invoices) must not
+   * treat missing data as absent data and publish a confident wrong answer.
+   */
+  failed: boolean
 }
 
 /** How long the underlying listener stays alive after the last consumer leaves. */
 const TEARDOWN_DELAY_MS = 5_000
 
+/**
+ * How long to wait for a first snapshot before declaring the listener failed.
+ *
+ * Firestore does not always call the error handler — a listener can simply stop
+ * delivering, with no data and no error — and then `loading` stays true forever
+ * and any UI holding a slot for the value holds it forever too. /customers
+ * renders an animate-pulse placeholder on every row's health badge in exactly
+ * that case, which reads as a page that never finished loading.
+ */
+const FIRST_SNAPSHOT_TIMEOUT_MS = 15_000
+
 /** Returned by a disabled hook. Module-level so the reference is stable and
  *  doesn't invalidate consumers' memo dependencies on every render. */
-const DISABLED_SNAPSHOT: SharedSnapshot<unknown> = { items: [], loading: true, hitCap: false }
+const DISABLED_SNAPSHOT: SharedSnapshot<unknown> = { items: [], loading: true, hitCap: false, failed: false }
 
 export function createSharedSubscription<T>(
   subscribe: SharedSubscribe<T>,
@@ -45,29 +63,55 @@ export function createSharedSubscription<T>(
 ): (enabled?: boolean) => SharedSnapshot<T> {
   type Listener = (snap: SharedSnapshot<T>) => void
 
-  let snapshot: SharedSnapshot<T> = { items: [], loading: true, hitCap: false }
+  let snapshot: SharedSnapshot<T> = { items: [], loading: true, hitCap: false, failed: false }
   let unsub: Unsubscribe | null = null
   let subscribedCompanyId: string | null = null
   let refCount = 0
   let teardownTimer: ReturnType<typeof setTimeout> | null = null
+  let firstSnapshotTimer: ReturnType<typeof setTimeout> | null = null
   const listeners = new Set<Listener>()
 
   function notify() {
     for (const l of listeners) l(snapshot)
   }
 
+  function clearFirstSnapshotTimer() {
+    if (firstSnapshotTimer) {
+      clearTimeout(firstSnapshotTimer)
+      firstSnapshotTimer = null
+    }
+  }
+
   function open(companyId: string) {
     unsub?.()
+    clearFirstSnapshotTimer()
     subscribedCompanyId = companyId
     // Keep the previous items visible while the new company's data loads,
     // matching the original useSharedCustomers behaviour.
-    snapshot = { items: snapshot.items, loading: true, hitCap: snapshot.hitCap }
+    snapshot = { items: snapshot.items, loading: true, hitCap: snapshot.hitCap, failed: false }
     notify()
+
+    firstSnapshotTimer = setTimeout(() => {
+      firstSnapshotTimer = null
+      if (!snapshot.loading) return
+      console.error(
+        `[shared:${label}] no first snapshot within ${FIRST_SNAPSHOT_TIMEOUT_MS}ms — ` +
+        'giving up so consumers stop waiting. The listener stays open in case it recovers.',
+      )
+      snapshot = { ...snapshot, loading: false, failed: true }
+      notify()
+    }, FIRST_SNAPSHOT_TIMEOUT_MS)
+
     unsub = subscribe(
-      (items, hitCap) => { snapshot = { items, loading: false, hitCap: hitCap ?? false }; notify() },
+      (items, hitCap) => {
+        clearFirstSnapshotTimer()
+        snapshot = { items, loading: false, hitCap: hitCap ?? false, failed: false }
+        notify()
+      },
       err => {
+        clearFirstSnapshotTimer()
         console.error(`[shared:${label}] subscription failed:`, err)
-        snapshot = { ...snapshot, loading: false }
+        snapshot = { ...snapshot, loading: false, failed: true }
         notify()
       },
     )
@@ -76,8 +120,9 @@ export function createSharedSubscription<T>(
   function close() {
     unsub?.()
     unsub = null
+    clearFirstSnapshotTimer()
     subscribedCompanyId = null
-    snapshot = { items: [], loading: true, hitCap: false }
+    snapshot = { items: [], loading: true, hitCap: false, failed: false }
   }
 
   // A company switch while mounted must move every consumer to the new tenant.
