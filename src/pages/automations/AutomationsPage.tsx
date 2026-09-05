@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import ConfirmModal from '../../components/ConfirmModal'
+import { Icon, ICONS } from '../../components/Icon'
 import {
   subscribeToAutomationRules, subscribeToAutomationLog,
   createAutomationRule, updateAutomationRule, deleteAutomationRule,
@@ -25,6 +27,50 @@ function emptyAction(entityType: AutomationEntityType): AutomationAction {
 const REVIEW_PRESET_MESSAGE =
   "Thanks for choosing us, {first}! If you have a minute, we'd really appreciate a quick review: {reviewlink}"
 
+/**
+ * Why an action can't be saved yet, or null when it's complete.
+ *
+ * handleSave only checked the rule name and that at least one action existed,
+ * so a send_sms with no message, a send_email with no subject or body, or a
+ * set_field with no value all saved happily — and then fired against live
+ * customers, sending blank texts. These rules message people; an empty one is
+ * worse than a missing one.
+ */
+function actionProblem(a: AutomationAction): string | null {
+  switch (a.type) {
+    case 'send_sms':  return a.text?.trim()    ? null : 'Text message is empty'
+    case 'add_note':  return a.text?.trim()    ? null : 'Note text is empty'
+    case 'send_email':
+      if (!a.subject?.trim()) return 'Email subject is empty'
+      return a.body?.trim() ? null : 'Email body is empty'
+    case 'set_field': return a.value?.trim()   ? null : 'No value to set'
+    case 'set_followup_days': return null // 0 days is meaningful
+  }
+}
+
+/**
+ * Clears the fields that belonged to the previous action type.
+ *
+ * updateAction spread the patch over the existing object, so switching
+ * send_email → send_sms kept `subject` and `body`, and → set_field kept `text`.
+ * Those stale values were written to Firestore, and describeAction could render
+ * a rule card describing an action using data from a type no longer selected.
+ */
+function resetActionForType(type: AutomationAction['type']): AutomationAction {
+  return { type }
+}
+
+/** Deep link where one exists, the module's list page otherwise. */
+function entityHref(entry: AutomationLogEntry): string {
+  switch (entry.entityType) {
+    case 'customer':       return `/records/${entry.entityId}`
+    case 'invoice':        return `/invoices/${entry.entityId}`
+    case 'serviceRequest': return '/service-requests'
+    case 'purchaseOrder':  return '/purchase-orders'
+    case 'signingRequest': return '/signing-requests'
+  }
+}
+
 export default function AutomationsPage() {
   usePageTitle('Automation Rules')
   const toast = useToast()
@@ -40,6 +86,11 @@ export default function AutomationsPage() {
   const [actions, setActions] = useState<AutomationAction[]>([emptyAction('customer')])
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AutomationRule | null>(null)
+  // Activating is the consequential direction — it's what starts sending texts
+  // and emails to customers — and it used to happen on one unconfirmed click,
+  // while deleting (which sends nothing) already had a confirmation.
+  const [activateTarget, setActivateTarget] = useState<AutomationRule | null>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   const [profile, setProfile] = useState<CompanyProfile>(EMPTY_PROFILE)
   const [reviewLink, setReviewLink] = useState('')
@@ -109,6 +160,11 @@ export default function AutomationsPage() {
     setActions(prev => prev.map((a, i) => i === index ? { ...a, ...patch } : a))
   }
 
+  /** Type changes replace the action rather than merging, so no stale fields survive. */
+  function changeActionType(index: number, type: AutomationAction['type']) {
+    setActions(prev => prev.map((a, i) => i === index ? resetActionForType(type) : a))
+  }
+
   function addAction() {
     setActions(prev => [...prev, emptyAction(trigger.entityType)])
   }
@@ -117,8 +173,12 @@ export default function AutomationsPage() {
     setActions(prev => prev.filter((_, i) => i !== index))
   }
 
+  // Every mutation reports failure. handleSave had try/finally but no catch, and
+  // handleToggle/handleDelete were bare awaits — so a rejected write gave an
+  // unhandled rejection and a UI that looked like it had worked. The page
+  // already imported useToast and used it only for the review link.
   async function handleSave() {
-    if (!name.trim() || actions.length === 0) return
+    if (!canSave) return
     setSaving(true)
     try {
       if (isNew) {
@@ -127,24 +187,67 @@ export default function AutomationsPage() {
         await updateAutomationRule(editingRule.id, { name: name.trim(), trigger, actions })
       }
       closeModal()
+      toast(isNew ? 'Rule created' : 'Rule saved', 'success')
+    } catch {
+      toast('Could not save that rule', 'error')
     } finally {
       setSaving(false)
     }
   }
 
-  async function handleToggle(rule: AutomationRule) {
-    await updateAutomationRule(rule.id, { enabled: !rule.enabled })
+  async function setEnabled(rule: AutomationRule, enabled: boolean) {
+    try {
+      await updateAutomationRule(rule.id, { enabled })
+    } catch {
+      toast(enabled ? 'Could not activate that rule' : 'Could not pause that rule', 'error')
+    }
+  }
+
+  function handleToggle(rule: AutomationRule) {
+    if (rule.enabled) setEnabled(rule, false)   // pausing is safe, no prompt
+    else setActivateTarget(rule)                // activating starts messaging
   }
 
   async function handleDelete() {
     if (!deleteTarget) return
-    await deleteAutomationRule(deleteTarget.id)
-    setDeleteTarget(null)
+    try {
+      await deleteAutomationRule(deleteTarget.id)
+      setDeleteTarget(null)
+      toast('Rule deleted', 'success')
+    } catch {
+      toast('Could not delete that rule', 'error')
+    }
   }
 
   const triggerFields = triggerFieldsFor(trigger.entityType)
   const selectedField  = triggerFields.find(f => f.value === trigger.field)
   const actionFields   = actionFieldsFor(trigger.entityType)
+
+  const actionProblems = actions.map(actionProblem)
+  const firstProblem   = actionProblems.find(p => p !== null) ?? null
+  const canSave = name.trim().length > 0 && actions.length > 0 && firstProblem === null && !saving
+
+  // Escape closes, focus starts inside, and Tab cycles within the dialog. It was
+  // a bare div with an onClick backdrop: no role, no aria-modal, no key handling
+  // and no focus management, so Tab walked into the page behind a six-field form.
+  useEffect(() => {
+    if (!editId) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { closeModal(); return }
+      if (e.key !== 'Tab') return
+      const root = dialogRef.current
+      if (!root) return
+      const f = root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+      )
+      if (f.length === 0) return
+      const first = f[0], last = f[f.length - 1]
+      if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [editId])
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -153,57 +256,81 @@ export default function AutomationsPage() {
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Automation Rules</h1>
-          <p className="text-sm text-gray-500 mt-0.5">If/Then triggers that run automatically when a record changes</p>
+          <p className="text-sm text-gray-400 mt-0.5">If/Then triggers that run automatically when a record changes</p>
         </div>
         <button onClick={openCreate} className="btn-primary text-sm px-4 py-2 shrink-0">
           + New Rule
         </button>
       </div>
 
-      {/* Review link + suggested rule */}
-      <div className="card p-4 mb-6 space-y-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">Review Link</p>
-          <div className="flex items-center gap-2">
-            <input
-              value={reviewLink}
-              onChange={e => setReviewLink(e.target.value)}
-              placeholder="https://g.page/r/.../review or your Yelp review link"
-              className="input-field text-sm flex-1"
-            />
-            <button
-              onClick={handleSaveReviewLink}
-              disabled={savingReviewLink}
-              className="btn-secondary text-sm px-3 py-1.5 shrink-0"
-            >
-              {savingReviewLink ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-          <p className="text-xs text-gray-600 mt-1.5">
-            Fills the <code className="px-1 py-0.5 rounded bg-gray-800">{'{reviewlink}'}</code> tag in any rule's
-            email or text message.
-          </p>
-        </div>
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-800">
-          <p className="text-sm text-gray-400">Ask customers for a review automatically when an invoice is paid.</p>
-          <button onClick={openReviewPreset} className="btn-secondary text-sm px-3 py-1.5 shrink-0 whitespace-nowrap">
-            Suggested: Request a review
+      {/* Two cards, not one. These were a company-profile setting and a rule
+          template fused together behind a divider, taking the most valuable
+          space on the page to do two unrelated jobs. The template is now an
+          offer to create something, phrased as an action; the setting is a
+          setting. */}
+      <div className="card p-4 mb-4">
+        <label htmlFor="review-link" className="card-section-title block mb-1.5">Review Link</label>
+        <div className="flex items-center gap-2">
+          <input
+            id="review-link"
+            value={reviewLink}
+            onChange={e => setReviewLink(e.target.value)}
+            placeholder="https://g.page/r/.../review or your Yelp review link"
+            className="input-field text-sm flex-1"
+          />
+          <button
+            onClick={handleSaveReviewLink}
+            disabled={savingReviewLink}
+            className="btn-secondary inline-flex items-center gap-1.5 text-sm px-3 py-1.5 shrink-0 disabled:opacity-50"
+          >
+            {savingReviewLink && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+            Save
           </button>
         </div>
+        {/* bg-gray-700, not bg-gray-800: --gray-800 is 255 255 255 in light
+            mode, so the code chip was white on a white card. */}
+        <p className="text-xs text-gray-400 mt-1.5">
+          Fills the <code className="px-1 py-0.5 rounded bg-gray-700 text-gray-200">{'{reviewlink}'}</code> tag in any rule's
+          email or text message.
+        </p>
+      </div>
+
+      <div className="card p-4 mb-6 flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-gray-200">Request a review when an invoice is paid</p>
+          <p className="text-xs text-gray-400 mt-0.5">Texts the customer a thank-you with your review link.</p>
+        </div>
+        <button
+          onClick={openReviewPreset}
+          className="btn-secondary inline-flex items-center gap-1.5 text-sm px-3 py-1.5 shrink-0 whitespace-nowrap"
+        >
+          <Icon d={ICONS.sparkle} className="w-3.5 h-3.5 shrink-0" />
+          Use this rule
+        </button>
       </div>
 
       {/* Rules list */}
       {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-gray-400">Loading…</p>
       ) : rules.length === 0 ? (
         <div className="card p-8 text-center">
           <p className="text-gray-400 font-medium">No automation rules yet</p>
-          <p className="text-sm text-gray-600 mt-1">Create one to react automatically to changes on Customers, Invoices, Service Requests, Purchase Orders, or E-Signature Requests.</p>
+          <p className="text-sm text-gray-400 mt-1">Create one to react automatically to changes on Customers, Invoices, Service Requests, Purchase Orders, or E-Signature Requests.</p>
         </div>
       ) : (
         <div className="space-y-3">
           {rules.map(rule => (
-            <div key={rule.id} className="card p-4">
+            /* A paused rule reads as paused. It used to be identical to a live
+               one apart from a small pill — same card, same white title, same
+               full-strength action list — on a page where "is this running?" is
+               the only question that matters. Paused now loses the left accent
+               and drops to 60% opacity, so the list is scannable at a glance. */
+            <div
+              key={rule.id}
+              className={`card p-4 border-l-2 transition-opacity ${
+                rule.enabled ? 'border-l-green-500' : 'border-l-gray-600 opacity-60'
+              }`}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -213,45 +340,62 @@ export default function AutomationsPage() {
                     }`}>
                       {rule.enabled ? 'Active' : 'Paused'}
                     </span>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-700 text-gray-300">
                       {ENTITY_TYPE_LABELS[rule.trigger.entityType]}
                     </span>
                   </div>
                   <p className="text-sm text-gray-400 mt-1.5">{describeTrigger(rule.trigger)}</p>
                   <ul className="mt-2 space-y-1">
                     {rule.actions.map((a, i) => (
-                      <li key={i} className="text-xs text-gray-500 flex items-center gap-1.5">
-                        <svg className="w-3 h-3 text-indigo-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 8.25 21 12m0 0-3.75 3.75M21 12H3" />
-                        </svg>
+                      <li key={i} className="text-xs text-gray-400 flex items-center gap-1.5">
+                        <Icon d={ICONS.arrowRight} className="w-3 h-3 text-indigo-400 shrink-0" />
                         {describeAction(a)}
                       </li>
                     ))}
                   </ul>
                   {rule.runCount > 0 && (
-                    <p className="text-xs text-gray-600 mt-2">
+                    <p className="text-xs text-gray-400 mt-2">
                       Fired {rule.runCount} time{rule.runCount === 1 ? '' : 's'}
-                      {rule.lastRunAt && ` · last ${rule.lastRunAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+                      {rule.lastRunAt && ` · last ${rule.lastRunAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {/* role=switch + aria-checked + a name. This was a <button>
+                      with only a title attribute — a screen reader announced
+                      "button" for the control that decides whether a rule sends
+                      texts and emails to customers. */}
                   <button
+                    type="button"
+                    role="switch"
+                    aria-checked={rule.enabled}
+                    aria-label={`${rule.enabled ? 'Pause' : 'Activate'} rule "${rule.name}"`}
                     onClick={() => handleToggle(rule)}
                     title={rule.enabled ? 'Pause rule' : 'Activate rule'}
-                    className={`relative w-9 h-5 rounded-full transition-colors ${rule.enabled ? 'bg-indigo-600' : 'bg-gray-700'}`}
+                    className={`relative w-9 h-5 rounded-full transition-colors shrink-0
+                                focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                      rule.enabled ? 'bg-indigo-600' : 'bg-gray-600'
+                    }`}
                   >
-                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${rule.enabled ? 'translate-x-4' : ''}`} />
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${rule.enabled ? 'translate-x-4' : ''}`} />
                   </button>
-                  <button onClick={() => openEdit(rule)} className="text-gray-500 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-800 transition-colors">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
-                    </svg>
+                  <button
+                    onClick={() => openEdit(rule)}
+                    aria-label={`Edit rule "${rule.name}"`}
+                    title="Edit"
+                    className="text-gray-400 hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-700/50 transition-colors
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    <Icon d={ICONS.pencil} className="w-4 h-4" />
                   </button>
-                  <button onClick={() => setDeleteTarget(rule)} className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-gray-800 transition-colors">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                    </svg>
+                  <button
+                    onClick={() => setDeleteTarget(rule)}
+                    aria-label={`Delete rule "${rule.name}"`}
+                    title="Delete"
+                    className="text-gray-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-gray-700/50 transition-colors
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    <Icon d={ICONS.trash} className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -274,19 +418,30 @@ export default function AutomationsPage() {
         {showLog && (
           <div className="mt-3 card divide-y divide-gray-800">
             {log.length === 0 ? (
-              <p className="p-4 text-sm text-gray-600">No automations have fired yet.</p>
+              <p className="p-4 text-sm text-gray-400">No automations have fired yet.</p>
             ) : log.map(entry => (
+              /* The record is now reachable and the timestamp is unambiguous.
+                 Entries showed month + day only, so five firings today were five
+                 identical rows and last year's looked like this year's — and
+                 neither the rule nor the record was a link, so you couldn't get
+                 from "this fired" to the thing it changed. */
               <div key={entry.id} className="p-3 flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
                   <p className="text-gray-300 truncate">
                     <span className="font-medium text-white">{entry.ruleName}</span>
-                    {' → '}
-                    <span>{ENTITY_TYPE_LABELS[entry.entityType]}</span> "{entry.entityLabel}"
+                    <Icon d={ICONS.arrowRight} className="w-3 h-3 inline-block mx-1.5 align-[-1px] text-gray-400" />
+                    <span className="text-gray-400">{ENTITY_TYPE_LABELS[entry.entityType]}</span>{' '}
+                    <Link to={entityHref(entry)} className="text-indigo-400 hover:text-indigo-300 hover:underline">
+                      {entry.entityLabel || 'record'}
+                    </Link>
                   </p>
-                  <p className="text-xs text-gray-500 truncate">{entry.actionsSummary}</p>
+                  <p className="text-xs text-gray-400 truncate">{entry.actionsSummary}</p>
                 </div>
-                <span className="text-xs text-gray-600 shrink-0">
-                  {entry.ranAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                <span
+                  className="text-xs text-gray-400 shrink-0 tabular-nums"
+                  title={entry.ranAt.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })}
+                >
+                  {entry.ranAt.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
                 </span>
               </div>
             ))}
@@ -297,15 +452,27 @@ export default function AutomationsPage() {
       {/* Create / Edit modal */}
       {editId && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-0 sm:px-4">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={closeModal} />
-          <div className="relative bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl shadow-2xl flex flex-col max-h-[94vh]">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={closeModal} aria-hidden="true" />
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rule-dialog-title"
+            className="relative bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl shadow-2xl flex flex-col max-h-[94vh]"
+          >
 
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 shrink-0">
-              <p className="font-semibold text-white">{isNew ? 'New Automation Rule' : `Edit: ${editingRule?.name ?? ''}`}</p>
-              <button type="button" onClick={closeModal} className="text-gray-400 hover:text-gray-200">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                </svg>
+              <p id="rule-dialog-title" className="font-semibold text-white">
+                {isNew ? 'New Automation Rule' : `Edit: ${editingRule?.name ?? ''}`}
+              </p>
+              <button
+                type="button"
+                onClick={closeModal}
+                aria-label="Close"
+                className="p-1.5 -mr-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors
+                           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.close} className="w-5 h-5" />
               </button>
             </div>
 
@@ -313,7 +480,7 @@ export default function AutomationsPage() {
 
               {/* Name */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1.5">Rule Name *</label>
+                <label className="form-label">Rule Name *</label>
                 <input
                   autoFocus
                   value={name}
@@ -325,11 +492,11 @@ export default function AutomationsPage() {
 
               {/* Trigger */}
               <div className="border border-gray-800 rounded-xl p-4 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">If — Trigger</p>
+                <p className="card-section-title">If — Trigger</p>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1.5">Record Type</label>
+                    <label className="form-label">Record Type</label>
                     <select
                       value={trigger.entityType}
                       onChange={e => setEntityType(e.target.value as AutomationEntityType)}
@@ -341,7 +508,7 @@ export default function AutomationsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1.5">Field</label>
+                    <label className="form-label">Field</label>
                     <select
                       value={trigger.field}
                       onChange={e => {
@@ -358,7 +525,7 @@ export default function AutomationsPage() {
 
                 <div className="grid grid-cols-2 gap-3 items-end">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1.5">Condition</label>
+                    <label className="form-label">Condition</label>
                     <select
                       value={trigger.type}
                       onChange={e => setTrigger(t => ({ ...t, type: e.target.value as AutomationTrigger['type'] }))}
@@ -370,7 +537,7 @@ export default function AutomationsPage() {
                   </div>
                   {trigger.type === 'changes_to' && (
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1.5">Value</label>
+                      <label className="form-label">Value</label>
                       {selectedField?.options ? (
                         <select
                           value={trigger.value}
@@ -391,13 +558,13 @@ export default function AutomationsPage() {
                   )}
                 </div>
 
-                <p className="text-xs text-gray-500 italic">{describeTrigger(trigger)}</p>
+                <p className="text-xs text-gray-400 italic">{describeTrigger(trigger)}</p>
               </div>
 
               {/* Actions */}
               <div className="border border-gray-800 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Then — Actions</p>
+                  <p className="card-section-title">Then — Actions</p>
                   <button type="button" onClick={addAction} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
                     + Add action
                   </button>
@@ -408,7 +575,8 @@ export default function AutomationsPage() {
                     <div className="flex items-center justify-between gap-2">
                       <select
                         value={action.type}
-                        onChange={e => updateAction(i, { type: e.target.value as AutomationAction['type'] })}
+                        aria-label={`Action ${i + 1} type`}
+                        onChange={e => changeActionType(i, e.target.value as AutomationAction['type'])}
                         className="input-field text-sm flex-1"
                       >
                         {actionTypesFor(trigger.entityType).map(t => (
@@ -416,10 +584,14 @@ export default function AutomationsPage() {
                         ))}
                       </select>
                       {actions.length > 1 && (
-                        <button type="button" onClick={() => removeAction(i)} className="text-gray-500 hover:text-red-400 p-1">
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                          </svg>
+                        <button
+                          type="button"
+                          onClick={() => removeAction(i)}
+                          aria-label={`Remove action ${i + 1}`}
+                          className="p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-gray-700/50 transition-colors
+                                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                        >
+                          <Icon d={ICONS.close} className="w-4 h-4" />
                         </button>
                       )}
                     </div>
@@ -474,7 +646,7 @@ export default function AutomationsPage() {
                           onChange={e => updateAction(i, { days: Number(e.target.value) })}
                           className="input-field text-sm w-24"
                         />
-                        <span className="text-sm text-gray-500">day(s) from now</span>
+                        <span className="text-sm text-gray-400">day(s) from now</span>
                       </div>
                     )}
 
@@ -505,20 +677,36 @@ export default function AutomationsPage() {
                         className="input-field text-sm w-full resize-none"
                       />
                     )}
+
+                    {/* Says what's missing, per action, rather than letting an
+                        empty message save and then fire at a customer. */}
+                    {actionProblems[i] && (
+                      <p className="flex items-center gap-1.5 text-xs text-amber-400">
+                        <Icon d={ICONS.warning} className="w-3.5 h-3.5 shrink-0" />
+                        {actionProblems[i]}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-700 shrink-0">
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-700 shrink-0">
+              {/* The reason Save is unavailable, next to Save. */}
+              {!canSave && !saving && (
+                <p className="text-xs text-gray-400 mr-auto">
+                  {!name.trim() ? 'Give the rule a name to save it.' : firstProblem}
+                </p>
+              )}
               <button onClick={closeModal} className="btn-secondary text-sm px-4 py-2">Cancel</button>
               <button
                 onClick={handleSave}
-                disabled={!name.trim() || saving}
-                className="btn-primary text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={!canSave}
+                className="btn-primary inline-flex items-center gap-1.5 text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {saving ? 'Saving…' : isNew ? 'Create Rule' : 'Save Changes'}
+                {saving && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+                {isNew ? 'Create Rule' : 'Save Changes'}
               </button>
             </div>
           </div>
@@ -532,6 +720,19 @@ export default function AutomationsPage() {
         confirmLabel="Delete"
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* Activation confirmation. Deleting a rule sends nothing and was already
+          confirmed; switching one on is what starts contacting customers, and
+          that was a single unprompted click. */}
+      <ConfirmModal
+        isOpen={activateTarget !== null}
+        message={activateTarget
+          ? `Activate "${activateTarget.name}"? It will run automatically from now on — ${describeTrigger(activateTarget.trigger).toLowerCase()}, then ${activateTarget.actions.map(describeAction).join('; ').toLowerCase()}.`
+          : ''}
+        confirmLabel="Activate"
+        onConfirm={() => { if (activateTarget) setEnabled(activateTarget, true); setActivateTarget(null) }}
+        onCancel={() => setActivateTarget(null)}
       />
     </div>
   )
