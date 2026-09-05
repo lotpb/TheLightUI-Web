@@ -1,5 +1,5 @@
 import type { CustomerItem } from './customer'
-import { fullName, formatCurrency } from './customer'
+import { fullName, formatCurrencyPrecise } from './customer'
 
 export type DocTemplateKind = 'proposal' | 'contract' | 'report' | 'letter'
 
@@ -10,11 +10,23 @@ export const KIND_LABELS: Record<DocTemplateKind, string> = {
   letter:   'Letter',
 }
 
+/**
+ * The 900/40 + 400 pairs, which index.css themes for background *and* text.
+ *
+ * The previous bg-X-500/15 + text-X-300 badges had text overrides but no
+ * background ones, so in light mode the words stayed readable while the pill —
+ * a 15% tint with a 25% border over white — all but vanished, leaving four
+ * differently-coloured words rather than four badges.
+ *
+ * Contract moves rose → red and letter teal → sky, because rose and teal have
+ * no 900/40 background rule. Both remain distinguishable from each other and
+ * from the other two, and the swap buys a badge that survives light mode.
+ */
 export const KIND_COLORS: Record<DocTemplateKind, string> = {
-  proposal: 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/25',
-  contract: 'bg-rose-500/15 text-rose-300 border border-rose-500/25',
-  report:   'bg-amber-500/15 text-amber-300 border border-amber-500/25',
-  letter:   'bg-teal-500/15 text-teal-300 border border-teal-500/25',
+  proposal: 'bg-indigo-900/40 text-indigo-400 border border-indigo-700/30',
+  contract: 'bg-red-900/40 text-red-400 border border-red-700/30',
+  report:   'bg-amber-900/40 text-amber-400 border border-amber-700/30',
+  letter:   'bg-sky-900/40 text-sky-400 border border-sky-700/30',
 }
 
 export interface DocSection {
@@ -41,6 +53,9 @@ export const DOC_PLACEHOLDERS = [
   { token: '{{address}}',        desc: 'Street' },
   { token: '{{city}}',           desc: 'City' },
   { token: '{{state}}',          desc: 'State' },
+  // buildDocVars has always provided zip; it just wasn't listed, so it worked
+  // if you typed it by hand and was otherwise undiscoverable.
+  { token: '{{zip}}',            desc: 'ZIP code' },
   { token: '{{phone}}',          desc: 'Phone' },
   { token: '{{email}}',          desc: 'Email' },
   { token: '{{salesman}}',       desc: 'Sales rep' },
@@ -71,7 +86,9 @@ export function buildDocVars(c: CustomerItem): Record<string, string> {
     salesman:       c.salesman,
     job:            c.job,
     product:        c.product,
-    amount:         c.amount > 0 ? formatCurrency(c.amount) : '',
+    // Cents kept. formatCurrency rounds to whole dollars, so a $12,450.75 job
+    // printed as "$12,451" inside a proposal or contract the customer signs.
+    amount:         c.amount > 0 ? formatCurrencyPrecise(c.amount) : '',
     startDate:      fmtD(c.startDate),
     completionDate: fmtD(c.completionDate),
     today:          fmtD(new Date()),

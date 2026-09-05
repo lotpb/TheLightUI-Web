@@ -227,6 +227,15 @@ html.light-mode .text-red-400    { color: #b91c1c !important; }
    tuned pill colours are unaffected. */
 html.light-mode .text-yellow-400 { color: #854d0e !important; }
 html.light-mode .text-orange-300 { color: #9a3412 !important; }
+/* text-teal-400 was the last standalone accent with no light-mode rule, at
+   1.86:1 on a white card. It's on ten-plus surfaces — the nav header colour, the
+   job pipeline's "In Progress", a pipeline stage colour, and the secondary
+   action on /doc-templates, /invoices, /lead-forms, /purchase-orders and
+   /time-tracking — so every one of those was invisible in light mode. teal-800
+   rather than teal-700 for the same reason as the yellows: it also appears on
+   the pale page background and on bg-gray-700, where teal-700 drops to 3.95:1.
+   teal-800 clears AA on all three (7.58 / 6.92 / 5.47). */
+html.light-mode .text-teal-400   { color: #115e59 !important; }
 /* The 200 shades are paler still, and every place they're used (idle sign-out
    banner, duplicate warnings, low-stock list, code chips) sits on a surface that
    goes white or pale-tinted in light mode, so they vanish without this. */
