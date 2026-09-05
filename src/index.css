@@ -257,6 +257,14 @@ html.light-mode .text-violet-400 { color: #6d28d9 !important; }
    the four whose name was unreadable in light mode. blue-700 clears AA on card,
    page and bg-gray-700 (6.70/6.12/4.83). */
 html.light-mode .text-blue-400   { color: #1d4ed8 !important; }
+/* The last two group hues on /menu without a rule — Sales & Finance and System
+   — at 1.92:1 and 2.56:1 on the count pill, whose bg-gray-800 is white in light
+   mode. Both also appear on pipelineStage, CustomerDetailPage,
+   CustomerHealthPage, ChartPage, ProposalListPage, InvoiceDetailPage and
+   ProposalDetailPage, so this covers those too. emerald-800 rather than the
+   700, which drops to 3.95:1 on bg-gray-700. */
+html.light-mode .text-emerald-400 { color: #065f46 !important; }
+html.light-mode .text-slate-400   { color: #475569 !important; }
 /* The 200 shades are paler still, and every place they're used (idle sign-out
    banner, duplicate warnings, low-stock list, code chips) sits on a surface that
    goes white or pale-tinted in light mode, so they vanish without this. */
