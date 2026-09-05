@@ -1111,7 +1111,7 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
   return (
     <section className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0">Follow-ups · scheduled</p>
+        <p className="section-header mb-0">Follow-Ups</p>
         {overdueOrToday.length > 0 && (
           <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-red-600">
             {overdueOrToday.length} due
