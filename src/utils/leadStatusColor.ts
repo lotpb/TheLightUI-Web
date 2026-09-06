@@ -12,6 +12,23 @@ const LEAD_STATUS_COLORS: Record<string, string> = {
   'Lost':           'bg-red-500/20 text-red-300 border border-red-500/30',
 }
 
+/**
+ * The seven canonical statuses, in pipeline order.
+ *
+ * The Status quick filters on /leads were built purely from the values present
+ * in the records and sorted alphabetically, which had two costs: an imported
+ * "Qualifed" became a filter button indistinguishable from the real ones, and
+ * the real ones came out as Contacted, Lost, Negotiating, New… — alphabetical
+ * order across a sequence that has a natural order. Consumers should list these
+ * first (filtered to what's actually present) and append any non-canonical
+ * values after, so legacy data stays reachable without being promoted.
+ */
+export const LEAD_STATUS_OPTIONS: string[] = Object.keys(LEAD_STATUS_COLORS)
+
+export function isCanonicalLeadStatus(status: string): boolean {
+  return status in LEAD_STATUS_COLORS
+}
+
 // Falls back to the generic hash-based tag palette for legacy/custom values
 // (e.g. imported data) that don't match one of the fixed options above.
 export function leadStatusColor(status: string): string {

@@ -15,9 +15,9 @@ import { usePickerStore } from '../../stores/pickerStore'
 import { usePrefStore } from '../../stores/prefStore'
 import { usePermissions } from '../../hooks/usePermissions'
 import { tagColor } from '../../utils/tagColor'
-import { leadStatusColor } from '../../utils/leadStatusColor'
+import { leadStatusColor, LEAD_STATUS_OPTIONS, isCanonicalLeadStatus } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
-import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
+import { scoreLead, scoreBreakdown, SCORE_BANDS, scoreBandRange } from '../../utils/leadScore'
 import { calculateHealthScore, healthBreakdown, HEALTH_BANDS, healthBandRange, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
 import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
@@ -66,7 +66,9 @@ const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Emplo
  * is the only thing left of it.
  */
 const CLUSTER_LEGEND: Record<CustomerCategory, string> = {
-  Lead:     'Amount · Score · Age',
+  // "Days open", not "Age": the number is days since creationDate, and sitting
+  // beside a score chip it read equally well as days since last contact.
+  Lead:     'Amount · Score · Days open',
   Customer: 'Amount · Health · Payment',
   Vendor:   'Amount · Rating · Callback',
   Employee: 'Employment status',
@@ -194,12 +196,16 @@ function QuickFilterPanel({ open, onToggle, activeCount, children }: {
  *  sources come from the records themselves, so imported data can produce
  *  dozens. The active option is always kept visible even when collapsed,
  *  so a filter can never be hidden while it's in effect. */
-function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6 }: {
+function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6, renderLabel }: {
   title: string
   options: string[]
   activeValue: string
   onSelect: (next: string) => void
   initial?: number
+  /** Renders the option as something other than plain text — used by the Lead
+   *  Status group, where the row shows each status as a hue-coded pill and the
+   *  filter for the same value was unstyled grey text. */
+  renderLabel?: (option: string) => ReactNode
 }) {
   const [expanded, setExpanded] = useState(false)
   const base = options.slice(0, initial)
@@ -217,7 +223,7 @@ function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6 }
       {shown.map(o => (
         <QuickFilterButton
           key={o}
-          label={o}
+          label={renderLabel ? renderLabel(o) : o}
           active={activeValue === o}
           onClick={() => onSelect(activeValue === o ? '' : o)}
         />
@@ -370,13 +376,18 @@ export default function CustomerListPage() {
   function clearPanelFilters() {
     setFilterSalesman('')
     setFilterState('')
-    setFilterLeadSource('')
-    setFilterProduct('')
     setFilterCallback('')
     setFilterDateFrom('')
     setFilterDateTo('')
     setFilterAmtMin('')
     setFilterAmtMax('')
+    // Source and Product belong to the sidebar on /leads, so this button
+    // mustn't reach them there — the whole point of the panel/sidebar split is
+    // that each surface clears only what it shows.
+    if (cat !== 'Lead') {
+      setFilterLeadSource('')
+      setFilterProduct('')
+    }
   }
 
   /** Everything the list narrows on — including the tag and the search box,
@@ -652,10 +663,19 @@ export default function CustomerListPage() {
     return [...set].sort()
   }, [all, cat])
 
+  // Canonical statuses first, in pipeline order, then anything else the data
+  // holds. Purely data-derived and alphabetically sorted, this produced
+  // "Contacted, Lost, Negotiating, New, Proposal Sent, Qualified, Won" — A–Z
+  // across a sequence with a natural order — and promoted an imported
+  // "Qualifed" to a filter button indistinguishable from the real ones. Only
+  // statuses actually present are listed, so no button can return nothing, and
+  // non-canonical values stay reachable at the end rather than being dropped.
   const uniqueLeadStatuses = useMemo<string[]>(() => {
-    const set = new Set<string>()
-    all.filter(c => categoryMatches(c.category, cat) && c.leadStatus.trim()).forEach(c => set.add(c.leadStatus.trim()))
-    return [...set].sort()
+    const present = new Set<string>()
+    all.filter(c => categoryMatches(c.category, cat) && c.leadStatus.trim()).forEach(c => present.add(c.leadStatus.trim()))
+    const canonical = LEAD_STATUS_OPTIONS.filter(s => present.has(s))
+    const extra = [...present].filter(s => !isCanonicalLeadStatus(s)).sort()
+    return [...canonical, ...extra]
   }, [all, cat])
 
   const uniquePaymentStatuses = useMemo<string[]>(() => {
@@ -740,14 +760,37 @@ export default function CustomerListPage() {
   // made the badge read "3" while every select inside the panel said "All" and
   // the panel's own footer claimed "3 filters active" over nothing — and its
   // "Clear all" then cleared state the panel had never shown.
+  // Which shared fields the Filters panel renders for this category. These are
+  // the same conditions the panel's JSX uses, named once so the counts can't
+  // disagree with what's on screen.
+  //
+  // Source and Product are the two that move: /leads shows them as sidebar
+  // groups, every other category shows them as panel selects. Counting them as
+  // panel filters unconditionally meant setting Source on /leads incremented
+  // the Filters badge while the panel it opened had no Source control — the
+  // same mismatch the split was introduced to fix, still live on this route.
+  const panelShowsSalesman   = isLeadOrCustomer(cat) && uniqueSalesmen.length > 0
+  const panelShowsLeadSource = uniqueLeadSources.length > 0 && cat !== 'Lead'
+  const panelShowsProduct    = uniqueProducts.length > 0 && cat !== 'Lead'
+  const panelShowsCallback   = isLeadOrCustomer(cat)
+  const panelShowsAmount     = cat !== 'Employee'
+
   const panelFilterCount = [
-    filterSalesman, filterState, filterLeadSource, filterProduct,
-    filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+    panelShowsSalesman ? filterSalesman : '',
+    filterState,
+    panelShowsLeadSource ? filterLeadSource : '',
+    panelShowsProduct ? filterProduct : '',
+    panelShowsCallback ? filterCallback : '',
+    filterDateFrom, filterDateTo,
+    panelShowsAmount ? filterAmtMin : '',
+    panelShowsAmount ? filterAmtMax : '',
   ].filter(Boolean).length
 
   const quickFilterCount = [
     filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
     filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
+    panelShowsLeadSource ? '' : filterLeadSource,
+    panelShowsProduct ? '' : filterProduct,
   ].filter(Boolean).length
 
   const activeFilterCount = panelFilterCount + quickFilterCount
@@ -1263,7 +1306,7 @@ export default function CustomerListPage() {
                 dropdown labelled "Salesman" whose only options were "yes" and
                 "no", duplicating the sidebar's Salesperson buttons through a
                 different piece of state the two could disagree on. */}
-            {isLeadOrCustomer(cat) && uniqueSalesmen.length > 0 && (
+            {panelShowsSalesman && (
               <div>
                 <label className="block text-xs text-gray-400 mb-1">{labels.salesman ?? 'Salesman'}</label>
                 <select
@@ -1293,7 +1336,7 @@ export default function CustomerListPage() {
                 select would be a second control on the same filterLeadSource
                 state. The other categories have no sidebar Source group, so
                 they still need it here. */}
-            {uniqueLeadSources.length > 0 && cat !== 'Lead' && (
+            {panelShowsLeadSource && (
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Lead Source</label>
                 <select
@@ -1306,7 +1349,10 @@ export default function CustomerListPage() {
                 </select>
               </div>
             )}
-            {uniqueProducts.length > 0 && (
+            {/* Not on /leads: Product joins Source in the Common Filters
+                sidebar there, so the two taxonomies a lead is qualified by sit
+                on one surface instead of split across two. */}
+            {panelShowsProduct && (
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Product</label>
                 <select
@@ -1328,7 +1374,7 @@ export default function CustomerListPage() {
                 field that actually holds the flag (c.salesman), so this was
                 also a second control labelled "Callback" on the same page.
                 Employees don't have the dimension at all. */}
-            {isLeadOrCustomer(cat) && (
+            {panelShowsCallback && (
             <div>
               <label className="block text-xs text-gray-400 mb-1">Callback</label>
               <select
@@ -1368,7 +1414,7 @@ export default function CustomerListPage() {
           {/* Amount isn't an employee field — the form gates it behind
               !isEmployee — so a min/max range over staff records filters on
               legacy import data. */}
-          {cat !== 'Employee' && (
+          {panelShowsAmount && (
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Min Amount ($)</label>
@@ -1510,6 +1556,26 @@ export default function CustomerListPage() {
         )
       )}
 
+      {/* Lead score bands. Same treatment /customers gets for health — the
+          thresholds lived only inside scoreLead's if-chain, and scoreBreakdown
+          reaches the reader through a `title` tooltip, which doesn't exist on
+          touch. Keyed off SCORE_BANDS so the swatch is the chip it explains. */}
+      {cat === 'Lead' && !listLoading && filtered.length > 0 && (
+        <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap mb-3 text-xs text-gray-400">
+          <span className="font-medium">Score bands:</span>
+          {SCORE_BANDS.map((band, i) => (
+            <span
+              key={band.label}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-semibold border ${band.badgeClass}`}
+            >
+              <span className={`w-1 h-1 rounded-full ${band.dotClass}`} />
+              {band.label}
+              <span className="tabular-nums font-bold">{scoreBandRange(i)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Health bands, keyed with the chips' own badgeClass so the swatch is
           the thing it explains — the same approach /vendor-scorecards uses for
           its on-time colours. The chip's per-factor breakdown is a `title`
@@ -1566,7 +1632,7 @@ export default function CustomerListPage() {
           </div>
         )}
         {listLoading ? (
-          Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
+          Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} cat={cat} />)
         ) : filtered.length === 0 ? (
           <div className="px-4 py-8 text-center">
             {/* anyFilterActive includes the tag. Gated on activeFilterCount
@@ -1734,6 +1800,13 @@ export default function CustomerListPage() {
           activeCount={quickFilterCount}
         >
 
+          {/* Titled. The first six buttons were one undifferentiated stack of
+              identical chips measuring three unrelated things — visibility,
+              assignment, and quality — while everything below them was grouped.
+              "Hot Leads" is a score band and "Stale" an age threshold, adjacent
+              and indistinguishable; both now say which dimension they're on and
+              what their threshold is. */}
+          <p className="card-section-title px-1">Show</p>
           <QuickFilterButton
             label="Active Leads"
             active={!showInactive}
@@ -1745,6 +1818,7 @@ export default function CustomerListPage() {
             onClick={() => { setShowInactive(true); localStorage.setItem('thelight.showInactive', 'true') }}
           />
 
+          <p className="card-section-title pt-2 px-1">Assignment</p>
           <QuickFilterButton
             label="My Leads"
             active={filterAssignment === 'mine'}
@@ -1756,23 +1830,34 @@ export default function CustomerListPage() {
             onClick={() => setFilterAssignment(filterAssignment === 'unassigned' ? '' : 'unassigned')}
           />
 
+          <p className="card-section-title pt-2 px-1">Quality</p>
           <QuickFilterButton
-            label="Hot Leads"
+            label={`Hot (score ${SCORE_BANDS[0].min}+)`}
             active={filterQuality === 'hot'}
             onClick={() => setFilterQuality(filterQuality === 'hot' ? '' : 'hot')}
           />
           <QuickFilterButton
-            label="Stale (30+ Days)"
+            label="Stale (open 30+ days)"
             active={filterQuality === 'stale'}
             onClick={() => setFilterQuality(filterQuality === 'stale' ? '' : 'stale')}
           />
 
+          {/* The pill, not plain text: the row renders each status as a
+              hue-coded pill from LEAD_STATUS_COLORS, so "Won" was a green pill
+              in the list and unstyled grey text in the control that filters for
+              it. initial=7 so all the canonical statuses fit before the cap. */}
           {uniqueLeadStatuses.length > 0 && (
             <QuickFilterGroup
               title="Status"
               options={uniqueLeadStatuses}
               activeValue={filterLeadStatus}
               onSelect={setFilterLeadStatus}
+              initial={LEAD_STATUS_OPTIONS.length}
+              renderLabel={o => (
+                <span className={`inline-block px-1.5 py-0.5 rounded-full text-xs font-medium ${leadStatusColor(o)}`}>
+                  {o}
+                </span>
+              )}
             />
           )}
 
@@ -1782,6 +1867,17 @@ export default function CustomerListPage() {
               options={uniqueLeadSources}
               activeValue={filterLeadSource}
               onSelect={setFilterLeadSource}
+            />
+          )}
+
+          {/* Moved off the Filters panel so Source and Product — the two
+              taxonomies a lead is qualified by — sit together. */}
+          {uniqueProducts.length > 0 && (
+            <QuickFilterGroup
+              title="Product"
+              options={uniqueProducts}
+              activeValue={filterProduct}
+              onSelect={setFilterProduct}
             />
           )}
         </QuickFilterPanel>
@@ -2096,8 +2192,14 @@ function CustomerRow({
             {(c.tags ?? []).slice(0, 2).map(tag => (
               <span key={tag} className={`px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${tagColor(tag)}`}>#{tag}</span>
             ))}
+            {/* Shaped like the tags it stands for. As bare text it was a fifth
+                silhouette in a row that already carries a round status pill,
+                squared tag chips, a rounded-md score chip and plain-text days —
+                and it belongs to the tag group, so it should look like it. */}
             {(c.tags ?? []).length > 2 && (
-              <span className="text-xs text-gray-400 shrink-0">+{c.tags.length - 2}</span>
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium shrink-0 bg-gray-700/50 text-gray-400 border border-gray-600">
+                +{c.tags.length - 2}
+              </span>
             )}
           </div>
           {/* Each subtitle field truncates in its own box rather than the whole
@@ -2132,7 +2234,12 @@ function CustomerRow({
             nothing aligned vertically and the subtitle's truncation point moved
             row to row. Left auto for the other categories, whose clusters hold
             different content. */}
-        <div className={`shrink-0 text-right flex flex-col items-end gap-1 self-start ${c.category.toLowerCase() === 'lead' ? 'w-40' : ''}`}>
+        {/* sm:w-40, not w-40. The fixed column keeps the two numeric readouts
+            landing in the same place on every row, which is worth 160px at
+            desktop width — but it was applied at every width, so on a 390px
+            phone it reserved 41% of the viewport and left the name and subtitle
+            106px to share. Below sm it sizes to its content (~126px). */}
+        <div className={`shrink-0 text-right flex flex-col items-end gap-1 self-start ${lowerCat === 'lead' ? 'sm:w-40' : ''}`}>
           {/* One amount for every category. Customers used to render their own
               copy outside the link, which meant clicking a customer's amount
               did nothing while clicking a lead's navigated. */}
@@ -2140,7 +2247,18 @@ function CustomerRow({
               section, so a value on a staff record is legacy import data with
               no defined meaning — and it rendered in the same slot, with the
               same styling, as a lead's deal value. */}
-          {c.amount > 0 && lowerCat !== 'employee' && (
+          {/* Leads always reserve this line, empty when there's no amount.
+              The cluster is a flex column, so a lead with amount 0 lost its
+              first row and slid the score chip and age up 24px — the rows kept
+              an even 68px because the name/subtitle block sets the height, so
+              the list looked evenly spaced while the chips inside it staggered.
+              Sorting by Score is exactly when you scan that column vertically.
+              An empty h-5 holds the slot without printing a placeholder. */}
+          {lowerCat === 'lead' ? (
+            <p className="h-5 text-sm font-semibold text-white tabular-nums">
+              {c.amount > 0 ? formatCurrency(c.amount) : ''}
+            </p>
+          ) : c.amount > 0 && lowerCat !== 'employee' && (
             <p className="text-sm font-semibold text-white tabular-nums">{formatCurrency(c.amount)}</p>
           )}
           {c.category.toLowerCase() === 'customer' && (
@@ -2405,31 +2523,44 @@ function AssignInput({
 }
 
 /**
- * Shaped to the row it stands in for.
+ * The right-hand bars, per category, sized so the skeleton is exactly as tall
+ * as the row it stands in for.
  *
- * It was `gap-4 px-4 py-3.5` around a 40px avatar and two bars — 68px tall,
- * against ~86px for a real customer row with an amount, a health chip and a
- * payment word stacked on the right. Six of them meant everything below the
- * list dropped ~108px the moment the data arrived. Same paddings, same 36px
- * avatar, and a right-hand stack of three bars so the height matches instead of
- * approximating.
+ * A single shape can't do this: the cluster holds a different number of lines
+ * per category. Customers stack an amount, a health chip and a payment word
+ * (20 + 18 + 16 + two 4px gaps = 62px); Leads and Vendors stack an amount over
+ * a single chip row (20 + 20 + one gap = 44px); Employees render nothing here
+ * at all, because Amount is gated behind !isEmployee and their status control
+ * lives in the trailing slot.
+ *
+ * Sizing every category to the customer's three lines — which is what shipped
+ * first — made the skeleton 86px against a 68px lead row, so /leads pulled up
+ * 108px over six rows when the data landed. The left-hand bars are 44px
+ * (20 + 8 + 16) to match the real name + subtitle block, which is what sets the
+ * height once the cluster is empty.
  */
-function SkeletonRow() {
+const SKELETON_CLUSTER: Record<CustomerCategory, string[]> = {
+  Lead:     ['h-5 w-16', 'h-5 w-28'],
+  Customer: ['h-5 w-16', 'h-[1.125rem] w-24', 'h-4 w-12'],
+  Vendor:   ['h-5 w-16', 'h-5 w-24'],
+  Employee: [],
+}
+
+function SkeletonRow({ cat }: { cat: CustomerCategory }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 animate-pulse">
       <div className="w-9 h-9 rounded-full bg-gray-700 shrink-0" />
       <div className="flex-1 space-y-2">
-        <div className="h-4 bg-gray-700 rounded w-40" />
-        <div className="h-3 bg-gray-700/60 rounded w-28" />
+        <div className="h-5 bg-gray-700 rounded w-40" />
+        <div className="h-4 bg-gray-700/60 rounded w-28" />
       </div>
-      {/* 20 + 4 + 18 + 4 + 16 = 62px, matching the real cluster's amount line,
-          health chip and payment word exactly, so the row height comes out at
-          86px either way. */}
-      <div className="shrink-0 self-start flex flex-col items-end gap-1">
-        <div className="h-5 w-16 bg-gray-700 rounded" />
-        <div className="h-[1.125rem] w-24 bg-gray-700/60 rounded-md" />
-        <div className="h-4 w-12 bg-gray-700/60 rounded" />
-      </div>
+      {SKELETON_CLUSTER[cat].length > 0 && (
+        <div className="shrink-0 self-start flex flex-col items-end gap-1">
+          {SKELETON_CLUSTER[cat].map((bar, i) => (
+            <div key={i} className={`${bar} bg-gray-700/60 rounded`} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
