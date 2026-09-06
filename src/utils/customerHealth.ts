@@ -24,33 +24,75 @@ function daysSince(d: Date): number {
   return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-function resolveLabel(score: number): Pick<CustomerHealth, 'label' | 'badgeClass' | 'dotClass' | 'barClass'> {
-  if (score >= 80) return {
+export interface HealthBand {
+  label: HealthLabel
+  /** Inclusive lower bound. Descending order, so the first match wins. */
+  min: number
+  badgeClass: string
+  dotClass: string
+  barClass: string
+}
+
+/**
+ * The four bands, highest first — one source for resolveLabel(), for the Health
+ * quick filters on /customers, and for the legend the list renders above its
+ * rows.
+ *
+ * The thresholds used to exist only inside resolveLabel's if-chain, so a chip
+ * could read "Good 72" with nothing on the page saying Good spans 60–79. The
+ * chip's per-factor breakdown is a `title` tooltip, which doesn't exist on
+ * touch, so on a tablet the bands had no on-screen explanation at all. A legend
+ * keyed off this array can't drift from the chips it explains.
+ *
+ * Green, not cyan, for the second tier. The four are one diverging scale and
+ * cyan sits outside the emerald→amber→red ramp — it read as a different family
+ * rather than a step down from Excellent.
+ */
+export const HEALTH_BANDS: HealthBand[] = [
+  {
     label: 'Excellent',
+    min: 80,
     badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
     dotClass: 'bg-emerald-400',
     barClass: 'bg-emerald-500',
-  }
-  // Green, not cyan. The four tiers are one diverging scale, and cyan sits
-  // outside the emerald→amber→red ramp — it read as a different family
-  // rather than a step down from Excellent. Green keeps the ramp continuous.
-  if (score >= 60) return {
+  },
+  {
     label: 'Good',
+    min: 60,
     badgeClass: 'bg-green-500/15 text-green-300 border border-green-500/30',
     dotClass: 'bg-green-400',
     barClass: 'bg-green-500',
-  }
-  if (score >= 40) return {
+  },
+  {
     label: 'Fair',
+    min: 40,
     badgeClass: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
     dotClass: 'bg-amber-400',
     barClass: 'bg-amber-500',
-  }
-  return {
+  },
+  {
     label: 'At Risk',
+    min: 0,
     badgeClass: 'bg-red-500/15 text-red-300 border border-red-500/30',
     dotClass: 'bg-red-400',
     barClass: 'bg-red-500',
+  },
+]
+
+/** The inclusive range a band covers, for display: "80+", "60–79", "0–39". */
+export function healthBandRange(index: number): string {
+  const band = HEALTH_BANDS[index]
+  if (index === 0) return `${band.min}+`
+  return `${band.min}–${HEALTH_BANDS[index - 1].min - 1}`
+}
+
+function resolveLabel(score: number): Pick<CustomerHealth, 'label' | 'badgeClass' | 'dotClass' | 'barClass'> {
+  const band = HEALTH_BANDS.find(b => score >= b.min) ?? HEALTH_BANDS[HEALTH_BANDS.length - 1]
+  return {
+    label: band.label,
+    badgeClass: band.badgeClass,
+    dotClass: band.dotClass,
+    barClass: band.barClass,
   }
 }
 

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, bulkAssignSalesmanUser, setPaymentStatus, setEmployeeStatus, REALTIME_LIMIT } from '../../services/customerService'
@@ -18,7 +18,7 @@ import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
 import { scoreLead, scoreBreakdown } from '../../utils/leadScore'
-import { calculateHealthScore, healthBreakdown, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
+import { calculateHealthScore, healthBreakdown, HEALTH_BANDS, healthBandRange, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
 import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
 import ConfirmModal from '../../components/ConfirmModal'
@@ -56,6 +56,22 @@ function sortFieldsFor(cat: CustomerCategory): SortField[] {
 
 const CATEGORY_ORDER: CustomerCategory[] = ['Lead', 'Customer', 'Vendor', 'Employee']
 
+/**
+ * What the right-hand cluster on each row holds, in the order it renders.
+ *
+ * Every row carried up to three right-aligned figures — an amount, a 0–100
+ * score and a status word — in a 1024px-wide layout whose only header row said
+ * "Select page". Nothing on the page said what a bare `72` was: a score, a
+ * count, a percentage, a day count. Hidden below sm, where the cluster itself
+ * is the only thing left of it.
+ */
+const CLUSTER_LEGEND: Record<CustomerCategory, string> = {
+  Lead:     'Amount · Score · Age',
+  Customer: 'Amount · Health · Payment',
+  Vendor:   'Amount · Rating · Callback',
+  Employee: 'Employment status',
+}
+
 const PATH_TO_CATEGORY: Record<string, CustomerCategory> = {
   '/leads': 'Lead',
   '/customers': 'Customer',
@@ -85,6 +101,39 @@ function useClickOutside(
 }
 
 
+/**
+ * The surface shared by the Views / Filters / Tag triggers.
+ *
+ * All three were hand-rolled `bg-gray-800 border-gray-700` — one step darker
+ * than both the `.input-field` search box they sit beside and the
+ * `.btn-secondary` Sort/Actions buttons directly above, which put three surface
+ * treatments inside a single two-row control cluster for no semantic reason.
+ * They now carry btn-secondary's fill. The border is present in both states so
+ * activating one doesn't change its geometry.
+ */
+const TRIGGER_BASE = 'px-3 py-2 text-sm font-medium border transition-colors flex items-center gap-1.5'
+const TRIGGER_IDLE = 'bg-gray-700 border-gray-700 text-gray-100 hover:bg-gray-600'
+const TRIGGER_ON   = 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+
+/**
+ * The number on a filter trigger. There were two treatments eight pixels apart
+ * — Views used `bg-gray-700 text-gray-300`, Filters `bg-indigo-500 text-white`
+ * — for what reads as one affordance. One component now, with the distinction
+ * stated rather than accidental: indigo means "this many filters are changing
+ * the list in front of you", neutral means "this many of these exist".
+ */
+function CountBadge({ value, tone }: { value: number; tone: 'state' | 'inventory' }) {
+  return (
+    <span
+      className={`text-xs font-bold px-1.5 py-0.5 rounded-full leading-none tabular-nums ${
+        tone === 'state' ? 'bg-indigo-500 text-white' : 'bg-gray-600 text-gray-100'
+      }`}
+    >
+      {value}
+    </span>
+  )
+}
+
 function QuickFilterButton({ label, active, onClick }: { label: ReactNode; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -96,6 +145,47 @@ function QuickFilterButton({ label, active, onClick }: { label: ReactNode; activ
     >
       {label}
     </button>
+  )
+}
+
+/**
+ * The Common Filters sidebar shell.
+ *
+ * Below lg this stacks above the record list (`order-first`), where fully
+ * expanded it measures about 636px — the Customer sidebar alone is fourteen
+ * full-width buttons plus three group titles — so on a phone, or an iPad in
+ * portrait, there was no record on screen at all until you scrolled past every
+ * filter. It's a disclosure there, collapsed by default, and always open at lg
+ * where it has its own 208px column beside the list.
+ */
+function QuickFilterPanel({ open, onToggle, activeCount, children }: {
+  open: boolean
+  onToggle: () => void
+  activeCount: number
+  children: ReactNode
+}) {
+  return (
+    <div className="w-full lg:w-52 shrink-0 card p-3 order-first lg:order-none">
+      {/* Reports how many of its own filters are on, so collapsing it can
+          never hide an active filter without saying so. */}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="lg:hidden w-full flex items-center gap-2 px-1 py-1 rounded text-xs font-bold uppercase tracking-wider text-gray-200
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      >
+        <Icon d={ICONS.funnel} className="w-3.5 h-3.5 shrink-0" />
+        Common Filters
+        {activeCount > 0 && <CountBadge value={activeCount} tone="state" />}
+        <span className="flex-1" />
+        <Icon d={ICONS.chevronDown} className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <p className="hidden lg:block text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+      <div className={`${open ? 'block' : 'hidden'} lg:block space-y-1 mt-2 lg:mt-0`}>
+        {children}
+      </div>
+    </div>
   )
 }
 
@@ -120,7 +210,10 @@ function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6 }
 
   return (
     <>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">{title}</p>
+      {/* .card-section-title: this was text-[10px] while the panel's own
+          heading was text-xs, so the sidebar ran two sizes of the same object.
+          Same 12px now, separated by weight and colour instead. */}
+      <p className="card-section-title pt-2 px-1">{title}</p>
       {shown.map(o => (
         <QuickFilterButton
           key={o}
@@ -196,6 +289,11 @@ export default function CustomerListPage() {
 
   // Advanced filters
   const [filterOpen, setFilterOpen]         = useState(false)
+  // Below lg the Common Filters sidebar stacks above the list (order-first),
+  // where fully expanded it measures ~636px — so on a phone or an iPad in
+  // portrait there was no record on screen at all until you scrolled past it.
+  // Collapsed by default there, always open at lg where it has its own column.
+  const [quickFiltersOpen, setQuickFiltersOpen] = useState(false)
   const [filterSalesman, setFilterSalesman] = useState('')
   const [filterState, setFilterState]       = useState('')
   const [filterLeadSource, setFilterLeadSource] = useState('')
@@ -265,6 +363,28 @@ export default function CustomerListPage() {
     setFilterRating('')
     setFilterManager('')
     setFilterEmployeeStatus('')
+  }
+
+  /** Only the nine fields the Filters panel actually renders, so its own
+   *  "Clear all" can't reach into the sidebar's state. */
+  function clearPanelFilters() {
+    setFilterSalesman('')
+    setFilterState('')
+    setFilterLeadSource('')
+    setFilterProduct('')
+    setFilterCallback('')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setFilterAmtMin('')
+    setFilterAmtMax('')
+  }
+
+  /** Everything the list narrows on — including the tag and the search box,
+   *  which the empty state's "Clear filters" used to leave in place. */
+  function clearAllFilters() {
+    clearAdvancedFilters()
+    setTagFilter(null)
+    setSearch('')
   }
 
   useEffect(() => subscribeToSavedViews(cat, setSavedViews, () => {}), [cat])
@@ -615,12 +735,28 @@ export default function CustomerListPage() {
   // flash-of-wrong-content the badge placeholder avoids.
   const listLoading = loading || (!!filterHealth && !healthReady)
 
-  const activeFilterCount = [
+  // Two counts, not one. The Filters button opens a panel holding nine fields;
+  // the Common Filters sidebar holds a different ten. Counting them together
+  // made the badge read "3" while every select inside the panel said "All" and
+  // the panel's own footer claimed "3 filters active" over nothing — and its
+  // "Clear all" then cleared state the panel had never shown.
+  const panelFilterCount = [
     filterSalesman, filterState, filterLeadSource, filterProduct,
     filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+  ].filter(Boolean).length
+
+  const quickFilterCount = [
     filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
     filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
   ].filter(Boolean).length
+
+  const activeFilterCount = panelFilterCount + quickFilterCount
+
+  // The tag has its own control and was counted by neither, so a tag-only
+  // filter left the record line silent about why the list had shrunk — and sent
+  // a zero-result list to the "No customers yet · Add the first one →" empty
+  // state on a company with 412 of them.
+  const anyFilterActive = activeFilterCount > 0 || !!tagFilter
 
   const filtered = useMemo(() => {
     let items = all.filter(c => categoryMatches(c.category, cat))
@@ -859,7 +995,18 @@ export default function CustomerListPage() {
               onClick={() => setSortOpen(v => !v)}
               className="btn-secondary text-sm flex items-center gap-1.5"
             >
-              Sort By
+              {/* Reports the sort it's applying. The label was the literal
+                  string "Sort By" in every state, so a list ordered by Score
+                  descending said nothing about it anywhere on the page — the
+                  field and direction existed only inside the open dropdown,
+                  while the record line below already names the search term and
+                  the filter count. */}
+              <span className="text-gray-400">Sort</span>
+              {SORT_LABELS[sortField]}
+              <Icon
+                d={sortDir === 'asc' ? ICONS.arrowUp : ICONS.arrowDown}
+                className="w-3 h-3 text-indigo-400 shrink-0"
+              />
               <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${sortOpen ? 'rotate-180' : ''}`} />
             </button>
             {sortOpen && (
@@ -955,8 +1102,15 @@ export default function CustomerListPage() {
           >
             <span className="flex items-center justify-center gap-1.5">
               {CATEGORY_LABELS[c]}
+              {/* No opacity. These were the faintest text on the page — the
+                  inactive counts measured 2.72:1 dark / 2.59:1 light against
+                  their own tab, while the label beside them sits at 7.00:1, and
+                  the active count at opacity-70 on indigo-600 came to 3.93:1.
+                  They're the numbers the record line refers to when it says
+                  "23 of 412". Size and weight already subordinate them to the
+                  label, so the alpha was buying nothing. */}
               {!loading && categoryCounts[c] > 0 && (
-                <span className={`text-xs font-bold tabular-nums ${cat === c ? 'opacity-70' : 'opacity-50'}`}>
+                <span className="text-xs font-bold tabular-nums">
                   {categoryCounts[c]}
                 </span>
               )}
@@ -982,17 +1136,11 @@ export default function CustomerListPage() {
         <div ref={viewsRef} className="relative">
           <button
             onClick={() => setViewsOpen(v => !v)}
-            className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
-              viewsOpen ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-            }`}
+            className={`${TRIGGER_BASE} rounded-lg ${viewsOpen ? TRIGGER_ON : TRIGGER_IDLE}`}
           >
             <Icon d={ICONS.eye} className="w-4 h-4" />
             Views
-            {savedViews.length > 0 && (
-              <span className="bg-gray-700 text-gray-300 text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
-                {savedViews.length}
-              </span>
-            )}
+            {savedViews.length > 0 && <CountBadge value={savedViews.length} tone="inventory" />}
           </button>
           {viewsOpen && (
             <div className="absolute right-0 mt-1 w-64 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
@@ -1046,19 +1194,13 @@ export default function CustomerListPage() {
         {/* Advanced filters toggle */}
         <button
           onClick={() => setFilterOpen(v => !v)}
-          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-1.5 ${
-            filterOpen || activeFilterCount > 0
-              ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
-              : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-          }`}
+          className={`${TRIGGER_BASE} rounded-lg ${filterOpen || panelFilterCount > 0 ? TRIGGER_ON : TRIGGER_IDLE}`}
         >
           <Icon d={ICONS.funnel} className="w-4 h-4" />
           Filters
-          {activeFilterCount > 0 && (
-            <span className="bg-indigo-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
-              {activeFilterCount}
-            </span>
-          )}
+          {/* panelFilterCount, not the page-wide total: this badge belongs to
+              the panel this button opens. */}
+          {panelFilterCount > 0 && <CountBadge value={panelFilterCount} tone="state" />}
         </button>
         {/* The Active/All toggle used to live here as well as in the Common
             Filters sidebar. Both wrote the same showInactive state, and every
@@ -1075,13 +1217,9 @@ export default function CustomerListPage() {
                 corner radii so it still reads as one control. */}
             <button
               onClick={() => setTagOpen(v => !v)}
-              className={`px-3 py-2 text-sm font-medium border transition-colors flex items-center gap-1.5 ${
+              className={`${TRIGGER_BASE} ${
                 tagFilter ? 'rounded-l-lg border-r-0' : 'rounded-lg'
-              } ${
-                tagFilter
-                  ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-              }`}
+              } ${tagFilter ? TRIGGER_ON : TRIGGER_IDLE}`}
             >
               <Icon d={ICONS.tag} className="w-4 h-4 shrink-0" />
               {/* The label swaps between "Tag" and an arbitrary-length tag
@@ -1257,11 +1395,15 @@ export default function CustomerListPage() {
           </div>
           )}
 
-          {activeFilterCount > 0 && (
+          {/* Counts and clears this panel's own nine fields. It used to report
+              the page-wide total and clear all nineteen, so setting a Health
+              filter in the sidebar made the panel announce "1 filter active"
+              with every select in it reading "All". */}
+          {panelFilterCount > 0 && (
             <div className="flex items-center justify-between pt-1 border-t border-gray-700/50">
-              <span className="text-xs text-gray-400">{activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''} active</span>
+              <span className="text-xs text-gray-400">{panelFilterCount} filter{panelFilterCount !== 1 ? 's' : ''} active in this panel</span>
               <button
-                onClick={clearAdvancedFilters}
+                onClick={clearPanelFilters}
                 className="text-xs text-red-400 hover:text-red-300 transition-colors font-medium"
               >
                 Clear all
@@ -1360,9 +1502,33 @@ export default function CustomerListPage() {
             {filtered.length === 1 ? ' record' : ' records'}
             {!showInactive && ' · active only'}
             {debouncedSearch.trim() && ` · search "${debouncedSearch.trim()}"`}
+            {/* The tag was in neither filter count, so this line stayed silent
+                about the one control that had narrowed the list. */}
+            {tagFilter && ` · tag "${tagFilter}"`}
             {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
           </p>
         )
+      )}
+
+      {/* Health bands, keyed with the chips' own badgeClass so the swatch is
+          the thing it explains — the same approach /vendor-scorecards uses for
+          its on-time colours. The chip's per-factor breakdown is a `title`
+          tooltip, so on touch neither the thresholds nor the reasoning behind
+          a "Good 72" existed anywhere on screen. */}
+      {cat === 'Customer' && !listLoading && filtered.length > 0 && (
+        <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap mb-3 text-xs text-gray-400">
+          <span className="font-medium">Health bands:</span>
+          {HEALTH_BANDS.map((band, i) => (
+            <span
+              key={band.label}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-semibold border ${band.badgeClass}`}
+            >
+              <span className={`w-1 h-1 rounded-full ${band.dotClass}`} />
+              {band.label}
+              <span className="tabular-nums font-bold">{healthBandRange(i)}</span>
+            </span>
+          ))}
+        </div>
       )}
 
       {/* Side-by-side only at the width this layout was designed for. The page
@@ -1372,36 +1538,50 @@ export default function CustomerListPage() {
       <div className={hasQuickFilterSidebar ? 'flex flex-col lg:flex-row gap-4 lg:items-start' : ''}>
       <div className={hasQuickFilterSidebar ? 'flex-1 min-w-0' : ''}>
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
-        {/* Select-all checkbox row — hidden for roles without bulk actions */}
-        {!listLoading && filtered.length > 0 && perms.canBulkAction && (
+        {/* Header strip. No longer gated on canBulkAction — it carries the
+            column legend now, which every role needs, not just the checkbox. */}
+        {!listLoading && filtered.length > 0 && (
           <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
-            {/* id + htmlFor: this was a bare checkbox with its label in a
-                sibling span, so it had no accessible name — and it's the
-                control that arms the bulk deactivate. */}
-            <input
-              id="select-page"
-              type="checkbox"
-              checked={allPageSelected}
-              onChange={togglePage}
-              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
-            />
-            <label htmlFor="select-page" className="text-xs text-gray-400 cursor-pointer">
-              {allPageSelected ? 'Deselect page' : 'Select page'}
-            </label>
+            {perms.canBulkAction ? (
+              <>
+                {/* id + htmlFor: this was a bare checkbox with its label in a
+                    sibling span, so it had no accessible name — and it's the
+                    control that arms the bulk deactivate. */}
+                <input
+                  id="select-page"
+                  type="checkbox"
+                  checked={allPageSelected}
+                  onChange={togglePage}
+                  className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
+                />
+                <label htmlFor="select-page" className="text-xs text-gray-400 cursor-pointer">
+                  {allPageSelected ? 'Deselect page' : 'Select page'}
+                </label>
+              </>
+            ) : (
+              <span className="text-xs text-gray-400">Name</span>
+            )}
+            <div className="flex-1" />
+            <span className="hidden sm:block text-xs text-gray-400">{CLUSTER_LEGEND[cat]}</span>
           </div>
         )}
         {listLoading ? (
           Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
         ) : filtered.length === 0 ? (
           <div className="px-4 py-8 text-center">
+            {/* anyFilterActive includes the tag. Gated on activeFilterCount
+                alone, a tag filter that matched nothing routed to the wrong
+                branch entirely: a company with 412 customers was told "No
+                customers yet" and invited to "Add the first one →", and the
+                Clear filters branch was unreachable. */}
             <p className="text-gray-400">
-              {search || activeFilterCount > 0
+              {search || anyFilterActive
                 ? 'No results match those filters'
                 : `No ${CATEGORY_LABELS[cat].toLowerCase()} yet`}
             </p>
-            {search || activeFilterCount > 0 ? (
+            {search || anyFilterActive ? (
               <button
-                onClick={() => { setSearch(''); clearAdvancedFilters() }}
+                onClick={clearAllFilters}
                 className="mt-3 text-sm text-indigo-400 hover:text-indigo-300"
               >
                 Clear filters
@@ -1499,8 +1679,11 @@ export default function CustomerListPage() {
       </div>
       </div>
       {cat === 'Employee' && (
-        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
-          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+        <QuickFilterPanel
+          open={quickFiltersOpen}
+          onToggle={() => setQuickFiltersOpen(v => !v)}
+          activeCount={quickFilterCount}
+        >
           <QuickFilterButton
             label="Active Employees"
             active={!showInactive}
@@ -1542,11 +1725,14 @@ export default function CustomerListPage() {
               onSelect={setFilterState}
             />
           )}
-        </div>
+        </QuickFilterPanel>
       )}
       {cat === 'Lead' && (
-        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
-          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+        <QuickFilterPanel
+          open={quickFiltersOpen}
+          onToggle={() => setQuickFiltersOpen(v => !v)}
+          activeCount={quickFilterCount}
+        >
 
           <QuickFilterButton
             label="Active Leads"
@@ -1598,11 +1784,14 @@ export default function CustomerListPage() {
               onSelect={setFilterLeadSource}
             />
           )}
-        </div>
+        </QuickFilterPanel>
       )}
       {cat === 'Customer' && (
-        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
-          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+        <QuickFilterPanel
+          open={quickFiltersOpen}
+          onToggle={() => setQuickFiltersOpen(v => !v)}
+          activeCount={quickFilterCount}
+        >
 
           <QuickFilterButton
             label="Active Customers"
@@ -1626,13 +1815,18 @@ export default function CustomerListPage() {
             onClick={() => setFilterAssignment(filterAssignment === 'unassigned' ? '' : 'unassigned')}
           />
 
-          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Health</p>
-          {(['Excellent', 'Good', 'Fair', 'At Risk'] as HealthLabel[]).map(h => (
+          {/* .card-section-title: these were text-[10px] while the panel's own
+              heading was text-xs, so the sidebar ran two sizes of the same
+              object. Same 12px now, separated by weight and colour instead. */}
+          <p className="card-section-title pt-2 px-1">Health</p>
+          {/* From HEALTH_BANDS rather than a second hand-written list, so these
+              can't drift from the chips or the legend. */}
+          {HEALTH_BANDS.map(band => (
             <QuickFilterButton
-              key={h}
-              label={h}
-              active={filterHealth === h}
-              onClick={() => setFilterHealth(filterHealth === h ? '' : h)}
+              key={band.label}
+              label={band.label}
+              active={filterHealth === band.label}
+              onClick={() => setFilterHealth(filterHealth === band.label ? '' : band.label)}
             />
           ))}
 
@@ -1646,11 +1840,14 @@ export default function CustomerListPage() {
               onSelect={setFilterPaymentStatus}
             />
           )}
-        </div>
+        </QuickFilterPanel>
       )}
       {cat === 'Vendor' && (
-        <div className="w-full lg:w-52 shrink-0 card p-3 space-y-1 order-first lg:order-none">
-          <p className="text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+        <QuickFilterPanel
+          open={quickFiltersOpen}
+          onToggle={() => setQuickFiltersOpen(v => !v)}
+          activeCount={quickFilterCount}
+        >
 
           <QuickFilterButton
             label="Active Vendors"
@@ -1676,7 +1873,10 @@ export default function CustomerListPage() {
 
           {uniqueRatings.length > 0 && (
             <>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-200 pt-2 px-1">Rating</p>
+              {/* .card-section-title: these were text-[10px] while the panel's own
+              heading was text-xs, so the sidebar ran two sizes of the same
+              object. Same 12px now, separated by weight and colour instead. */}
+          <p className="card-section-title pt-2 px-1">Rating</p>
               {uniqueRatings.map(r => (
                 <QuickFilterButton
                   key={r}
@@ -1705,7 +1905,7 @@ export default function CustomerListPage() {
               onSelect={setFilterManager}
             />
           )}
-        </div>
+        </QuickFilterPanel>
       )}
       </div>
       {csvImportOpen && (
@@ -1906,13 +2106,22 @@ function CustomerRow({
               mid-token you couldn't tell which field you'd lost. Now every
               field always shows its beginning. The global `* { min-width: 0 }`
               reset in index.css is what lets these flex children shrink. */}
+          {/* Two parts below sm, all of them from sm up.
+              `truncate` flex children shrink *proportionally*, so you don't
+              lose the last field — you lose a character or two off all of them
+              at once. With four parts in the ~73px this column had on a 390px
+              phone, each got about 18px: an ellipsis and nothing else. Each
+              part is wrapped with its own separator so it hides as a unit. */}
           {subtitleParts.length > 0 && (
             <div className="flex items-center gap-1.5 text-sm text-gray-400">
               {subtitleParts.map((part, i) => (
-                <Fragment key={i}>
+                <span
+                  key={i}
+                  className={`flex items-center gap-1.5 min-w-0 ${i >= 2 ? 'hidden sm:flex' : ''}`}
+                >
                   {i > 0 && <span aria-hidden className="shrink-0">·</span>}
                   <span className="truncate">{part}</span>
-                </Fragment>
+                </span>
               ))}
             </div>
           )}
@@ -1953,7 +2162,9 @@ function CustomerRow({
               // reflow and no wrong label derived from partial data is shown.
               // Only while genuinely in flight: gated on `health` alone this
               // pulsed forever whenever a listener stalled.
-              <span className="inline-block h-[1.125rem] w-20 rounded-md bg-gray-700/50 animate-pulse" />
+              // w-24, not w-20: the chip it stands in for measures ~93px, so an
+              // 80px placeholder reflowed the cluster on arrival.
+              <span className="inline-block h-[1.125rem] w-24 rounded-md bg-gray-700/50 animate-pulse" />
             ) : null
           )}
           {/* Payment state as a readout, not an action. Previously the row
@@ -2049,11 +2260,17 @@ function CustomerRow({
           an action rather than a second status chip. The old "$ Paid" was a
           green tinted pill — visually identical to the readouts beside it,
           while actually writing to Firestore on a single click. */}
-      {/* Fixed-width slot so the list's right edge doesn't move. Customers get
-          a button (only while unpaid), Employees a select, Leads and Vendors
-          nothing — so the trailing column's width used to change per category
-          *and* per row, shifting the readouts beside it. */}
-      <div className="shrink-0 self-start w-[5.5rem] flex justify-end">
+      {/* Only rendered for the two categories that can put something here, and
+          only fixed-width from sm up.
+          The flat `w-[5.5rem]` steadied the right edge, but it was
+          unconditional: Leads and Vendors can never have a trailing action, so
+          they paid 88px plus a 12px gap for an empty div at every width — and
+          on a 390px phone that was half of what the name and subtitle had to
+          share. Below sm the slot is content-sized, so a paid customer's row
+          gives the space back; at sm and up it holds the fixed width, which is
+          where the stable right edge actually mattered. */}
+      {(lowerCat === 'customer' || lowerCat === 'employee') && (
+      <div className="shrink-0 self-start flex justify-end sm:w-[5.5rem]">
       {c.category.toLowerCase() === 'customer' && c.paymentStatus !== 'Paid' && (
         <button
           type="button"
@@ -2089,6 +2306,7 @@ function CustomerRow({
         )
       })()}
       </div>
+      )}
     </div>
   )
 }
@@ -2186,13 +2404,31 @@ function AssignInput({
   )
 }
 
+/**
+ * Shaped to the row it stands in for.
+ *
+ * It was `gap-4 px-4 py-3.5` around a 40px avatar and two bars — 68px tall,
+ * against ~86px for a real customer row with an amount, a health chip and a
+ * payment word stacked on the right. Six of them meant everything below the
+ * list dropped ~108px the moment the data arrived. Same paddings, same 36px
+ * avatar, and a right-hand stack of three bars so the height matches instead of
+ * approximating.
+ */
 function SkeletonRow() {
   return (
-    <div className="flex items-center gap-4 px-4 py-3.5 animate-pulse">
-      <div className="w-10 h-10 rounded-full bg-gray-700 shrink-0" />
+    <div className="flex items-center gap-3 px-4 py-3 animate-pulse">
+      <div className="w-9 h-9 rounded-full bg-gray-700 shrink-0" />
       <div className="flex-1 space-y-2">
-        <div className="h-3.5 bg-gray-700 rounded w-40" />
+        <div className="h-4 bg-gray-700 rounded w-40" />
         <div className="h-3 bg-gray-700/60 rounded w-28" />
+      </div>
+      {/* 20 + 4 + 18 + 4 + 16 = 62px, matching the real cluster's amount line,
+          health chip and payment word exactly, so the row height comes out at
+          86px either way. */}
+      <div className="shrink-0 self-start flex flex-col items-end gap-1">
+        <div className="h-5 w-16 bg-gray-700 rounded" />
+        <div className="h-[1.125rem] w-24 bg-gray-700/60 rounded-md" />
+        <div className="h-4 w-12 bg-gray-700/60 rounded" />
       </div>
     </div>
   )
