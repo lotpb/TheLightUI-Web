@@ -536,6 +536,14 @@ html.light-mode .text-amber-400 { color: #78350f !important; }
   .icon-on-solid {
     color: rgb(255 255 255);
   }
+  /* The knob on a switch. Same trap as .icon-on-solid, one property over:
+     bg-white resolves to --color-white, which is dark navy in light mode, so
+     every toggle on /settings rendered a navy knob there — 2.84:1 on the indigo
+     "on" track. The knob has to stay true white in both themes; the track is
+     what carries the state colour. */
+  .toggle-knob {
+    background-color: rgb(255 255 255);
+  }
   .form-label {
     @apply block text-xs font-medium text-gray-400 mb-1.5;
   }
