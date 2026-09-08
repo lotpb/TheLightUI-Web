@@ -173,9 +173,21 @@ export default function CampaignsPage() {
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
+        {/* Cross-link to Bulk Contacts, which reads as the same feature from
+            the nav but isn't: it exports a segment rather than sending one, and
+            it's the only page that covers SMS. */}
         <div>
           <h1 className="text-2xl font-bold text-white">Email Campaigns</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Send targeted emails to segments of your contacts</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Tracked email sends, with open and click rates per recipient
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            Email only.{' '}
+            <Link to="/blast" className="text-indigo-400 hover:text-indigo-300">
+              Bulk Contacts
+            </Link>{' '}
+            covers SMS, and exports a list instead of sending.
+          </p>
         </div>
         <button onClick={openNew} className="btn-primary text-sm px-4 py-2">+ New Campaign</button>
       </div>

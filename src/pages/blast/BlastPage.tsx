@@ -172,9 +172,24 @@ export default function BlastPage() {
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
+        {/* This page and Email Campaigns both used to say "send a message to a
+            filtered segment", which made them look like the same feature filed
+            twice. They aren't: this one writes nothing and hands you the list —
+            clipboard, CSV or your own mail app — and it's the only one that
+            covers SMS, city and callback. Campaigns is the tracked email
+            sender. The headings and the cross-link say which is which. */}
         <div>
-          <h1 className="text-2xl font-bold text-white">Broadcast</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Send a message to a filtered segment</p>
+          <h1 className="text-2xl font-bold text-white">Bulk Contacts</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Filter a segment, then copy it, export it, or open it in your mail app
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            Nothing is sent or logged from here.{' '}
+            <Link to="/campaigns" className="text-indigo-400 hover:text-indigo-300">
+              Email Campaigns
+            </Link>{' '}
+            sends and tracks opens.
+          </p>
         </div>
         {!loading && (
           <div className="text-right shrink-0">
