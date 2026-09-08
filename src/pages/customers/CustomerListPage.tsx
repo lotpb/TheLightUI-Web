@@ -38,15 +38,27 @@ const PAGE_SIZE = 50
  * replacing it. Below this the list keeps its full width and a row navigates to
  * /records/:id as before.
  *
- * 1280 is the floor that works: the app's own nav rail takes ~256px, leaving
- * ~1024 for a 384px list plus a ~620px pane. Narrower and both columns are
- * squeezed at once. Collapsing the nav rail buys back the difference.
+ * The budget, with the nav rail expanded (w-56 = 224px) and the page's px-4:
+ *
+ *   viewport   content   list   pane
+ *     1152       896      320    560
+ *     1280      1024      320    688
+ *     1536      1280      384    880
+ *
+ * 1152 is the floor. It was 1280, which shut out a lot of laptops for no good
+ * reason — but 1024 is genuinely too small: it leaves the pane 368px, and the
+ * record's identity card, four-across action grid and eight tabs all need more
+ * than that. Narrowing the list column to 320px below 2xl is what buys the
+ * extra 128px of headroom. Collapsing the rail (w-14) adds another 168px.
  */
-const SPLIT_MIN_WIDTH = 1280
+const SPLIT_MIN_WIDTH = 1152
 
-/** List column width in the split view — wide enough for a row's name, status
- *  pill and two tags before truncation starts. */
-const SPLIT_LIST_WIDTH = 'w-96'
+/**
+ * List column width in the split view. 320px fits a row's name, status pill and
+ * two tags before truncation bites; it widens to 384px at 2xl, where the pane
+ * no longer needs the space.
+ */
+const SPLIT_LIST_WIDTH = 'w-80 2xl:w-96'
 
 type SortField = 'name' | 'date' | 'location' | 'active' | 'score' | 'rating'
 type SortDir   = 'asc' | 'desc'

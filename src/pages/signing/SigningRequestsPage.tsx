@@ -6,6 +6,8 @@ import { STATUS_COLORS, STATUS_LABELS } from '../../models/signingRequest'
 import type { SigningRequest } from '../../models/signingRequest'
 import { useToast } from '../../components/Toast'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import ConfirmModal from '../../components/ConfirmModal'
 
 function fmtDate(d: Date | null): string {
@@ -14,6 +16,10 @@ function fmtDate(d: Date | null): string {
 }
 
 type FilterStatus = 'all' | 'pending' | 'signed'
+
+// No customer picker on this page to resolve a deep-linked name against, so the
+// hook gets a stable empty list and the banner falls back to the URL's name.
+const NO_CUSTOMERS: never[] = []
 
 export default function SigningRequestsPage() {
   usePageTitle('E-Signatures')
@@ -54,9 +60,19 @@ export default function SigningRequestsPage() {
     }
   }
 
-  const filtered = filter === 'all' ? requests : requests.filter(r => r.status === filter)
-  const pending  = requests.filter(r => r.status === 'pending').length
-  const signed   = requests.filter(r => r.status === 'signed').length
+  // Arriving from a customer's Related Records panel. Signing requests are
+  // raised from a document template, not here, so the deep link only scopes.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(NO_CUSTOMERS)
+
+  const scoped = isScoped ? requests.filter(r => r.customerId === scopeId) : requests
+
+  // Scoped shows every request for the customer and the status filter is
+  // hidden, so a customer whose only document is already signed can't read as
+  // having none.
+  const filtered = isScoped ? scoped : (filter === 'all' ? scoped : scoped.filter(r => r.status === filter))
+  const pending  = scoped.filter(r => r.status === 'pending').length
+  const signed   = scoped.filter(r => r.status === 'signed').length
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -74,8 +90,12 @@ export default function SigningRequestsPage() {
         </Link>
       </div>
 
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
       {/* Stats */}
-      {requests.length > 0 && (
+      {!isScoped && requests.length > 0 && (
         <div className="grid grid-cols-3 gap-3 mb-6">
           {[
             { label: 'Total', value: requests.length },
@@ -91,7 +111,7 @@ export default function SigningRequestsPage() {
       )}
 
       {/* Filter tabs */}
-      {requests.length > 0 && (
+      {!isScoped && requests.length > 0 && (
         <div className="flex gap-1 mb-4 bg-gray-800/60 p-1 rounded-xl w-fit">
           {(['all', 'pending', 'signed'] as FilterStatus[]).map(s => (
             <button
@@ -121,7 +141,9 @@ export default function SigningRequestsPage() {
         <div className="card p-12 text-center">
           <p className="text-4xl mb-3">✍️</p>
           <p className="text-gray-300 font-medium mb-1">
-            {requests.length === 0 ? 'No signing requests yet' : 'No matching requests'}
+            {isScoped              ? 'No signing requests for this customer'
+             : requests.length === 0 ? 'No signing requests yet'
+             :                         'No matching requests'}
           </p>
           <p className="text-sm text-gray-500 mb-4">
             {requests.length === 0

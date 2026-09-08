@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import { subscribeToCustomers } from '../../services/customerService'
@@ -121,9 +123,24 @@ export default function PurchaseOrdersPage() {
     setShowJobList(false)
   }
 
+  // Arriving from a customer's Related Records panel. A PO's link to a customer
+  // is `jobId`, not `customerId` — it's the job the materials are for, while
+  // vendorId is who they're ordered from. Resolution is against jobCandidates
+  // (Customers and Leads), which is what the job picker offers.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(jobCandidates, openAddForJob)
+
   function openAdd() {
     setEditPO(null)
     setForm(BLANK_FORM)
+    setLineItems([emptyLineItem()])
+    setShowForm(true)
+  }
+
+  function openAddForJob(c: CustomerItem) {
+    const label = c.job ? `${fullName(c)} — ${c.job}` : fullName(c)
+    setEditPO(null)
+    setForm({ ...BLANK_FORM, jobId: c.id, jobName: label, jobQuery: label })
     setLineItems([emptyLineItem()])
     setShowForm(true)
   }
@@ -218,16 +235,20 @@ export default function PurchaseOrdersPage() {
     setDeleteTarget(null)
   }
 
-  const filtered = pos.filter(po => {
+  const scoped = isScoped ? pos.filter(po => po.jobId === scopeId) : pos
+
+  // Scoped shows every PO for the job, cancelled and received included: the
+  // status filter defaults to active, which would hide a job's whole history.
+  const filtered = isScoped ? scoped : scoped.filter(po => {
     if (filter === 'all') return true
     if (filter === 'active') return po.status === 'draft' || po.status === 'sent'
     return po.status === filter
   })
 
   const counts = {
-    active:    pos.filter(p => p.status === 'draft' || p.status === 'sent').length,
-    received:  pos.filter(p => p.status === 'received').length,
-    cancelled: pos.filter(p => p.status === 'cancelled').length,
+    active:    scoped.filter(p => p.status === 'draft' || p.status === 'sent').length,
+    received:  scoped.filter(p => p.status === 'received').length,
+    cancelled: scoped.filter(p => p.status === 'cancelled').length,
   }
 
   return (
@@ -241,20 +262,26 @@ export default function PurchaseOrdersPage() {
         <button onClick={openAdd} className="btn-primary text-sm px-4 py-2 shrink-0">+ New PO</button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        {([
-          { key: 'active', label: 'Active', color: 'text-blue-400', count: counts.active },
-          { key: 'received', label: 'Received', color: 'text-green-400', count: counts.received },
-          { key: 'cancelled', label: 'Cancelled', color: 'text-red-400', count: counts.cancelled },
-        ] as const).map(s => (
-          <button key={s.key} onClick={() => setFilter(s.key)}
-            className={`card px-4 py-3 text-left transition-colors ${filter === s.key ? 'ring-1 ring-indigo-500/50' : 'hover:bg-gray-700/40'}`}>
-            <p className={`text-2xl font-bold ${s.color}`}>{s.count}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
-          </button>
-        ))}
-      </div>
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
+      {/* Stats — also the status filter, so hidden while scoped */}
+      {!isScoped && (
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          {([
+            { key: 'active', label: 'Active', color: 'text-blue-400', count: counts.active },
+            { key: 'received', label: 'Received', color: 'text-green-400', count: counts.received },
+            { key: 'cancelled', label: 'Cancelled', color: 'text-red-400', count: counts.cancelled },
+          ] as const).map(s => (
+            <button key={s.key} onClick={() => setFilter(s.key)}
+              className={`card px-4 py-3 text-left transition-colors ${filter === s.key ? 'ring-1 ring-indigo-500/50' : 'hover:bg-gray-700/40'}`}>
+              <p className={`text-2xl font-bold ${s.color}`}>{s.count}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Form */}
       {showForm && (
@@ -426,16 +453,18 @@ export default function PurchaseOrdersPage() {
       )}
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
-        {(['active', 'draft', 'sent', 'received', 'cancelled', 'all'] as Filter[]).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
-              filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}>
-            {f}
-          </button>
-        ))}
-      </div>
+      {!isScoped && (
+        <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
+          {(['active', 'draft', 'sent', 'received', 'cancelled', 'all'] as Filter[]).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
+                filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+              }`}>
+              {f}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* List */}
       <div className="space-y-3">
@@ -443,7 +472,11 @@ export default function PurchaseOrdersPage() {
           <p className="text-sm text-gray-500">Loading…</p>
         ) : filtered.length === 0 ? (
           <div className="card px-4 py-12 text-center">
-            <p className="text-gray-400">No purchase orders here — tap New PO to create one.</p>
+            <p className="text-gray-400">
+              {isScoped
+                ? 'No purchase orders for this job yet — tap New PO to create one.'
+                : 'No purchase orders here — tap New PO to create one.'}
+            </p>
           </div>
         ) : (
           filtered.map(po => (

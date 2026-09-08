@@ -766,6 +766,7 @@ export default function CustomerDetailPage({
           customerId={id!}
           customerName={fullName(customer)}
           canTrackTime={customer.category.toLowerCase() === 'customer' && customer.isActive}
+          canBeJob={['customer', 'lead'].includes(customer.category.toLowerCase())}
           invoices={invoices}
           proposals={proposals}
           warranties={warranties}
@@ -1790,6 +1791,7 @@ function RelatedRecordsSection({
   customerId,
   customerName,
   canTrackTime,
+  canBeJob,
   invoices,
   proposals,
   warranties,
@@ -1804,6 +1806,12 @@ function RelatedRecordsSection({
    * rather than offer a link that half-works.
    */
   canTrackTime: boolean
+  /**
+   * Purchase Orders picks its job from Customers and Leads — a PO's `jobId` is
+   * what the materials are for, distinct from the vendor they're bought from.
+   * Same reasoning as canTrackTime: a vendor or employee record can't be a job.
+   */
+  canBeJob: boolean
   invoices: Invoice[]
   proposals: Proposal[]
   warranties: Warranty[]
@@ -1874,6 +1882,7 @@ function RelatedRecordsSection({
           <AddChip to={`/service-plans?${scope}&new=1`}           label="Service Plan" />
           <AddChip to={`/warranties?${scope}&new=1`}              label="Warranty" />
           <AddChip to={`/referrals?${scope}&new=1`}               label="Referral" />
+          {canBeJob && <AddChip to={`/purchase-orders?${scope}&new=1`} label="Purchase Order" />}
           {canTrackTime && <AddChip to={`/time-tracking?${scope}&new=1`} label="Clock In" />}
         </div>
       </div>
@@ -2037,7 +2046,11 @@ function RelatedRecordsSection({
           <p className="text-xs font-semibold text-gray-400 mb-2">Signing Requests ({mySigningRequests.length})</p>
           <div className="space-y-1.5">
             {mySigningRequests.slice(0, 5).map(sr => (
-              <div key={sr.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={sr.id}
+                to={`/signing-requests?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">{sr.document.templateName || 'Untitled document'}</span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SIGNING_STATUS_COLORS[sr.status]}`}>
@@ -2045,7 +2058,7 @@ function RelatedRecordsSection({
                   </span>
                   <span className="text-xs text-gray-400">{fmtDate(sr.createdAt)}</span>
                 </span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -2058,7 +2071,7 @@ function RelatedRecordsSection({
             {myPurchaseOrders.slice(0, 5).map(po => (
               <Link
                 key={po.id}
-                to="/purchase-orders"
+                to={`/purchase-orders?${scope}`}
                 className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{po.poNumber || 'Draft'}</span>
