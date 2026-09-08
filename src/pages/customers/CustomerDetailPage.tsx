@@ -1981,6 +1981,58 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
 // see a warranty existed but had to go to /warranties and find it again, and
 // adding one meant re-picking a customer you were already looking at.
 
+/** How many rows a Related Records group shows before it needs asking. */
+const RELATED_PREVIEW = 5
+
+/** The row treatment every Related Records link shares. It was pasted into all
+ *  nine of them, which is how the hover ended up wrong in nine places at once. */
+const RELATED_ROW =
+  'flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors'
+
+/**
+ * One group in Related Records — a heading, up to five rows, and a way to see
+ * the rest.
+ *
+ * All eight groups sliced to five under a heading that stated the true count,
+ * with nothing to expand and, for Invoices and Proposals, no list page to fall
+ * back to. So "Invoices (12)" showed five and the other seven were unreachable
+ * from the panel that had just told you they existed.
+ *
+ * Expanding in place rather than linking out, because the row links already go
+ * to the individual records and only some of the modules accept a ?customerId
+ * scope — an in-place toggle works for all eight without assuming a route.
+ */
+function RelatedGroup<T>({ title, items, renderItem, last = false }: {
+  title: string
+  items: T[]
+  renderItem: (item: T) => ReactNode
+  /** The last group carries no divider, matching the old hand-written markup. */
+  last?: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  if (items.length === 0) return null
+
+  const shown = expanded ? items : items.slice(0, RELATED_PREVIEW)
+  const hidden = items.length - shown.length
+
+  return (
+    <div className={`px-4 py-3 ${last ? '' : 'border-b border-gray-700/30'}`}>
+      <p className="text-xs font-semibold text-gray-400 mb-2">{title} ({items.length})</p>
+      <div className="space-y-1.5">{shown.map(renderItem)}</div>
+      {(hidden > 0 || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          className="mt-2 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+        >
+          {expanded ? 'Show less' : `Show ${hidden} more`}
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** A chip in the Add row: opens a module's create form prefilled. */
 function AddChip({ to, label }: { to: string; label: string }) {
   return (
@@ -2068,6 +2120,14 @@ function RelatedRecordsSection({
   // what actually does the filtering.
   const scope = `customerId=${customerId}&customerName=${encodeURIComponent(customerName)}`
 
+  // Referrals are the one group drawn from two arrays. Tagging each with its
+  // direction merges them into a single list, so the group can cap and expand
+  // them together instead of one of the two silently outgrowing the panel.
+  const referrals = [
+    ...referredByMe.map(referral => ({ referral, direction: 'made' as const })),
+    ...referredToMe.map(referral => ({ referral, direction: 'received' as const })),
+  ]
+
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
@@ -2094,229 +2154,164 @@ function RelatedRecordsSection({
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No related records yet</p>
       )}
 
-      {invoices.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Invoices ({invoices.length})</p>
-          <div className="space-y-1.5">
-            {invoices.slice(0, 5).map(inv => {
-              const status = effectiveStatus(inv)
-              return (
-                <Link
-                  key={inv.id}
-                  to={`/invoices/${inv.id}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-                >
-                  <span className="text-sm text-gray-300 truncate">{inv.invoiceNumber || 'Draft'}</span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    {inv.recurring && (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium border bg-indigo-500/20 text-indigo-400 border-indigo-600/40">
-                        Recurring
-                      </span>
-                    )}
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusClasses(status)}`}>
-                      {statusLabel(status)}
-                    </span>
-                    <span className="text-sm text-gray-400">{fmtCurrency(invoiceTotal(inv))}</span>
+      <RelatedGroup
+        title="Invoices"
+        items={invoices}
+        renderItem={inv => {
+          const status = effectiveStatus(inv)
+          return (
+            <Link key={inv.id} to={`/invoices/${inv.id}`} className={RELATED_ROW}>
+              <span className="text-sm text-gray-300 truncate">{inv.invoiceNumber || 'Draft'}</span>
+              <span className="flex items-center gap-2 shrink-0">
+                {inv.recurring && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium border bg-indigo-500/20 text-indigo-400 border-indigo-600/40">
+                    Recurring
                   </span>
-                </Link>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {proposals.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Proposals ({proposals.length})</p>
-          <div className="space-y-1.5">
-            {proposals.slice(0, 5).map(p => {
-              const status = proposalEffectiveStatus(p)
-              return (
-                <Link
-                  key={p.id}
-                  to={`/proposals/${p.id}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-                >
-                  <span className="text-sm text-gray-300 truncate">{p.proposalNumber || 'Draft'}</span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${proposalStatusClasses(status)}`}>
-                      {proposalStatusLabel(status)}
-                    </span>
-                    <span className="text-sm text-gray-400">{fmtCurrency(proposalTotal(p))}</span>
-                  </span>
-                </Link>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {warranties.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Warranties ({warranties.length})</p>
-          <div className="space-y-1.5">
-            {warranties.slice(0, 5).map(w => {
-              const status = warrantyStatus(w)
-              return (
-                <Link
-                  key={w.id}
-                  to={`/warranties?${scope}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-                >
-                  <span className="text-sm text-gray-300 truncate">{w.title || 'Untitled'}</span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
-                      {status.label}
-                    </span>
-                    <span className="text-xs text-gray-400">{formatDate(w.expirationDate)}</span>
-                  </span>
-                </Link>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {servicePlans.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Service Plans ({servicePlans.length})</p>
-          <div className="space-y-1.5">
-            {servicePlans.slice(0, 5).map(sp => (
-              <Link
-                key={sp.id}
-                to={`/service-plans?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">{sp.title || 'Untitled'}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${sp.isActive ? 'bg-green-500/20 text-green-400 border-green-600/40' : 'bg-gray-700/60 text-gray-400 border-gray-600/40'}`}>
-                    {sp.isActive ? FREQUENCY_LABELS[sp.frequency] : 'Inactive'}
-                  </span>
-                  <span className="text-xs text-gray-400">Next: {formatDate(sp.nextDate)}</span>
+                )}
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusClasses(status)}`}>
+                  {statusLabel(status)}
                 </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+                <span className="text-sm text-gray-400">{fmtCurrency(invoiceTotal(inv))}</span>
+              </span>
+            </Link>
+          )
+        }}
+      />
 
-      {myRequests.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Service Requests ({myRequests.length})</p>
-          <div className="space-y-1.5">
-            {myRequests.slice(0, 5).map(r => (
-              <Link
-                key={r.id}
-                to={`/service-requests?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">{r.description || 'No description'}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${REQUEST_STATUS_COLORS[r.status]}`}>
-                    {REQUEST_STATUS_LABELS[r.status]}
-                  </span>
-                  <span className="text-xs text-gray-400">{formatDate(r.createdAt)}</span>
+      <RelatedGroup
+        title="Proposals"
+        items={proposals}
+        renderItem={p => {
+          const status = proposalEffectiveStatus(p)
+          return (
+            <Link key={p.id} to={`/proposals/${p.id}`} className={RELATED_ROW}>
+              <span className="text-sm text-gray-300 truncate">{p.proposalNumber || 'Draft'}</span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${proposalStatusClasses(status)}`}>
+                  {proposalStatusLabel(status)}
                 </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+                <span className="text-sm text-gray-400">{fmtCurrency(proposalTotal(p))}</span>
+              </span>
+            </Link>
+          )
+        }}
+      />
 
-      {myTimeEntries.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Time on Site ({myTimeEntries.length})</p>
-          <div className="space-y-1.5">
-            {myTimeEntries.slice(0, 5).map(t => (
-              <Link
-                key={t.id}
-                to={`/time-tracking?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-gray-400">{fmtDuration(t.durationMinutes)}</span>
-                  <span className="text-xs text-gray-400">{formatDate(t.clockIn)}</span>
+      <RelatedGroup
+        title="Warranties"
+        items={warranties}
+        renderItem={w => {
+          const status = warrantyStatus(w)
+          return (
+            <Link key={w.id} to={`/warranties?${scope}`} className={RELATED_ROW}>
+              <span className="text-sm text-gray-300 truncate">{w.title || 'Untitled'}</span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
+                  {status.label}
                 </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+                <span className="text-xs text-gray-400">{formatDate(w.expirationDate)}</span>
+              </span>
+            </Link>
+          )
+        }}
+      />
 
-      {mySigningRequests.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Signing Requests ({mySigningRequests.length})</p>
-          <div className="space-y-1.5">
-            {mySigningRequests.slice(0, 5).map(sr => (
-              <Link
-                key={sr.id}
-                to={`/signing-requests?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">{sr.document.templateName || 'Untitled document'}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SIGNING_STATUS_COLORS[sr.status]}`}>
-                    {SIGNING_STATUS_LABELS[sr.status]}
-                  </span>
-                  <span className="text-xs text-gray-400">{formatDate(sr.createdAt)}</span>
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+      <RelatedGroup
+        title="Service Plans"
+        items={servicePlans}
+        renderItem={sp => (
+          <Link key={sp.id} to={`/service-plans?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">{sp.title || 'Untitled'}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${sp.isActive ? 'bg-green-500/20 text-green-400 border-green-600/40' : 'bg-gray-700/60 text-gray-400 border-gray-600/40'}`}>
+                {sp.isActive ? FREQUENCY_LABELS[sp.frequency] : 'Inactive'}
+              </span>
+              <span className="text-xs text-gray-400">Next: {formatDate(sp.nextDate)}</span>
+            </span>
+          </Link>
+        )}
+      />
 
-      {myPurchaseOrders.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/30">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Purchase Orders ({myPurchaseOrders.length})</p>
-          <div className="space-y-1.5">
-            {myPurchaseOrders.slice(0, 5).map(po => (
-              <Link
-                key={po.id}
-                to={`/purchase-orders?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">{po.poNumber || 'Draft'}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${PO_STATUS_COLORS[po.status]}`}>
-                    {PO_STATUS_LABELS[po.status]}
-                  </span>
-                  <span className="text-sm text-gray-400">{fmtCurrency(poTotal(po))}</span>
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+      <RelatedGroup
+        title="Service Requests"
+        items={myRequests}
+        renderItem={r => (
+          <Link key={r.id} to={`/service-requests?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">{r.description || 'No description'}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${REQUEST_STATUS_COLORS[r.status]}`}>
+                {REQUEST_STATUS_LABELS[r.status]}
+              </span>
+              <span className="text-xs text-gray-400">{formatDate(r.createdAt)}</span>
+            </span>
+          </Link>
+        )}
+      />
 
-      {(referredByMe.length > 0 || referredToMe.length > 0) && (
-        <div className="px-4 py-3">
-          <p className="text-xs font-semibold text-gray-400 mb-2">Referrals ({referredByMe.length + referredToMe.length})</p>
-          <div className="space-y-1.5">
-            {referredByMe.map(r => (
-              <Link
-                key={r.id}
-                to={`/referrals?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">Referred: {r.referredName || 'Unknown'}</span>
-                {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
-              </Link>
-            ))}
-            {referredToMe.map(r => (
-              <Link
-                key={r.id}
-                to={`/referrals?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
-              >
-                <span className="text-sm text-gray-300 truncate">Referred by: {r.referrerName || 'Unknown'}</span>
-                {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+      <RelatedGroup
+        title="Time on Site"
+        items={myTimeEntries}
+        renderItem={t => (
+          <Link key={t.id} to={`/time-tracking?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-gray-400">{fmtDuration(t.durationMinutes)}</span>
+              <span className="text-xs text-gray-400">{formatDate(t.clockIn)}</span>
+            </span>
+          </Link>
+        )}
+      />
+
+      <RelatedGroup
+        title="Signing Requests"
+        items={mySigningRequests}
+        renderItem={sr => (
+          <Link key={sr.id} to={`/signing-requests?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">{sr.document.templateName || 'Untitled document'}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SIGNING_STATUS_COLORS[sr.status]}`}>
+                {SIGNING_STATUS_LABELS[sr.status]}
+              </span>
+              <span className="text-xs text-gray-400">{formatDate(sr.createdAt)}</span>
+            </span>
+          </Link>
+        )}
+      />
+
+      <RelatedGroup
+        title="Purchase Orders"
+        items={myPurchaseOrders}
+        renderItem={po => (
+          <Link key={po.id} to={`/purchase-orders?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">{po.poNumber || 'Draft'}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${PO_STATUS_COLORS[po.status]}`}>
+                {PO_STATUS_LABELS[po.status]}
+              </span>
+              <span className="text-sm text-gray-400">{fmtCurrency(poTotal(po))}</span>
+            </span>
+          </Link>
+        )}
+      />
+
+      {/* Both directions in one group, so the pair pages together and the
+          heading's count matches what you can actually reach. */}
+      <RelatedGroup
+        title="Referrals"
+        items={referrals}
+        last
+        renderItem={({ referral, direction }) => (
+          <Link key={`${direction}-${referral.id}`} to={`/referrals?${scope}`} className={RELATED_ROW}>
+            <span className="text-sm text-gray-300 truncate">
+              {direction === 'made' ? 'Referred: ' : 'Referred by: '}
+              {(direction === 'made' ? referral.referredName : referral.referrerName) || 'Unknown'}
+            </span>
+            {referral.referredAmount > 0 && (
+              <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(referral.referredAmount)}</span>
+            )}
+          </Link>
+        )}
+      />
     </div>
   )
 }
