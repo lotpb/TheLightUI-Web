@@ -3209,7 +3209,23 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
           {pastEnrollments.slice(0, 3).map(enr => {
             const st = STATUS_STYLE[enr.status]
             return (
-              <div key={enr.id} className="px-4 py-2.5 flex items-center justify-between gap-3 opacity-60">
+              // No opacity-60.
+              //
+              // It was applied to the whole row, on top of children that were
+              // already muted, so everything in a past enrolment landed under
+              // AA: the name and the Delete button at 3.02:1, the Completed
+              // pill at 3.29:1, and Delete's red hover — the feedback telling
+              // you what you're about to remove — at 2.75:1. Compounding an
+              // alpha with an already-dim colour is how you get 1.46:1, which
+              // is where that Delete started before the contrast pass.
+              //
+              // Nothing replaces it, because the hierarchy was never doing the
+              // work: a past row is already py-2.5 against py-3, its name is
+              // text-gray-400 with no font-medium against the active rows'
+              // text-gray-200 font-medium (5.78:1 vs 11.86:1), its pill is
+              // Completed/Cancelled in its own palette, and it offers one
+              // action where an active row offers three.
+              <div key={enr.id} className="px-4 py-2.5 flex items-center justify-between gap-3">
                 <span className="text-sm text-gray-400">{enr.sequenceName}</span>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
