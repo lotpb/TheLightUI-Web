@@ -109,6 +109,22 @@ function DetailTabBar({
   const btnRefs = useRef<Partial<Record<TabKey, HTMLButtonElement>>>({})
   const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
 
+  /**
+   * Whether the strip has content past either edge.
+   *
+   * Eight tabs plus their count badges come to roughly 760px, against a 358px
+   * main column on a 390px phone — so about 400px of this, five of the eight
+   * tabs, sits off-screen. It still overflows by ~23px at 768px and a few
+   * pixels at desktop width. `scrollbar-none` then removes the one native cue
+   * that any of it scrolls, leaving no scrollbar, no fade and no arrows: the
+   * tabs simply appeared to stop after Texts.
+   *
+   * Measured per side rather than just "is it scrollable", so the fade only
+   * appears where there's actually something hidden — a permanent fade on both
+   * edges of a strip that happens to fit would be its own lie.
+   */
+  const [edges, setEdges] = useState({ start: false, end: false })
+
   // Re-measures on `counts` as well as `active`, and observes the container.
   //
   // The eight tab counts arrive asynchronously from their own subscriptions, and
@@ -119,12 +135,22 @@ function DetailTabBar({
   // shifts a window resize never fires for.
   useEffect(() => {
     function measure() {
-      const btn = btnRefs.current[active]
       const container = containerRef.current
-      if (!btn || !container) return
-      const containerRect = container.getBoundingClientRect()
-      const btnRect = btn.getBoundingClientRect()
-      setIndicator({ left: btnRect.left - containerRect.left + container.scrollLeft, width: btnRect.width })
+      if (!container) return
+
+      const btn = btnRefs.current[active]
+      if (btn) {
+        const containerRect = container.getBoundingClientRect()
+        const btnRect = btn.getBoundingClientRect()
+        setIndicator({ left: btnRect.left - containerRect.left + container.scrollLeft, width: btnRect.width })
+      }
+
+      // 1px of slack: scrollLeft and scrollWidth are fractional at non-integer
+      // zoom levels and on trackpad momentum, so an exact comparison leaves a
+      // fade flickering at the end of a scroll.
+      const max = container.scrollWidth - container.clientWidth
+      const next = { start: container.scrollLeft > 1, end: container.scrollLeft < max - 1 }
+      setEdges(prev => (prev.start === next.start && prev.end === next.end ? prev : next))
     }
     measure()
 
@@ -149,8 +175,28 @@ function DetailTabBar({
     }
   }, [active, counts])
 
+  /**
+   * Bring the selected tab into view.
+   *
+   * Selecting a tab that's off-screen left it off-screen: the panel below
+   * changed and the strip didn't move, so the thing you'd just chosen wasn't
+   * visible and the indicator was scrolled out with it. `inline: 'nearest'`
+   * scrolls only as far as needed and `block: 'nearest'` keeps it from dragging
+   * the page vertically — which together also mean this is a no-op on first
+   * mount, where the default tab is already the leftmost.
+   */
+  useEffect(() => {
+    btnRefs.current[active]?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' })
+  }, [active])
+
   return (
     <div className="border-b border-gray-800 mb-6">
+      {/* The fades sit on this wrapper, not on the scroller — inside it they'd
+          scroll away with the content they're meant to mask. gray-950 is the
+          colour behind the strip: <main> sets no background, so it inherits the
+          app shell's bg-gray-950, and the token is var-backed so it follows the
+          theme. */}
+      <div className="relative">
       <div ref={containerRef} className="relative flex gap-6 overflow-x-auto scrollbar-none">
         {TAB_DEFS.map(tab => {
           const isActive = active === tab.key
@@ -181,6 +227,20 @@ function DetailTabBar({
             style={{ left: indicator.left, width: indicator.width }}
           />
         )}
+      </div>
+
+      {edges.start && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 w-10 bg-gradient-to-r from-gray-950 to-transparent"
+        />
+      )}
+      {edges.end && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-gray-950 to-transparent"
+        />
+      )}
       </div>
     </div>
   )
