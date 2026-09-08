@@ -211,6 +211,10 @@ function DetailTabBar({
               }`}
             >
               <span>{tab.label}</span>
+              {/* One rule for all eight: the badge is how many items the panel
+                  holds. Any "of which N are open/active" belongs inside the
+                  panel where it can carry a word — Tasks says "(N open)" and
+                  Sequences "(N active)" in their own headers. */}
               {count > 0 && (
                 <span className={`text-xs font-semibold rounded-full px-1.5 py-0.5 leading-none transition-colors ${
                   isActive ? 'bg-indigo-500/20 text-indigo-300' : 'bg-gray-800 text-gray-400'
@@ -1524,7 +1528,14 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
 
   useEffect(() => subscribeToCustomerTodos(customer.id, setTasks, () => {}), [customer.id])
 
-  useEffect(() => { onCount?.(tasks.filter(t => !t.isCompleted).length) }, [tasks]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Every tab badge counts the items in its panel. This one alone counted
+  // incomplete tasks, so "Tasks 2" and "Files 2" looked identical and meant
+  // different things — eight badges in one strip have to be the same kind of
+  // number. The open count doesn't disappear; it moves into the panel header
+  // below, where it can be labelled.
+  useEffect(() => { onCount?.(tasks.length) }, [tasks]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openCount = tasks.filter(t => !t.isCompleted).length
 
   const canSubmit = notes.trim().length > 0
 
@@ -1563,7 +1574,11 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
-        <p className="card-section-title">Tasks</p>
+        <p className="card-section-title">
+          Tasks {openCount > 0 && (
+            <span className="text-gray-400 font-normal normal-case">({openCount} open)</span>
+          )}
+        </p>
         <Link to="/todo" className="text-xs text-indigo-400 hover:text-indigo-300">View all →</Link>
       </div>
 
