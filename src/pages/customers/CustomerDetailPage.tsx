@@ -1624,12 +1624,12 @@ function SmsThreadSection({
 
       <div className="px-4 py-3 border-t border-gray-700/50 space-y-2">
         {!profileLoaded ? null : !smsNumber ? (
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-400">
             Texting isn't set up for this account yet — add a number in{' '}
             <Link to="/sms-inbox" className="text-indigo-400 hover:underline">SMS settings</Link> to send from here.
           </p>
         ) : !phone ? (
-          <p className="text-xs text-gray-500">This customer has no phone number on file.</p>
+          <p className="text-xs text-gray-400">This customer has no phone number on file.</p>
         ) : (
           <>
             <DraftReplyButton
@@ -1743,7 +1743,7 @@ function EmailThreadSection({
 
       <div className="px-4 py-3 border-t border-gray-700/50 space-y-2">
         {!email ? (
-          <p className="text-xs text-gray-500">This customer has no email address on file.</p>
+          <p className="text-xs text-gray-400">This customer has no email address on file.</p>
         ) : (
           <>
             <DraftReplyButton
@@ -2379,13 +2379,13 @@ function ScoreBadge({ customer }: { customer: CustomerItem }) {
           <div className="py-2">
             {ls.factors.map(f => (
               <div key={f.label} className="flex items-center gap-2.5 px-4 py-1.5">
-                <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-700 text-gray-600'}`}>
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-700 text-gray-400'}`}>
                   {f.earned > 0 ? '✓' : '○'}
                 </span>
                 <span className={`flex-1 text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-400'}`}>
                   {f.label}
                 </span>
-                <span className={`text-xs tabular-nums ${f.earned > 0 ? 'text-green-400 font-medium' : 'text-gray-600'}`}>
+                <span className={`text-xs tabular-nums ${f.earned > 0 ? 'text-green-400 font-medium' : 'text-gray-400'}`}>
                   +{f.max}
                 </span>
               </div>
@@ -2457,23 +2457,27 @@ function HealthScoreBadge({
           <div className="py-2">
             {hs.factors.map(f => (
               <div key={f.label} className="flex items-start gap-2.5 px-4 py-1.5">
-                <span className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-600'}`}>
+                <span className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-400'}`}>
                   {f.earned > 0 ? '✓' : '○'}
                 </span>
                 <div className="flex-1 min-w-0">
                   <span className={`text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-400'}`}>{f.label}</span>
+                  {/* The line that says *why* a factor scored what it did —
+                      "Has overdue invoice(s)", "No active service plan" — and
+                      the reason to open this popover at all. It was gray-600 on
+                      the gray-900 panel: 2.35:1. */}
                   {f.detail && (
-                    <p className="text-xs text-gray-600 truncate">{f.detail}</p>
+                    <p className="text-xs text-gray-400 truncate">{f.detail}</p>
                   )}
                 </div>
-                <span className={`text-xs tabular-nums shrink-0 ${f.earned > 0 ? 'text-emerald-400 font-medium' : 'text-gray-600'}`}>
+                <span className={`text-xs tabular-nums shrink-0 ${f.earned > 0 ? 'text-emerald-400 font-medium' : 'text-gray-400'}`}>
                   {f.earned}/{f.max}
                 </span>
               </div>
             ))}
           </div>
           <div className="px-4 py-2 border-t border-gray-800">
-            <p className="text-xs text-gray-600">Updates live as you add notes, invoices, and service plans</p>
+            <p className="text-xs text-gray-400">Updates live as you add notes, invoices, and service plans</p>
           </div>
         </div>
       )}
@@ -2880,7 +2884,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
         <p className="card-section-title">
-          Files {docs.length > 0 && <span className="text-gray-600 font-normal normal-case">({docs.length})</span>}
+          Files {docs.length > 0 && <span className="text-gray-400 font-normal normal-case">({docs.length})</span>}
         </p>
         <button
           onClick={() => fileRef.current?.click()}
@@ -2909,7 +2913,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
         >
           <Icon d={ICONS.paperclip} className="w-8 h-8" />
           <p className="text-sm">Drop files here or click Attach</p>
-          <p className="text-xs text-gray-600">Max 10 MB per file</p>
+          <p className="text-xs text-gray-400">Max 10 MB per file</p>
         </div>
       )}
 
@@ -2996,7 +3000,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
         <div
           onDrop={onDrop}
           onDragOver={e => e.preventDefault()}
-          className="px-4 py-2.5 border-t border-gray-700/40 text-center text-xs text-gray-600 hover:text-gray-400 cursor-pointer hover:bg-gray-700/10 transition-colors"
+          className="px-4 py-2.5 border-t border-gray-700/40 text-center text-xs text-gray-400 hover:text-gray-200 cursor-pointer hover:bg-gray-700/10 transition-colors"
           onClick={() => fileRef.current?.click()}
         >
           Drop more files here or click to attach
@@ -3099,7 +3103,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 rounded-t-xl flex items-center justify-between">
         <p className="card-section-title">
           Sequences {activeEnrollments.length > 0 && (
-            <span className="text-gray-600 font-normal normal-case">({activeEnrollments.length} active)</span>
+            <span className="text-gray-400 font-normal normal-case">({activeEnrollments.length} active)</span>
           )}
         </p>
         {sequences.length > 0 && (
@@ -3135,7 +3139,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
         <div className="px-4 py-5 text-center">
           <p className="text-sm text-gray-400">No active sequences</p>
           {sequences.length === 0 && (
-            <p className="text-xs text-gray-600 mt-1">
+            <p className="text-xs text-gray-400 mt-1">
               Create sequences at <a href="/sequences" className="text-indigo-400 hover:text-indigo-300">Outreach → Sequences</a>
             </p>
           )}
@@ -3179,15 +3183,21 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
                       Resume
                     </button>
                   )}
+                  {/* gray-400 (5.78:1), not gray-600 (1.94:1). These two write
+                      to Firestore — Cancel stops a running sequence, Delete
+                      removes the enrolment from the customer's history — and
+                      they were the least legible text on the page. Dark mode
+                      only: index.css:273 already forces gray-600 to #000 in
+                      light, which is why this never showed up there. */}
                   <button
                     onClick={() => handleCancel(enr.id)}
-                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    className="text-xs text-gray-400 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => setConfirmDeleteId(enr.id)}
-                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    className="text-xs text-gray-400 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
                     title="Delete this enrollment"
                   >
                     Delete
@@ -3205,7 +3215,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
                   <button
                     onClick={() => setConfirmDeleteId(enr.id)}
-                    className="text-xs text-gray-600 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+                    className="text-xs text-gray-400 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors"
                     title="Delete this enrollment"
                   >
                     Delete
