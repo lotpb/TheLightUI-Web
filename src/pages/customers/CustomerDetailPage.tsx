@@ -2454,12 +2454,57 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
   )
 }
 
-// ── Lead Score ────────────────────────────────────────────────────────────────
+// ── Score badges ──────────────────────────────────────────────────────────────
 
-function ScoreBadge({ customer }: { customer: CustomerItem }) {
+/** A factor either scale can show. HealthFactor's required `detail` and
+ *  ScoreFactor's absence of one both satisfy this. */
+interface ScoreFactorView {
+  label: string
+  earned: number
+  max: number
+  detail?: string
+}
+
+/**
+ * The badge-plus-breakdown used by both the lead score and the customer health
+ * score.
+ *
+ * These were two components of about eighty lines each doing the same job, and
+ * they had drifted the way copies do — different widths (w-64 vs w-72),
+ * different check colours (green vs emerald), different factor readouts (+15 vs
+ * 12/15), one with a detail line and a footer and one without, one aligning its
+ * rows to centre and the other to start.
+ *
+ * Four of those differences are resolved rather than parameterised, because
+ * only one of each pair was right:
+ *
+ *   width      w-72, so a factor label and its number don't collide
+ *   check      emerald, matching the health ramp — and the lead scale's own
+ *              Hot band, which moved to emerald when red was freed for status
+ *   readout    earned/max, since "+15" never said whether you'd got the 15
+ *   alignment  items-start, which a wrapped detail line needs and a factor
+ *              without one doesn't notice
+ *
+ * The ✓ and ○ text glyphs are gone too: a check Icon when earned, an empty ring
+ * when not. This page replaced its emoji with drawn icons in an earlier pass and
+ * these two were the last text glyphs standing in for graphics.
+ */
+function ScorePopoverBadge({
+  title, hint, score, label, badgeClass, dotClass, barClass, factors, footer,
+}: {
+  title: string
+  /** The button's tooltip — what this number is. */
+  hint: string
+  score: number
+  label: string
+  badgeClass: string
+  dotClass: string
+  barClass: string
+  factors: ScoreFactorView[]
+  footer?: string
+}) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const ls  = scoreLead(customer)
 
   useEffect(() => {
     if (!open) return
@@ -2474,59 +2519,96 @@ function ScoreBadge({ customer }: { customer: CustomerItem }) {
     <div ref={ref} className="relative shrink-0 flex items-center gap-2">
       <button
         onClick={() => setOpen(v => !v)}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${ls.badgeClass}`}
-        title="Lead score"
+        aria-expanded={open}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${badgeClass}`}
+        title={hint}
       >
-        <span className={`w-1.5 h-1.5 rounded-full ${ls.dotClass}`} />
-        {ls.label}
+        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+        {label}
       </button>
-      <span className="text-2xl font-bold text-white">{ls.score}</span>
+      <span className="text-2xl font-bold text-white">{score}</span>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-64 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-2 w-72 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-700">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">Lead Score</p>
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ls.badgeClass}`}>
-                {ls.label}
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-white">{title}</p>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${badgeClass}`}>
+                {label}
               </span>
             </div>
             <p className="text-3xl font-bold text-white mt-1">
-              {ls.score}<span className="text-sm font-normal text-gray-400"> / 100</span>
+              {score}<span className="text-sm font-normal text-gray-400"> / 100</span>
             </p>
           </div>
-          {/* Progress bar */}
+
           <div className="px-4 py-2.5 border-b border-gray-800">
             <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${ls.dotClass}`}
-                style={{ width: `${ls.score}%` }}
+                className={`h-full rounded-full transition-all ${barClass}`}
+                style={{ width: `${score}%` }}
               />
             </div>
           </div>
-          {/* Factor breakdown */}
+
           <div className="py-2">
-            {ls.factors.map(f => (
-              <div key={f.label} className="flex items-center gap-2.5 px-4 py-1.5">
-                <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-700 text-gray-400'}`}>
-                  {f.earned > 0 ? '✓' : '○'}
-                </span>
-                <span className={`flex-1 text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-400'}`}>
-                  {f.label}
-                </span>
-                <span className={`text-xs tabular-nums ${f.earned > 0 ? 'text-green-400 font-medium' : 'text-gray-400'}`}>
-                  +{f.max}
-                </span>
-              </div>
-            ))}
+            {factors.map(f => {
+              const earned = f.earned > 0
+              return (
+                <div key={f.label} className="flex items-start gap-2.5 px-4 py-1.5">
+                  {/* border-gray-500 on the gray-900 panel is 3.67:1, over the
+                      3:1 WCAG 1.4.11 asks of a non-text graphic. */}
+                  <span
+                    className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
+                      earned ? 'bg-emerald-500/20' : 'border border-gray-500'
+                    }`}
+                  >
+                    {earned && <Icon d={ICONS.check} className="w-2.5 h-2.5 text-emerald-400" />}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className={`text-xs ${earned ? 'text-gray-200' : 'text-gray-400'}`}>{f.label}</span>
+                    {/* The line that says *why* a factor scored what it did —
+                        "Has overdue invoice(s)", "No active service plan" — and
+                        the reason to open this popover at all. */}
+                    {f.detail && (
+                      <p className="text-xs text-gray-400 truncate">{f.detail}</p>
+                    )}
+                  </div>
+                  <span className={`text-xs tabular-nums shrink-0 ${earned ? 'text-emerald-400 font-medium' : 'text-gray-400'}`}>
+                    {f.earned}/{f.max}
+                  </span>
+                </div>
+              )
+            })}
           </div>
+
+          {footer && (
+            <div className="px-4 py-2 border-t border-gray-800">
+              <p className="text-xs text-gray-400">{footer}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-// ── Customer Health Score ─────────────────────────────────────────────────────
+function ScoreBadge({ customer }: { customer: CustomerItem }) {
+  const ls = scoreLead(customer)
+  return (
+    <ScorePopoverBadge
+      title="Lead Score"
+      hint="Lead score"
+      score={ls.score}
+      label={ls.label}
+      badgeClass={ls.badgeClass}
+      dotClass={ls.dotClass}
+      // The lead scale has no separate bar colour, so the dot's does both.
+      barClass={ls.dotClass}
+      factors={ls.factors}
+    />
+  )
+}
 
 function HealthScoreBadge({
   customer,
@@ -2537,80 +2619,19 @@ function HealthScoreBadge({
   invoices: Invoice[]
   plans: ServicePlan[]
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
   const hs: CustomerHealth = calculateHealthScore(customer, invoices, plans)
-
-  useEffect(() => {
-    if (!open) return
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [open])
-
   return (
-    <div ref={ref} className="relative shrink-0 flex items-center gap-2">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${hs.badgeClass}`}
-        title="Customer health score"
-      >
-        <span className={`w-1.5 h-1.5 rounded-full ${hs.dotClass}`} />
-        {hs.label}
-      </button>
-      <span className="text-2xl font-bold text-white">{hs.score}</span>
-
-      {open && (
-        <div className="absolute right-0 top-full mt-2 w-72 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-700">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">Health Score</p>
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${hs.badgeClass}`}>
-                {hs.label}
-              </span>
-            </div>
-            <p className="text-3xl font-bold text-white mt-1">
-              {hs.score}<span className="text-sm font-normal text-gray-400"> / 100</span>
-            </p>
-          </div>
-          <div className="px-4 py-2.5 border-b border-gray-800">
-            <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${hs.barClass}`}
-                style={{ width: `${hs.score}%` }}
-              />
-            </div>
-          </div>
-          <div className="py-2">
-            {hs.factors.map(f => (
-              <div key={f.label} className="flex items-start gap-2.5 px-4 py-1.5">
-                <span className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-xs ${f.earned > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-400'}`}>
-                  {f.earned > 0 ? '✓' : '○'}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <span className={`text-xs ${f.earned > 0 ? 'text-gray-200' : 'text-gray-400'}`}>{f.label}</span>
-                  {/* The line that says *why* a factor scored what it did —
-                      "Has overdue invoice(s)", "No active service plan" — and
-                      the reason to open this popover at all. It was gray-600 on
-                      the gray-900 panel: 2.35:1. */}
-                  {f.detail && (
-                    <p className="text-xs text-gray-400 truncate">{f.detail}</p>
-                  )}
-                </div>
-                <span className={`text-xs tabular-nums shrink-0 ${f.earned > 0 ? 'text-emerald-400 font-medium' : 'text-gray-400'}`}>
-                  {f.earned}/{f.max}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="px-4 py-2 border-t border-gray-800">
-            <p className="text-xs text-gray-400">Updates live as you add notes, invoices, and service plans</p>
-          </div>
-        </div>
-      )}
-    </div>
+    <ScorePopoverBadge
+      title="Health Score"
+      hint="Customer health score"
+      score={hs.score}
+      label={hs.label}
+      badgeClass={hs.badgeClass}
+      dotClass={hs.dotClass}
+      barClass={hs.barClass}
+      factors={hs.factors}
+      footer="Updates live as you add notes, invoices, and service plans"
+    />
   )
 }
 
