@@ -735,7 +735,7 @@ export default function CustomerDetailPage() {
                 <FieldCell label="Last Login">
                   <DateValue>
                     {linkedLastSeen
-                      ? linkedLastSeen.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+                      ? formatDateTime(linkedLastSeen)
                       : customer.lastLogin || <EmptyValue />}
                   </DateValue>
                 </FieldCell>
@@ -773,7 +773,7 @@ export default function CustomerDetailPage() {
                 </FieldCell>
               </FieldRow>
               <FieldRow>
-                <FieldCell label="Last Contact"><DateValue>{formatISODateShort(customer.lastContactDate)}</DateValue></FieldCell>
+                <FieldCell label="Last Contact"><DateValue>{formatISODate(customer.lastContactDate)}</DateValue></FieldCell>
                 <FieldCell label="Spouse">{customer.spouse}</FieldCell>
               </FieldRow>
             </FieldGroup>
@@ -1116,18 +1116,88 @@ function DateField({ label, value }: { label: string; value: string }) {
   )
 }
 
+/* ── Dates ───────────────────────────────────────────────────────────────────
+ *
+ * Four formatters, where there were eleven.
+ *
+ * The page had grown its own date function in nearly every panel — three
+ * byte-identical `fmtTime`s, two byte-identical `fmtDate`s, plus `formatTime`,
+ * `daysAgo`, `daysUntil`, `formatISODateShort` and two bare toLocale* calls —
+ * so one instant rendered seven different ways depending on which section you
+ * were looking at:
+ *
+ *   Mar 5, 2026            Related Records, Campaigns
+ *   Mar 05 2026            Last Contact  (zero-padded, no comma)
+ *   Mar 5 · 2:30 PM        Texts, Email, History
+ *   Mar 5, 2026, 2:30 PM   Last Login
+ *   3/5/2026               Files  (bare toLocaleDateString, so actually
+ *                                  whatever the visitor's locale does)
+ *   2h ago                 Activity
+ *   3d ago / in 3d         Sequences
+ *
+ * Relative and absolute both stay, because they answer different questions: a
+ * live feed wants "2h ago" and a warranty expiry wants a date. What goes is the
+ * duplication and the seven spellings of the same two ideas.
+ */
+
+/** `Mar 5, 2026` — every absolute date. */
 function formatDate(d: Date | null): string {
   if (!d || isNaN(d.getTime())) return ''
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function formatISODateShort(iso: string): string {
+/** The same, for the ISO date strings some fields store. */
+function formatISODate(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso + 'T00:00:00')
-  if (isNaN(d.getTime())) return iso
-  const month = d.toLocaleDateString('en-US', { month: 'short' })
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${month} ${day} ${d.getFullYear()}`
+  return isNaN(d.getTime()) ? iso : formatDate(d)
+}
+
+/**
+ * `Mar 5 · 2:30 PM` — every absolute timestamp.
+ *
+ * The year appears only when it isn't the current one, which is the rule
+ * ActivityLogSection already applied and the three `fmtTime`s did not: a
+ * message from two years ago read "Mar 5 · 2:30 PM", the same as this morning.
+ */
+function formatDateTime(d: Date): string {
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
+  return d.toLocaleDateString('en-US', opts) + ' · ' +
+    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+/** `Just now` / `5m ago` / `3h ago` / `Mar 5` — feed-style, for the activity log. */
+function formatRelative(d: Date): string {
+  const now = new Date()
+  const mins = Math.floor((now.getTime() - d.getTime()) / 60000)
+  if (mins < 1)  return 'Just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24)  return `${hrs}h ago`
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  })
+}
+
+/**
+ * `today` / `3d ago` / `in 3d` — schedule proximity, for sequence steps.
+ *
+ * One function for what were two. It keeps their asymmetry deliberately: the
+ * past floors (a step run 30 hours ago is "1d ago") and the future ceils (a
+ * step due in 30 hours is "in 2d"), so neither direction ever rounds down to
+ * "today" while there's still a day in it.
+ */
+function formatDayDelta(d: Date): string {
+  const ms = d.getTime() - Date.now()
+  if (ms >= 0) {
+    const days = Math.ceil(ms / 86_400_000)
+    return days <= 0 ? 'today' : `in ${days}d`
+  }
+  const days = Math.floor(-ms / 86_400_000)
+  return days === 0 ? 'today' : `${days}d ago`
 }
 
 function FollowUpSection({
@@ -1383,11 +1453,6 @@ function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?
 
   const visible = expanded ? entries : entries.slice(0, 3)
 
-  function fmtTime(d: Date): string {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
-      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  }
-
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
@@ -1401,7 +1466,7 @@ function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?
           <div key={entry.id} className="px-4 py-2.5">
             <p className="text-xs text-gray-400">
               <span className="text-gray-300 font-medium capitalize">{entry.action}</span>
-              {' by '}{entry.changedBy} · {fmtTime(entry.createdAt)}
+              {' by '}{entry.changedBy} · {formatDateTime(entry.createdAt)}
             </p>
             {/* Three tiers, not one. The <li> was text-gray-400 and the field
                 name inside it carried a redundant text-gray-400, so
@@ -1656,11 +1721,6 @@ function SmsThreadSection({
 
   useEffect(() => { onCount?.(messages.length) }, [messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function fmtTime(d: Date): string {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
-      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  }
-
   async function handleSend() {
     const text = body.trim()
     if (!text) return
@@ -1694,7 +1754,7 @@ function SmsThreadSection({
                 }`}>
                   {m.direction === 'outbound' ? 'Sent' : 'Received'}
                 </span>
-                <span className="text-xs text-gray-400">{fmtTime(m.createdAt)}</span>
+                <span className="text-xs text-gray-400">{formatDateTime(m.createdAt)}</span>
                 {m.status === 'failed' && (
                   <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">Failed</span>
                 )}
@@ -1759,11 +1819,6 @@ function EmailThreadSection({
 
   useEffect(() => { onCount?.(messages.length) }, [messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function fmtTime(d: Date): string {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
-      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  }
-
   async function handleSend() {
     if (!subject.trim() || !body.trim()) return
     setSending(true)
@@ -1815,7 +1870,7 @@ function EmailThreadSection({
                   Unread
                 </button>
               )}
-              <span className="text-xs text-gray-400">{fmtTime(m.createdAt)}</span>
+              <span className="text-xs text-gray-400">{formatDateTime(m.createdAt)}</span>
             </div>
             {m.subject && <p className="text-sm font-medium text-gray-200 mt-1">{m.subject}</p>}
             <p className="text-sm text-gray-400 mt-0.5 whitespace-pre-wrap line-clamp-3">{m.body}</p>
@@ -1877,10 +1932,6 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
 
   const sorted = [...recipients].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
 
-  function fmtDate(d: Date): string {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  }
-
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
@@ -1893,7 +1944,7 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
             to={`/campaigns/${r.campaignId}`}
             className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-800/40 transition-colors"
           >
-            <span className="text-sm text-gray-200">{fmtDate(r.sentAt)}</span>
+            <span className="text-sm text-gray-200">{formatDate(r.sentAt)}</span>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full capitalize ${RECIPIENT_STATUS_COLORS[r.status]}`}>
               {r.status}
             </span>
@@ -1989,10 +2040,6 @@ function RelatedRecordsSection({
     if (warrantyIsExpired(w))      return { label: 'Expired',       cls: 'bg-red-500/20    text-red-400    border-red-600/40' }
     if (warrantyIsExpiringSoon(w)) return { label: 'Expiring Soon', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-600/40' }
     return { label: 'Active', cls: 'bg-green-500/20 text-green-400 border-green-600/40' }
-  }
-
-  function fmtDate(d: Date): string {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
   function fmtDuration(mins: number | null): string {
@@ -2106,7 +2153,7 @@ function RelatedRecordsSection({
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
                       {status.label}
                     </span>
-                    <span className="text-xs text-gray-400">{fmtDate(w.expirationDate)}</span>
+                    <span className="text-xs text-gray-400">{formatDate(w.expirationDate)}</span>
                   </span>
                 </Link>
               )
@@ -2130,7 +2177,7 @@ function RelatedRecordsSection({
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${sp.isActive ? 'bg-green-500/20 text-green-400 border-green-600/40' : 'bg-gray-700/60 text-gray-400 border-gray-600/40'}`}>
                     {sp.isActive ? FREQUENCY_LABELS[sp.frequency] : 'Inactive'}
                   </span>
-                  <span className="text-xs text-gray-400">Next: {fmtDate(sp.nextDate)}</span>
+                  <span className="text-xs text-gray-400">Next: {formatDate(sp.nextDate)}</span>
                 </span>
               </Link>
             ))}
@@ -2153,7 +2200,7 @@ function RelatedRecordsSection({
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${REQUEST_STATUS_COLORS[r.status]}`}>
                     {REQUEST_STATUS_LABELS[r.status]}
                   </span>
-                  <span className="text-xs text-gray-400">{fmtDate(r.createdAt)}</span>
+                  <span className="text-xs text-gray-400">{formatDate(r.createdAt)}</span>
                 </span>
               </Link>
             ))}
@@ -2174,7 +2221,7 @@ function RelatedRecordsSection({
                 <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-gray-400">{fmtDuration(t.durationMinutes)}</span>
-                  <span className="text-xs text-gray-400">{fmtDate(t.clockIn)}</span>
+                  <span className="text-xs text-gray-400">{formatDate(t.clockIn)}</span>
                 </span>
               </Link>
             ))}
@@ -2197,7 +2244,7 @@ function RelatedRecordsSection({
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SIGNING_STATUS_COLORS[sr.status]}`}>
                     {SIGNING_STATUS_LABELS[sr.status]}
                   </span>
-                  <span className="text-xs text-gray-400">{fmtDate(sr.createdAt)}</span>
+                  <span className="text-xs text-gray-400">{formatDate(sr.createdAt)}</span>
                 </span>
               </Link>
             ))}
@@ -2293,17 +2340,6 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
     try { await deleteActivity(id) } finally { setDeletingId(null) }
   }
 
-  function formatTime(d: Date): string {
-    const now = new Date()
-    const diff = now.getTime() - d.getTime()
-    const mins = Math.floor(diff / 60000)
-    if (mins < 1)  return 'Just now'
-    if (mins < 60) return `${mins}m ago`
-    const hrs = Math.floor(mins / 60)
-    if (hrs < 24)  return `${hrs}h ago`
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined })
-  }
-
   const selected = ACTIVITY_TYPES.find(t => t.value === type)!
 
   return (
@@ -2370,7 +2406,7 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
                   <div className="flex items-baseline gap-2 flex-wrap">
                     <span className="text-xs font-semibold text-gray-300">{meta.label}</span>
                     <span className="text-xs text-gray-400">
-                      {a.userName} · {formatTime(a.createdAt)}
+                      {a.userName} · {formatRelative(a.createdAt)}
                     </span>
                   </div>
                   {a.note && (
@@ -2741,6 +2777,9 @@ function ComposeModal({
 }) {
   const name      = fullName(customer)
   const firstName = customer.first.trim() || name
+  // Deliberately not formatDate(). This one is interpolated into the body of an
+  // email or a text — "your appointment on Wed, Mar 5" — so it's prose, and the
+  // weekday earns its place there in a way it wouldn't in a field label.
   const apptDate  = customer.startDate && !isNaN(customer.startDate.getTime()) && customer.startDate.getTime() > 86400000
     ? customer.startDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
     : ''
@@ -3036,7 +3075,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
                   {d.name}
                 </a>
                 <p className="text-xs text-gray-400">
-                  {formatFileSize(d.size)} · {d.uploadedByName} · {d.createdAt.toLocaleDateString()}
+                  {formatFileSize(d.size)} · {d.uploadedByName} · {formatDate(d.createdAt)}
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -3170,17 +3209,6 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
     cancelled: { label: 'Cancelled', cls: 'bg-gray-700/50 text-gray-400' },
   }
 
-  function daysAgo(d: Date) {
-    const days = Math.floor((Date.now() - d.getTime()) / 86_400_000)
-    return days === 0 ? 'today' : `${days}d ago`
-  }
-
-  function daysUntil(d: Date) {
-    const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000)
-    if (days <= 0) return 'today'
-    return `in ${days}d`
-  }
-
   return (
     <div className="card">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 rounded-t-xl flex items-center justify-between">
@@ -3240,9 +3268,9 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
                   </div>
                   <p className="text-xs text-gray-400">
-                    Started {daysAgo(enr.startedAt)}
+                    Started {formatDayDelta(enr.startedAt)}
                     {enr.status === 'active' && seq && enr.nextStepIdx < seq.steps.length && (
-                      <> · step {enr.nextStepIdx + 1}/{seq.steps.length} runs {daysUntil(enr.nextRunAt)}</>
+                      <> · step {enr.nextStepIdx + 1}/{seq.steps.length} runs {formatDayDelta(enr.nextRunAt)}</>
                     )}
                     {enr.completedStepIndices.length > 0 && (
                       <> · {enr.completedStepIndices.length} step{enr.completedStepIndices.length !== 1 ? 's' : ''} done</>
