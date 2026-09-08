@@ -1535,22 +1535,45 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
         <div className="divide-y divide-gray-700/30">
           {tasks.map(t => (
             <div key={t.id} className="px-4 py-3 flex items-center gap-3">
-              <span
+              {/* A real button.
+                  This was a <span role="checkbox" aria-checked onClick> with no
+                  tabIndex and no key handler: it announced itself to a screen
+                  reader as a checkbox and then could not be focused or
+                  activated by anyone not using a pointer. It's the control that
+                  completes a task, and the email row two hundred lines below
+                  had already been fixed for exactly this.
+
+                  A <button> carries role=checkbox fine and brings native Space
+                  and Enter activation with it, so there's no key handler to
+                  write and get wrong. The label is the task text (notes, since
+                  a record-created task stores the customer's name in `title`),
+                  which is what a checkbox's name should be — aria-checked
+                  already carries the state.
+
+                  p-0.5 -m-0.5 takes the target from the circle's 20px to the
+                  24px floor of WCAG 2.5.8 without moving anything in the row. */}
+              <button
+                type="button"
                 role="checkbox"
                 aria-checked={t.isCompleted}
+                aria-label={t.notes?.trim() || t.title}
                 onClick={() => handleToggle(t)}
-                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer transition-all ${
-                  t.isCompleted ? 'bg-green-600 border-green-600' : 'border-gray-400'
-                }`}
+                className="p-0.5 -m-0.5 rounded-full shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               >
-                {t.isCompleted && (
-                  // Matches the task circle on /todo: flat green, themed ring,
-                  // icon-on-solid so the check stays true white in light mode.
-                  <svg className="w-3 h-3 icon-on-solid" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                )}
-              </span>
+                <span
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                    t.isCompleted ? 'bg-green-600 border-green-600' : 'border-gray-400'
+                  }`}
+                >
+                  {t.isCompleted && (
+                    // Matches the task circle on /todo: flat green, themed ring,
+                    // icon-on-solid so the check stays true white in light mode.
+                    <svg className="w-3 h-3 icon-on-solid" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+              </button>
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-medium ${t.isCompleted ? 'line-through text-gray-400' : 'text-gray-100'}`}>{t.title}</p>
                 {t.notes && (
