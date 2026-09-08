@@ -297,6 +297,14 @@
       ]
     }
     ,{
+      "collectionGroup": "sequenceEnrollments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextRunAt", "order": "ASCENDING" }
+      ]
+    }
+    ,{
       "collectionGroup": "messageTemplates",
       "queryScope": "COLLECTION",
       "fields": [

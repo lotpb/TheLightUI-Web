@@ -66,6 +66,7 @@ export {
 } from './outreach'
 
 export {
+  runSequences,
   onCustomerAutomation,
   onInvoiceAutomation,
   onServiceRequestAutomation,

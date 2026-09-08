@@ -10,10 +10,21 @@ import { notifyCompany, dispatchWebhooks } from './webhookDispatch'
 // ── Sequence runner ────────────────────────────────────────────────────────────
 // Runs daily at 9 AM ET. For each active enrollment whose nextRunAt has passed,
 // executes the current step (add note or set follow-up), then advances or completes.
-// DISABLED 2026-08-28 (unused feature, removed to avoid an idle Cloud Scheduler job
-// while on Blaze). Uncomment and redeploy with `firebase deploy --only functions:runSequences`
-// to re-enable.
-/*
+//
+// Disabled 2026-08-28 as an unused feature, to avoid paying for an idle Cloud
+// Scheduler job on Blaze. Re-enabled 2026-09-08: the feature looked unused
+// because it was unusable — `sequences` and `sequenceEnrollments` were both
+// missing composite indexes, so /sequences always rendered empty and there was
+// nothing to enrol into. See the 2026-09-08 index fix.
+//
+// Two things to keep in mind if this is ever switched off again:
+//   - the export must also be removed from index.ts, not just commented here;
+//   - the query below needs a sequenceEnrollments (status, nextRunAt) index,
+//     which is separate from the (companyId, customerId, createdAt) one the
+//     customer detail tab uses.
+//
+// `delayDays` on each step is an offset from the enrollment's startedAt, not a
+// gap from the previous step: steps of 1/3/7 fire on days 1, 3 and 7.
 export const runSequences = functions.pubsub
   .schedule('0 9 * * *').timeZone('America/New_York')
   .onRun(async () => {
@@ -81,7 +92,6 @@ export const runSequences = functions.pubsub
     }
     return null
   })
-*/
 
 // ── Automation Rules engine ─────────────────────────────────────────────────────
 // If/Then triggers authored in the `automationRules` collection. When a watched
