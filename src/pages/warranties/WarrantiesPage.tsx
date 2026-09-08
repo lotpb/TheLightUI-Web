@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import { useAuthStore } from '../../stores/authStore'
 import { subscribeToCustomers } from '../../services/customerService'
 import {
@@ -98,9 +100,21 @@ export default function WarrantiesPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // Arriving from a customer's Related Records panel: scope the list to that
+  // customer, and on `&new=1` open the form with the picker already filled in.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(customers, openAddFor)
+
   function openAdd() {
     setEditWarranty(null)
     setForm(BLANK_FORM)
+    setShowForm(true)
+  }
+
+  function openAddFor(c: CustomerItem) {
+    const name = fullName(c)
+    setEditWarranty(null)
+    setForm({ ...BLANK_FORM, customerId: c.id, customerName: name, customerQuery: name })
     setShowForm(true)
   }
 
@@ -174,7 +188,12 @@ export default function WarrantiesPage() {
     await deleteWarranty(w.id)
   }
 
-  const filtered = warranties.filter(w => {
+  const scoped = isScoped ? warranties.filter(w => w.customerId === scopeId) : warranties
+
+  // A scoped view shows every warranty this customer has, expired ones
+  // included. Applying the status filter as well would let someone arrive from
+  // a customer with only expired coverage and see an empty page.
+  const filtered = isScoped ? scoped : scoped.filter(w => {
     if (filter === 'all')          return true
     if (filter === 'inactive')     return !w.isActive
     if (filter === 'expired')      return w.isActive && isExpired(w)
@@ -183,10 +202,10 @@ export default function WarrantiesPage() {
   })
 
   const counts = {
-    active:       warranties.filter(w => w.isActive && !isExpired(w) && !isExpiringSoon(w)).length,
-    expiringSoon: warranties.filter(w => w.isActive && isExpiringSoon(w)).length,
-    expired:      warranties.filter(w => w.isActive && isExpired(w)).length,
-    inactive:     warranties.filter(w => !w.isActive).length,
+    active:       scoped.filter(w => w.isActive && !isExpired(w) && !isExpiringSoon(w)).length,
+    expiringSoon: scoped.filter(w => w.isActive && isExpiringSoon(w)).length,
+    expired:      scoped.filter(w => w.isActive && isExpired(w)).length,
+    inactive:     scoped.filter(w => !w.isActive).length,
   }
 
   return (
@@ -202,7 +221,11 @@ export default function WarrantiesPage() {
         </button>
       </div>
 
-      {!loading && warranties.length > 0 && (
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
+      {!isScoped && !loading && warranties.length > 0 && (
         <div className="grid grid-cols-4 gap-3 mb-5">
           {([
             { key: 'active',       label: 'Active',        color: 'text-green-400',  count: counts.active },
@@ -296,17 +319,19 @@ export default function WarrantiesPage() {
         </form>
       )}
 
-      <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
-        {(['active', 'expiringSoon', 'expired', 'all', 'inactive'] as Filter[]).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}>
-            {f === 'expiringSoon' ? 'Expiring Soon' : f.charAt(0).toUpperCase() + f.slice(1)}
-            {f === 'expiringSoon' && counts.expiringSoon > 0 ? ` (${counts.expiringSoon})` : ''}
-          </button>
-        ))}
-      </div>
+      {!isScoped && (
+        <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
+          {(['active', 'expiringSoon', 'expired', 'all', 'inactive'] as Filter[]).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+              }`}>
+              {f === 'expiringSoon' ? 'Expiring Soon' : f.charAt(0).toUpperCase() + f.slice(1)}
+              {f === 'expiringSoon' && counts.expiringSoon > 0 ? ` (${counts.expiringSoon})` : ''}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm mb-4">{error}</div>
@@ -325,7 +350,8 @@ export default function WarrantiesPage() {
         ) : filtered.length === 0 ? (
           <div className="card px-4 py-12 text-center">
             <p className="text-gray-400">
-              {filter === 'expiringSoon' ? 'No warranties expiring soon' :
+              {isScoped                  ? 'No warranties for this customer yet' :
+               filter === 'expiringSoon' ? 'No warranties expiring soon' :
                filter === 'expired'      ? 'No expired warranties' :
                filter === 'inactive'     ? 'No inactive warranties' :
                'No warranties yet — tap New Warranty to create one'}

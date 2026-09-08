@@ -186,9 +186,33 @@ function DetailTabBar({
   )
 }
 
-export default function CustomerDetailPage() {
-  const { id } = useParams<{ id: string }>()
+/**
+ * The record detail. Mounted two ways:
+ *
+ *  - as the `/records/:id` route, taking its id from the URL — the canonical,
+ *    shareable address for a record, and where every link from another module
+ *    still lands;
+ *  - embedded in the record list's split pane, taking `id` as a prop.
+ *
+ * Embedded, it drops the page chrome the pane already provides (outer width
+ * container, Back button) and stacks its own two-column layout, since the pane
+ * is itself a column.
+ */
+export default function CustomerDetailPage({
+  id: idProp,
+  embedded = false,
+  onClose,
+}: {
+  id?: string
+  embedded?: boolean
+  onClose?: () => void
+} = {}) {
+  const params = useParams<{ id: string }>()
+  const id = idProp ?? params.id
   const navBack  = useNavBack('/records')
+  // Embedded there's nothing to go back to — closing the pane is the exit, and
+  // it's also where a delete has to leave you.
+  const dismiss = embedded && onClose ? onClose : navBack
   const toast = useToast()
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
   const [loading, setLoading] = useState(true)
@@ -276,7 +300,7 @@ export default function CustomerDetailPage() {
     setDeleting(true)
     try {
       await deleteCustomer(id)
-      navBack()
+      dismiss()
     } finally {
       setDeleting(false)
     }
@@ -298,13 +322,15 @@ export default function CustomerDetailPage() {
 
   const labels = usePickerStore(s => s.labels)
 
-  if (loading) return <LoadingSkeleton />
+  if (loading) return <LoadingSkeleton embedded={embedded} />
 
   if (!customer) {
     return (
-      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+      <div className={embedded ? 'card px-4 py-16 text-center' : 'max-w-2xl mx-auto px-4 py-16 text-center'}>
         <p className="text-gray-400">Record not found.</p>
-        <button onClick={navBack} className="mt-4 text-indigo-400 hover:text-indigo-300">← Go back</button>
+        <button onClick={dismiss} className="mt-4 text-indigo-400 hover:text-indigo-300">
+          {embedded ? 'Close' : '← Go back'}
+        </button>
       </div>
     )
   }
@@ -319,13 +345,18 @@ export default function CustomerDetailPage() {
   const hasCompanyName = customer.companyName.trim() !== ''
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
-      {/* Back + actions */}
+    <div className={embedded ? '' : 'max-w-6xl mx-auto px-4 py-6'}>
+      {/* Back + actions. Embedded, the left slot dismisses the pane instead of
+          unwinding history, and a full-page link is offered because the pane
+          can't be bookmarked or shared. */}
       <div className="flex items-start justify-between mb-6 gap-2 flex-wrap">
-        <button onClick={navBack} className="text-indigo-400 hover:text-indigo-300 text-sm mt-1">
-          ← Back
+        <button onClick={dismiss} className="text-indigo-400 hover:text-indigo-300 text-sm mt-1">
+          {embedded ? '✕ Close' : '← Back'}
         </button>
         <div className="flex gap-2 flex-wrap justify-end">
+          {embedded && (
+            <Link to={`/records/${id}`} className="btn-secondary text-sm px-3 py-1.5">Full page</Link>
+          )}
           <Link to={`/records/${id}/edit`} className="btn-secondary text-sm px-3 py-1.5">Edit</Link>
           <button onClick={() => setConfirmOpen(true)} disabled={deleting} className="btn-danger inline-flex items-center gap-1.5 text-sm px-3 py-1.5">
             {/* The label stays. Swapping it for '…' collapsed the button to a
@@ -337,9 +368,15 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
+      {/* Embedded, this stays one column at every width: the pane is already
+          the right-hand column of the record list, and a 340px sidebar inside
+          it would be a third. Sticky is dropped for the same reason — the pane
+          itself is what scrolls. */}
+      <div className={embedded
+        ? 'grid grid-cols-1 gap-6 items-start'
+        : 'grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start'}>
         {/* ── Sidebar: identity, status, actions, tags ─────────────────── */}
-        <aside className="space-y-4 lg:sticky lg:top-6">
+        <aside className={embedded ? 'space-y-4' : 'space-y-4 lg:sticky lg:top-6'}>
           {/* One identity card, left-aligned, name first.
               The name used to live in a card of its own — a card doing the job
               of a font size — above a second card that declared
@@ -727,6 +764,8 @@ export default function CustomerDetailPage() {
       <div className={activeTab === 'related' ? 'space-y-4' : 'hidden'}>
         <RelatedRecordsSection
           customerId={id!}
+          customerName={fullName(customer)}
+          canTrackTime={customer.category.toLowerCase() === 'customer' && customer.isActive}
           invoices={invoices}
           proposals={proposals}
           warranties={warranties}
@@ -1727,9 +1766,30 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
 // Pulls records from other modules that reference this customer's id, so the
 // full relationship — billing, service history, time on site — is visible in
 // one place instead of requiring a separate search in each module.
+//
+// Every link out of here carries `?customerId=` (plus `&new=1` on the Add row),
+// which the module pages read to scope themselves or open a form already
+// pointed at this customer. Without that this panel was a dead end: you could
+// see a warranty existed but had to go to /warranties and find it again, and
+// adding one meant re-picking a customer you were already looking at.
+
+/** A chip in the Add row: opens a module's create form prefilled. */
+function AddChip({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="inline-flex items-center gap-1 shrink-0 rounded-full border border-gray-600/50 bg-gray-800/60 px-2.5 py-1 text-xs font-medium text-gray-300 hover:border-indigo-500/50 hover:bg-indigo-600/15 hover:text-indigo-200 transition-colors"
+    >
+      <span className="leading-none">+</span>
+      {label}
+    </Link>
+  )
+}
 
 function RelatedRecordsSection({
   customerId,
+  customerName,
+  canTrackTime,
   invoices,
   proposals,
   warranties,
@@ -1737,6 +1797,13 @@ function RelatedRecordsSection({
   onCount,
 }: {
   customerId: string
+  customerName: string
+  /**
+   * Time Tracking's job picker only carries active Customers, so a lead or a
+   * deactivated record would land on a form it can't prefill. Hide the chip
+   * rather than offer a link that half-works.
+   */
+  canTrackTime: boolean
   invoices: Invoice[]
   proposals: Proposal[]
   warranties: Warranty[]
@@ -1785,10 +1852,30 @@ function RelatedRecordsSection({
     return h > 0 ? `${h}h ${m}m` : `${m}m`
   }
 
+  // Shared query string. The name is passed so a module page can label its
+  // scope banner before its own customer subscription has landed — the id is
+  // what actually does the filtering.
+  const scope = `customerId=${customerId}&customerName=${encodeURIComponent(customerName)}`
+
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
         <p className="card-section-title">Related Records</p>
+      </div>
+
+      {/* Add row. It sits above the sections rather than inside their headers
+          because the sections only render when they have something in them —
+          and a customer with no warranty yet is exactly who needs the link. */}
+      <div className="px-4 py-3 border-b border-gray-700/30">
+        <p className="text-xs font-semibold text-gray-400 mb-2">Add for this customer</p>
+        <div className="flex flex-wrap gap-1.5">
+          <AddChip to={`/proposals/new?customerId=${customerId}`} label="Proposal" />
+          <AddChip to={`/invoices/new?customerId=${customerId}`}  label="Invoice" />
+          <AddChip to={`/service-plans?${scope}&new=1`}           label="Service Plan" />
+          <AddChip to={`/warranties?${scope}&new=1`}              label="Warranty" />
+          <AddChip to={`/referrals?${scope}&new=1`}               label="Referral" />
+          {canTrackTime && <AddChip to={`/time-tracking?${scope}&new=1`} label="Clock In" />}
+        </div>
       </div>
 
       {totalCount === 0 && (
@@ -1859,7 +1946,11 @@ function RelatedRecordsSection({
             {warranties.slice(0, 5).map(w => {
               const status = warrantyStatus(w)
               return (
-                <div key={w.id} className="flex items-center justify-between gap-2 py-1">
+                <Link
+                  key={w.id}
+                  to={`/warranties?${scope}`}
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                >
                   <span className="text-sm text-gray-300 truncate">{w.title || 'Untitled'}</span>
                   <span className="flex items-center gap-2 shrink-0">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
@@ -1867,7 +1958,7 @@ function RelatedRecordsSection({
                     </span>
                     <span className="text-xs text-gray-400">{fmtDate(w.expirationDate)}</span>
                   </span>
-                </div>
+                </Link>
               )
             })}
           </div>
@@ -1879,7 +1970,11 @@ function RelatedRecordsSection({
           <p className="text-xs font-semibold text-gray-400 mb-2">Service Plans ({servicePlans.length})</p>
           <div className="space-y-1.5">
             {servicePlans.slice(0, 5).map(sp => (
-              <div key={sp.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={sp.id}
+                to={`/service-plans?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">{sp.title || 'Untitled'}</span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${sp.isActive ? 'bg-green-500/20 text-green-400 border-green-600/40' : 'bg-gray-700/60 text-gray-400 border-gray-600/40'}`}>
@@ -1887,7 +1982,7 @@ function RelatedRecordsSection({
                   </span>
                   <span className="text-xs text-gray-400">Next: {fmtDate(sp.nextDate)}</span>
                 </span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -1898,7 +1993,11 @@ function RelatedRecordsSection({
           <p className="text-xs font-semibold text-gray-400 mb-2">Service Requests ({myRequests.length})</p>
           <div className="space-y-1.5">
             {myRequests.slice(0, 5).map(r => (
-              <div key={r.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={r.id}
+                to={`/service-requests?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">{r.description || 'No description'}</span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${REQUEST_STATUS_COLORS[r.status]}`}>
@@ -1906,7 +2005,7 @@ function RelatedRecordsSection({
                   </span>
                   <span className="text-xs text-gray-400">{fmtDate(r.createdAt)}</span>
                 </span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -1917,13 +2016,17 @@ function RelatedRecordsSection({
           <p className="text-xs font-semibold text-gray-400 mb-2">Time on Site ({myTimeEntries.length})</p>
           <div className="space-y-1.5">
             {myTimeEntries.slice(0, 5).map(t => (
-              <div key={t.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={t.id}
+                to={`/time-tracking?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-gray-400">{fmtDuration(t.durationMinutes)}</span>
                   <span className="text-xs text-gray-400">{fmtDate(t.clockIn)}</span>
                 </span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -1976,16 +2079,24 @@ function RelatedRecordsSection({
           <p className="text-xs font-semibold text-gray-400 mb-2">Referrals ({referredByMe.length + referredToMe.length})</p>
           <div className="space-y-1.5">
             {referredByMe.map(r => (
-              <div key={r.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={r.id}
+                to={`/referrals?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">Referred: {r.referredName || 'Unknown'}</span>
                 {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
-              </div>
+              </Link>
             ))}
             {referredToMe.map(r => (
-              <div key={r.id} className="flex items-center justify-between gap-2 py-1">
+              <Link
+                key={r.id}
+                to={`/referrals?${scope}`}
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+              >
                 <span className="text-sm text-gray-300 truncate">Referred by: {r.referrerName || 'Unknown'}</span>
                 {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -3051,9 +3162,9 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
  * grid, every card moved, and the most prominent thing in the placeholder turned
  * out not to exist.
  */
-function LoadingSkeleton() {
+function LoadingSkeleton({ embedded = false }: { embedded?: boolean }) {
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-pulse">
+    <div className={embedded ? 'animate-pulse' : 'max-w-6xl mx-auto px-4 py-6 animate-pulse'}>
       {/* Back + actions */}
       <div className="flex items-start justify-between mb-6 gap-2">
         <div className="h-4 bg-gray-700 rounded w-14 mt-1" />
@@ -3063,7 +3174,9 @@ function LoadingSkeleton() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
+      <div className={embedded
+        ? 'grid grid-cols-1 gap-6 items-start'
+        : 'grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start'}>
         <aside className="space-y-4">
           {/* Name */}
           <div className="card px-4 py-2 flex justify-center">

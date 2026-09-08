@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import { subscribeToReferrals, addReferral, deleteReferral, type Referral } from '../../services/referralService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
@@ -86,14 +88,22 @@ function CustomerPicker({
 
 function LogForm({
   customers,
+  initialReferrer = null,
   onSave,
   onCancel,
 }: {
   customers: CustomerItem[]
+  /**
+   * Preselects who sent the referral. Opened from a customer's Related Records
+   * panel that's the customer you were just looking at — "this customer
+   * referred someone" is the direction worth a click; who they referred still
+   * has to be picked.
+   */
+  initialReferrer?: CustomerItem | null
   onSave: (r: { referrer: CustomerItem; referred: CustomerItem; amount: number; notes: string }) => Promise<void>
   onCancel: () => void
 }) {
-  const [referrer, setReferrer]   = useState<CustomerItem | null>(null)
+  const [referrer, setReferrer]   = useState<CustomerItem | null>(initialReferrer)
   const [referred, setReferred]   = useState<CustomerItem | null>(null)
   const [amount, setAmount]       = useState('')
   const [notes, setNotes]         = useState('')
@@ -278,10 +288,39 @@ export default function ReferralsPage() {
     return unsub
   }, [companyId])
 
+  // Arriving from a customer's Related Records panel: scope to the referrals
+  // they're on either side of, and on `&new=1` open the form with them set as
+  // the referrer.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(customers, openLogFor)
+
+  const [logReferrer, setLogReferrer] = useState<CustomerItem | null>(null)
+
+  function openLogFor(c: CustomerItem) {
+    setLogReferrer(c)
+    setShowForm(true)
+  }
+
+  function closeForm() {
+    setShowForm(false)
+    setLogReferrer(null)
+  }
+
+  const scopedReferrals = useMemo(
+    () => (isScoped
+      ? referrals.filter(r => r.referrerId === scopeId || r.referredId === scopeId)
+      : referrals),
+    [referrals, isScoped, scopeId],
+  )
+
+  // One customer's referrals don't need a leaderboard ranking them against
+  // themselves, so a scoped view always uses the flat list.
+  const effectiveView = isScoped ? 'all' : view
+
   // Aggregate per referrer
   const leaderboard = useMemo((): ReferrerStat[] => {
     const map = new Map<string, ReferrerStat>()
-    for (const r of referrals) {
+    for (const r of scopedReferrals) {
       const existing = map.get(r.referrerId)
       if (existing) {
         existing.count++
@@ -294,7 +333,7 @@ export default function ReferralsPage() {
     return [...map.values()].sort((a, b) =>
       sortBy === 'revenue' ? b.revenue - a.revenue || b.count - a.count : b.count - a.count || b.revenue - a.revenue,
     )
-  }, [referrals, sortBy])
+  }, [scopedReferrals, sortBy])
 
   const totalRevenue = leaderboard.reduce((s, r) => s + r.revenue, 0)
 
@@ -306,7 +345,7 @@ export default function ReferralsPage() {
       referredId: referred.id, referredName: fullName(referred),
       referredAmount: amount, notes,
     })
-    setShowForm(false)
+    closeForm()
     toast('Referral logged', 'success')
   }
 
@@ -335,17 +374,22 @@ export default function ReferralsPage() {
         )}
       </div>
 
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
       {/* Form */}
       {showForm && (
         <LogForm
           customers={customers}
+          initialReferrer={logReferrer}
           onSave={handleSave}
-          onCancel={() => setShowForm(false)}
+          onCancel={closeForm}
         />
       )}
 
       {/* Summary strip */}
-      {!loading && referrals.length > 0 && (
+      {!isScoped && !loading && referrals.length > 0 && (
         <div className="grid grid-cols-3 gap-3">
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-white">{referrals.length}</p>
@@ -363,7 +407,7 @@ export default function ReferralsPage() {
       )}
 
       {/* View toggle + sort */}
-      {!loading && referrals.length > 0 && (
+      {!isScoped && !loading && referrals.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex rounded-xl border border-gray-700 overflow-hidden text-xs font-medium">
             {(['leaderboard', 'all'] as const).map(v => (
@@ -395,13 +439,15 @@ export default function ReferralsPage() {
       {/* Content */}
       {loading ? (
         <div className="card animate-pulse h-48" />
-      ) : referrals.length === 0 ? (
+      ) : scopedReferrals.length === 0 ? (
         <div className="card p-12 text-center">
           <p className="text-3xl mb-3">🤝</p>
-          <p className="text-gray-400 text-sm">No referrals logged yet.</p>
+          <p className="text-gray-400 text-sm">
+            {isScoped ? 'No referrals for this customer yet.' : 'No referrals logged yet.'}
+          </p>
           <p className="text-gray-600 text-xs mt-1">Track which customers are sending you new business.</p>
         </div>
-      ) : view === 'leaderboard' ? (
+      ) : effectiveView === 'leaderboard' ? (
         <div className="space-y-2">
           {leaderboard.map((stat, i) => (
             <ReferrerCard
@@ -414,7 +460,7 @@ export default function ReferralsPage() {
         </div>
       ) : (
         <div className="card divide-y divide-gray-700/40">
-          {referrals.map(r => (
+          {scopedReferrals.map(r => (
             <div key={r.id} className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-800/30 transition-colors">
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-gray-200">
@@ -450,9 +496,9 @@ export default function ReferralsPage() {
         </div>
       )}
 
-      {referrals.length > 0 && (
+      {scopedReferrals.length > 0 && (
         <p className="text-xs text-gray-600 text-center pb-2">
-          {referrals.length} referral{referrals.length !== 1 ? 's' : ''} · {leaderboard.length} referrer{leaderboard.length !== 1 ? 's' : ''}
+          {scopedReferrals.length} referral{scopedReferrals.length !== 1 ? 's' : ''} · {leaderboard.length} referrer{leaderboard.length !== 1 ? 's' : ''}
         </p>
       )}
     </div>

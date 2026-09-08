@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import { useAuthStore } from '../../stores/authStore'
 import { subscribeToCustomers } from '../../services/customerService'
 import {
@@ -103,9 +105,21 @@ export default function ServicePlansPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // Arriving from a customer's Related Records panel: scope the list to that
+  // customer, and on `&new=1` open the form with the picker already filled in.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(customers, openAddFor)
+
   function openAdd() {
     setEditPlan(null)
     setForm(BLANK_FORM)
+    setShowForm(true)
+  }
+
+  function openAddFor(c: CustomerItem) {
+    const name = fullName(c)
+    setEditPlan(null)
+    setForm({ ...BLANK_FORM, customerId: c.id, customerName: name, customerQuery: name })
     setShowForm(true)
   }
 
@@ -185,7 +199,12 @@ export default function ServicePlansPage() {
     await deleteServicePlan(plan.id)
   }
 
-  const filtered = plans.filter(p => {
+  const scoped = isScoped ? plans.filter(p => p.customerId === scopeId) : plans
+
+  // A scoped view shows every plan this customer has, inactive ones included.
+  // Applying the status filter as well would let someone arrive from a customer
+  // whose only plan has lapsed and see an empty page.
+  const filtered = isScoped ? scoped : scoped.filter(p => {
     if (filter === 'all')      return true
     if (filter === 'inactive') return !p.isActive
     if (filter === 'overdue')  return p.isActive && isOverdue(p)
@@ -193,9 +212,9 @@ export default function ServicePlansPage() {
   })
 
   const counts = {
-    active:   plans.filter(p => p.isActive && !isOverdue(p)).length,
-    overdue:  plans.filter(p => p.isActive && isOverdue(p)).length,
-    inactive: plans.filter(p => !p.isActive).length,
+    active:   scoped.filter(p => p.isActive && !isOverdue(p)).length,
+    overdue:  scoped.filter(p => p.isActive && isOverdue(p)).length,
+    inactive: scoped.filter(p => !p.isActive).length,
   }
 
   return (
@@ -212,8 +231,12 @@ export default function ServicePlansPage() {
         </button>
       </div>
 
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
       {/* Stats row */}
-      {!loading && plans.length > 0 && (
+      {!isScoped && !loading && plans.length > 0 && (
         <div className="grid grid-cols-3 gap-3 mb-5">
           {([
             { key: 'active',   label: 'Active',   color: 'text-green-400', count: counts.active },
@@ -313,16 +336,18 @@ export default function ServicePlansPage() {
       )}
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
-        {(['active', 'overdue', 'all', 'inactive'] as Filter[]).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
-              filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}>
-            {f}{f === 'overdue' && counts.overdue > 0 ? ` (${counts.overdue})` : ''}
-          </button>
-        ))}
-      </div>
+      {!isScoped && (
+        <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none">
+          {(['active', 'overdue', 'all', 'inactive'] as Filter[]).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors ${
+                filter === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+              }`}>
+              {f}{f === 'overdue' && counts.overdue > 0 ? ` (${counts.overdue})` : ''}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm mb-4">{error}</div>
@@ -342,7 +367,8 @@ export default function ServicePlansPage() {
         ) : filtered.length === 0 ? (
           <div className="card px-4 py-12 text-center">
             <p className="text-gray-400">
-              {filter === 'overdue' ? 'No overdue plans' :
+              {isScoped             ? 'No service plans for this customer yet' :
+               filter === 'overdue' ? 'No overdue plans' :
                filter === 'inactive' ? 'No inactive plans' :
                'No service plans yet — tap New Plan to create one'}
             </p>

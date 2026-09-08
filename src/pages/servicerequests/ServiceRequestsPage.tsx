@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
 import {
@@ -14,6 +16,10 @@ import {
 } from '../../models/serviceRequest'
 
 type Tab = 'active' | ServiceRequestStatus
+
+// This page has no customer picker to resolve a deep-linked name against, so
+// the hook gets a stable empty list and the banner uses the name in the URL.
+const NO_CUSTOMERS: never[] = []
 
 function fmtDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -33,10 +39,25 @@ export default function ServiceRequestsPage() {
     () => setLoading(false),
   ), [])
 
+  // Arriving from a customer's Related Records panel. There's no create form
+  // here — requests come in through the customer portal — so the deep link only
+  // scopes the list.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(NO_CUSTOMERS)
+
+  const scopedRequests = useMemo(
+    () => (isScoped ? requests.filter(r => r.customerId === scopeId) : requests),
+    [requests, isScoped, scopeId],
+  )
+
+  // Scoped, the status tabs are suppressed and every request for the customer
+  // shows — otherwise arriving from a customer whose only request is completed
+  // would land on an empty "Active" tab.
   const filtered = useMemo(() => {
-    if (tab === 'active') return requests.filter(r => r.status !== 'completed' && r.status !== 'dismissed')
-    return requests.filter(r => r.status === tab)
-  }, [requests, tab])
+    if (isScoped) return scopedRequests
+    if (tab === 'active') return scopedRequests.filter(r => r.status !== 'completed' && r.status !== 'dismissed')
+    return scopedRequests.filter(r => r.status === tab)
+  }, [scopedRequests, tab, isScoped])
 
   const newCount = useMemo(() => requests.filter(r => r.status === 'new').length, [requests])
 
@@ -81,7 +102,12 @@ export default function ServiceRequestsPage() {
         </p>
       </div>
 
-      {/* SLA summary */}
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
+      {/* SLA summary — company-wide averages, so not meaningful once scoped */}
+      {!isScoped && (
       <div className="grid grid-cols-3 gap-3 mb-5">
         <div className="card px-3 py-3">
           <p className="text-xl font-bold text-white">{slaStats.avgContact !== null ? fmtDuration(slaStats.avgContact) : '—'}</p>
@@ -99,27 +125,32 @@ export default function ServiceRequestsPage() {
           <p className="text-xs text-gray-600">open &amp; overdue</p>
         </div>
       </div>
+      )}
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-gray-800/60 p-1 rounded-xl w-fit overflow-x-auto">
-        {(['active', ...SERVICE_REQUEST_STATUSES] as Tab[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`text-sm px-3.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap ${
-              tab === t ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {t === 'active' ? 'Active' : STATUS_LABELS[t]}
-          </button>
-        ))}
-      </div>
+      {!isScoped && (
+        <div className="flex gap-1 mb-6 bg-gray-800/60 p-1 rounded-xl w-fit overflow-x-auto">
+          {(['active', ...SERVICE_REQUEST_STATUSES] as Tab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`text-sm px-3.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap ${
+                tab === t ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {t === 'active' ? 'Active' : STATUS_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <p className="text-sm text-gray-500">Loading…</p>
       ) : filtered.length === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-gray-400 font-medium">No requests here</p>
+          <p className="text-gray-400 font-medium">
+            {isScoped ? 'No requests from this customer' : 'No requests here'}
+          </p>
           <p className="text-sm text-gray-600 mt-1">Requests submitted from a customer's portal link will show up here.</p>
         </div>
       ) : (

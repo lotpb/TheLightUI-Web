@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
+import CustomerScopeBanner from '../../components/CustomerScopeBanner'
 import {
   subscribeToTimeEntries,
   clockIn as doClockIn,
@@ -124,14 +126,17 @@ function ActiveCard({ entry, now, onClockOut }: { entry: TimeEntry; now: number;
 
 function ClockInForm({
   jobs,
+  initialJobId = '',
   onSubmit,
   onCancel,
 }: {
   jobs: CustomerItem[]
+  /** Preselects the job when opened from a customer's Related Records panel. */
+  initialJobId?: string
   onSubmit: (customerId: string, customerName: string, notes: string) => Promise<void>
   onCancel: () => void
 }) {
-  const [jobId, setJobId]     = useState('')
+  const [jobId, setJobId]     = useState(initialJobId)
   const [notes, setNotes]     = useState('')
   const [query, setQuery]     = useState('')
   const [saving, setSaving]   = useState(false)
@@ -261,20 +266,45 @@ export default function TimeTrackingPage() {
     return unsub
   }, [companyId])
 
-  // Active entries (no clock-out)
-  const active = useMemo(() => entries.filter(e => e.clockOut === null), [entries])
+  // Arriving from a customer's Related Records panel: scope the log to that
+  // customer, and on `&new=1` open the clock-in form with the job preselected.
+  // Resolution is against `jobs`, which is active Customers only — the detail
+  // page only offers the link for records that qualify.
+  const { customerId: scopeId, customerName: scopeName, isScoped, clearScope } =
+    useCustomerDeepLink(jobs, openClockInFor)
 
-  // Completed entries filtered by period + job
+  const [prefillJobId, setPrefillJobId] = useState('')
+
+  function openClockInFor(c: CustomerItem) {
+    setPrefillJobId(c.id)
+    setShowForm(true)
+  }
+
+  function closeForm() {
+    setShowForm(false)
+    setPrefillJobId('')
+  }
+
+  // Active entries (no clock-out)
+  const active = useMemo(
+    () => entries.filter(e => e.clockOut === null && (!isScoped || e.customerId === scopeId)),
+    [entries, isScoped, scopeId],
+  )
+
+  // Completed entries filtered by period + job. Scoped, the period window is
+  // ignored: a customer's last job may well be older than the 7 days this page
+  // defaults to, and an empty log would read as "no time was ever logged".
   const completed = useMemo(() => {
     const start = periodStart(period)
     const jq = jobFilter.toLowerCase()
     return entries.filter(e => {
       if (e.clockOut === null) return false
+      if (isScoped) return e.customerId === scopeId
       if (e.clockIn < start) return false
       if (jq && !e.customerName.toLowerCase().includes(jq)) return false
       return true
     })
-  }, [entries, period, jobFilter])
+  }, [entries, period, jobFilter, isScoped, scopeId])
 
   // Per-job totals
   const jobTotals = useMemo(() => {
@@ -299,7 +329,7 @@ export default function TimeTrackingPage() {
     const workerId   = user?.uid ?? ''
     const location = await getCurrentLocation()
     await doClockIn({ customerId, customerName, workerName, workerId, notes, location })
-    setShowForm(false)
+    closeForm()
     toast(`Clocked in on ${customerName}`, 'success')
   }
 
@@ -352,12 +382,17 @@ export default function TimeTrackingPage() {
         )}
       </div>
 
+      {isScoped && (
+        <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
+      )}
+
       {/* Clock-in form */}
       {showForm && (
         <ClockInForm
           jobs={jobs}
+          initialJobId={prefillJobId}
           onSubmit={handleClockIn}
-          onCancel={() => setShowForm(false)}
+          onCancel={closeForm}
         />
       )}
 
@@ -379,27 +414,29 @@ export default function TimeTrackingPage() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex rounded-xl border border-gray-700 overflow-hidden text-xs font-medium">
-          {(['today', 'week', 'month', 'all'] as Period[]).map(p => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`px-3 py-1.5 transition-colors ${period === p ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
-            >
-              {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : p === 'month' ? '30 Days' : 'All'}
-            </button>
-          ))}
+      {/* Filters — the scope banner replaces them while deep-linked */}
+      {!isScoped && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex rounded-xl border border-gray-700 overflow-hidden text-xs font-medium">
+            {(['today', 'week', 'month', 'all'] as Period[]).map(p => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`px-3 py-1.5 transition-colors ${period === p ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : p === 'month' ? '30 Days' : 'All'}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            value={jobFilter}
+            onChange={e => setJobFilter(e.target.value)}
+            placeholder="Filter by job…"
+            className="input-field text-sm py-1.5 flex-1 min-w-32"
+          />
         </div>
-        <input
-          type="text"
-          value={jobFilter}
-          onChange={e => setJobFilter(e.target.value)}
-          placeholder="Filter by job…"
-          className="input-field text-sm py-1.5 flex-1 min-w-32"
-        />
-      </div>
+      )}
 
       {/* Summary totals strip */}
       {jobTotals.length > 0 && (
