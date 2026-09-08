@@ -30,7 +30,11 @@ export default function TemplatesPage() {
   useEffect(() => {
     return subscribeToTemplates(
       ts => { setTemplates(ts); setLoading(false) },
-      () => setLoading(false),
+      err => {
+        // Needs a composite index on companyId + createdAt; see SequencesPage.
+        console.error('[TemplatesPage] templates subscription failed:', err)
+        setLoading(false)
+      },
     )
   }, [])
 

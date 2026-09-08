@@ -26,7 +26,13 @@ export default function SequencesPage() {
   useEffect(() => {
     return subscribeToSequences(
       ss => { setSequences(ss); setLoading(false) },
-      () => setLoading(false),
+      err => {
+        // This query needs a composite index on companyId + createdAt. Silently
+        // clearing the loading flag turned a missing index into "you have no
+        // sequences", which is indistinguishable from a fresh account.
+        console.error('[SequencesPage] sequences subscription failed:', err)
+        setLoading(false)
+      },
     )
   }, [])
 

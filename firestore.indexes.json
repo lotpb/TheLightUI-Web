@@ -279,6 +279,31 @@
         { "fieldPath": "startAt", "order": "ASCENDING" }
       ]
     }
+    ,{
+      "collectionGroup": "sequences",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    }
+    ,{
+      "collectionGroup": "sequenceEnrollments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+    ,{
+      "collectionGroup": "messageTemplates",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    }
   ],
   "fieldOverrides": []
 }

@@ -2595,7 +2595,7 @@ function ComposeModal({
   useEffect(() => {
     return subscribeToTemplates(
       ts => setSavedTemplates(ts.filter(t => t.type === mode || t.type === 'both')),
-      () => {},
+      logRelatedError('templates'),
     )
   }, [mode])
 
@@ -2946,8 +2946,12 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const enrollRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => subscribeToSequences(setSequences, () => {}), [])
-  useEffect(() => subscribeToCustomerEnrollments(customer.id, setEnrollments, () => {}), [customer.id])
+  // Both of these need a composite index, and both used to swallow the error
+  // with `() => {}`. When the indexes were missing the lists were simply empty:
+  // no sequence to enrol into, no enrolments shown, nothing logged. It read as
+  // "saving doesn't work" rather than "this query can't run".
+  useEffect(() => subscribeToSequences(setSequences, logRelatedError('sequences')), [])
+  useEffect(() => subscribeToCustomerEnrollments(customer.id, setEnrollments, logRelatedError('sequence enrollments')), [customer.id])
 
   useEffect(() => { onCount?.(enrollments.length) }, [enrollments.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
