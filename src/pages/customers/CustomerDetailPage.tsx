@@ -3246,13 +3246,26 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
  * didn't fade in, it jumped: a 672px centred column became a 1152px two-column
  * grid, every card moved, and the most prominent thing in the placeholder turned
  * out not to exist.
+ *
+ * That fixed the gross shape and then went stale, because the page kept moving
+ * and this didn't. By the third pass it was still drawing a standalone name
+ * card the first pass had deleted, still centring the pills that same pass had
+ * left-aligned, still stubbing six tabs against eight, and still had no
+ * placeholder for the h1 inside the card the h1 now lives in. Every row and
+ * tile was also a few pixels short: 8px per FieldRow (96px across the Details
+ * tab), 2px per action tile, 4px per tab.
+ *
+ * So the rule for this component is that its numbers come from the real
+ * components' box arithmetic, not from eyeballing — which is why the comments
+ * below carry the sums.
  */
 function LoadingSkeleton() {
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 animate-pulse">
-      {/* Back + actions */}
+      {/* Back + actions. h-5, so the 20px line-height of the real "← Back" and
+          the 32px buttons are both accounted for. */}
       <div className="flex items-start justify-between mb-6 gap-2">
-        <div className="h-4 bg-gray-700 rounded w-14 mt-1" />
+        <div className="h-5 bg-gray-700 rounded w-14 mt-1" />
         <div className="flex gap-2">
           <div className="h-8 bg-gray-700 rounded-lg w-14" />
           <div className="h-8 bg-gray-700 rounded-lg w-16" />
@@ -3261,36 +3274,61 @@ function LoadingSkeleton() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
         <aside className="space-y-4">
-          {/* Name */}
-          <div className="card px-4 py-2 flex justify-center">
-            <div className="h-7 bg-gray-700 rounded w-40" />
-          </div>
-          {/* Identity + action tiles */}
-          <div className="card p-6 space-y-5">
-            <div className="flex flex-wrap gap-1.5 justify-center">
-              <div className="h-6 bg-gray-700 rounded-full w-20" />
-              <div className="h-6 bg-gray-700 rounded-full w-16" />
+          {/* One identity card: name, pills, twelve tiles.
+              There was a standalone name card above this one, left over from
+              before the first pass folded the name into the identity card — so
+              the aside rendered five cards while loading and settled into four,
+              and the h1, now the largest thing on the page, had no placeholder
+              in the card it actually lives in. The pills were justify-center
+              too, which that same pass had already settled on the side of
+              left-aligned. */}
+          <div className="card p-6">
+            <div className="space-y-3">
+              {/* h-8 ≈ the 30px line box of a text-2xl leading-tight h1. */}
+              <div className="h-8 bg-gray-700 rounded w-44" />
+              <div className="flex flex-wrap gap-1.5">
+                <div className="h-6 bg-gray-700 rounded-full w-20" />
+                <div className="h-6 bg-gray-700 rounded-full w-16" />
+              </div>
             </div>
-            <div className="grid grid-cols-4 gap-2 pt-4 border-t border-gray-700/50">
+            {/* h-16, not h-[62px]: an ActionTile is py-3 + a 20px icon +
+                gap-1.5 + a 14px label = 64px exactly. mt-5 pt-4 matches the
+                real grid's offset from the pills. */}
+            <div className="grid grid-cols-4 gap-2 mt-5 pt-4 border-t border-gray-700/50">
               {Array.from({ length: 12 }).map((_, i) => (
-                <div key={i} className="h-[62px] bg-gray-700/60 rounded-2xl" />
+                <div key={i} className="h-16 bg-gray-700/60 rounded-2xl" />
               ))}
             </div>
           </div>
-          {/* Tags, Follow-up, Called */}
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="card p-4 space-y-2.5">
-              <div className="h-3 bg-gray-700 rounded w-20" />
-              <div className="h-7 bg-gray-700/60 rounded w-32" />
+
+          {/* Tags + Score — a flat p-4 card, which is what that one really is. */}
+          <div className="card p-4 space-y-2.5">
+            <div className="h-4 bg-gray-700 rounded w-20" />
+            <div className="h-7 bg-gray-700/60 rounded w-32" />
+          </div>
+
+          {/* Follow-up and Called. Both are header-strip cards, not flat p-4
+              ones — the old skeleton drew all three sidebar cards the same way,
+              so two of them changed shape on arrival. */}
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="card overflow-hidden">
+              <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
+                <div className="h-4 bg-gray-700 rounded w-20" />
+              </div>
+              <div className="px-4 py-3">
+                <div className="h-7 bg-gray-700/60 rounded w-32" />
+              </div>
             </div>
           ))}
         </aside>
 
         <main className="min-w-0">
-          {/* Tab bar */}
+          {/* Eight tabs, not six, at their real label widths — Details,
+              Activity, Tasks, Related, Texts, Email, Sequences, Files. h-5 for
+              the 20px text-sm line box. */}
           <div className="border-b border-gray-800 mb-6 flex gap-6 pb-3 pt-1">
-            {[52, 60, 44, 54, 40, 42].map((w, i) => (
-              <div key={i} className="h-4 bg-gray-700 rounded shrink-0" style={{ width: w }} />
+            {[50, 58, 36, 50, 36, 36, 65, 36].map((w, i) => (
+              <div key={i} className="h-5 bg-gray-700 rounded shrink-0" style={{ width: w }} />
             ))}
           </div>
           {/* Details tab: two half-width groups, then two full-width ones */}
@@ -3308,6 +3346,14 @@ function LoadingSkeleton() {
   )
 }
 
+/**
+ * One row here has to be 68px, the same as a real FieldRow: a text-xs label
+ * (16px) + mb-1 + a text-base value on a 24px line box, inside px-4 py-3.
+ *
+ * It was h-3.5 + space-y-1.5 + h-4 = 60px, so every row was 8px short — 96px
+ * across the twelve rows the Details tab draws, all of it landing as a jump the
+ * moment the record arrived.
+ */
 function FieldGroupSkeleton({ rows }: { rows: number }) {
   return (
     <div className="card overflow-hidden">
@@ -3316,9 +3362,9 @@ function FieldGroupSkeleton({ rows }: { rows: number }) {
       </div>
       <div className="divide-y divide-gray-700/30">
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="px-4 py-3 space-y-1.5">
-            <div className="h-3.5 bg-gray-700/60 rounded w-20" />
-            <div className="h-4 bg-gray-700 rounded" style={{ width: `${45 + ((i * 17) % 40)}%` }} />
+          <div key={i} className="px-4 py-3 space-y-1">
+            <div className="h-4 bg-gray-700/60 rounded w-20" />
+            <div className="h-6 bg-gray-700 rounded" style={{ width: `${45 + ((i * 17) % 40)}%` }} />
           </div>
         ))}
       </div>
