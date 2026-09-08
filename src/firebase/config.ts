@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app'
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
 import { getAuth } from 'firebase/auth'
 import { initializeFirestore, memoryLocalCache } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
@@ -15,6 +16,59 @@ const firebaseConfig = {
 }
 
 const app = initializeApp(firebaseConfig)
+
+/**
+ * App Check — attests that a request came from this app, rather than from a
+ * script holding the project config. That config is public by necessity: it
+ * ships in this bundle, so anyone can read it and call the Firestore REST API
+ * directly. Security rules still apply to those calls, which is why the rest of
+ * the data is safe — but `serviceRequests` and `leadSubmissions` are
+ * deliberately `allow create: if true`, because a stranger submitting the
+ * public lead form isn't signed in. Rules can't be tightened there without
+ * removing the feature; App Check is the missing constraint.
+ *
+ * Inert until VITE_FIREBASE_APPCHECK_SITE_KEY is set — with no key this is
+ * skipped entirely and nothing changes. With a key, the SDK starts attaching an
+ * attestation token to every Firebase request, but a token is only *required*
+ * once enforcement is switched on per service in the console.
+ *
+ * Enforcement is project-wide per service, not per client. Turning it on
+ * rejects every caller without a valid token, including older iOS builds
+ * already on people's phones. Order of operations:
+ *
+ *   1. deploy this with a site key, enforcement off
+ *   2. watch App Check → Metrics until verified traffic dominates
+ *   3. ship an iOS build with App Attest and let it roll out
+ *   4. only then enforce, one service at a time, Firestore last
+ *
+ * Note this is a different key from VITE_RECAPTCHA_SITE_KEY, which is plain
+ * reCAPTCHA v3 called by hand on /register. App Check needs its own
+ * reCAPTCHA Enterprise key.
+ *
+ * Imported statically rather than behind a dynamic import: App Check has to be
+ * initialized before any other Firebase service issues a request, and awaiting
+ * a chunk would let those first requests go out untokened.
+ */
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY
+if (appCheckSiteKey) {
+  // Has to be set before initializeAppCheck. In dev the SDK prints a debug
+  // token to the console instead of calling reCAPTCHA; register it under
+  // App Check → Apps → Manage debug tokens, or localhost is rejected the
+  // moment enforcement goes on.
+  if (import.meta.env.DEV) {
+    self.FIREBASE_APPCHECK_DEBUG_TOKEN = true
+  }
+  try {
+    initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+      isTokenAutoRefreshEnabled: true,
+    })
+  } catch (err) {
+    // A malformed key must not take the whole app down while enforcement is
+    // off — without enforcement, requests succeed with or without a token.
+    console.error('[AppCheck] initialization failed:', err)
+  }
+}
 
 export const auth    = getAuth(app)
 
