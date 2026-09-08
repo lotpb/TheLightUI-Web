@@ -892,10 +892,32 @@ function CustomFieldsSection({ customer }: { customer: CustomerItem }) {
   )
 }
 
+/**
+ * bg-gray-900, not bg-gray-800/50 — and the same swap applies to the twelve
+ * other card headers on this page.
+ *
+ * `.card` is bg-gray-800, and the strip was bg-gray-800/50: fifty percent of a
+ * colour composited over that same colour is that colour. Every header strip
+ * measured 1.000:1 against its own card in both themes, so the page's entire
+ * structural rhythm — thirteen of these, from the Details field groups through
+ * Follow-up, Called, History, Tasks, Texts, Email, Campaigns, Related, Activity,
+ * Files and Sequences — rendered as nothing but a 1px bottom border.
+ *
+ * Darker rather than lighter, which is what /settings uses. bg-gray-700 gives a
+ * bigger step (1.42:1) but these headers carry action links and secondary text,
+ * unlike the ones on /settings: it would have dropped text-indigo-400 from
+ * 4.92:1 to 3.46:1 and the section titles to 4.06:1. Going down instead is
+ * 1.209:1 dark / 1.168:1 light against the card, and every child gains contrast
+ * — titles 5.78 → 6.99:1, links 4.92 → 5.95:1.
+ *
+ * The ten Related Records row hovers were the same class and the same 1.000:1,
+ * so hovering a linked invoice produced no feedback at all; those go the other
+ * way, to gray-700/60 (1.223:1), because a row hover should read as lifting.
+ */
 function FieldGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         {/* text-xs, matching .section-header. The group title, the field labels
             and the values were all within 2px of each other, so a Details tab
             read as forty near-equal lines separated only by colour. */}
@@ -1102,7 +1124,7 @@ function FollowUpSection({
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
         <p className="card-section-title">Follow-up</p>
         {saving && (
           <span className="w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
@@ -1223,7 +1245,7 @@ function CalledSection({
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
         {/* "Attempts" was text-base against a text-sm section title, so the
             column label outranked the section it sat in. Both are text-xs now,
             with only the title carrying the uppercase treatment. ml-auto was
@@ -1308,7 +1330,7 @@ function AuditHistorySection({ entityId, onCount }: { entityId: string; onCount?
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">History</p>
       </div>
       {entries.length === 0 && (
@@ -1415,7 +1437,7 @@ function TasksSection({ customer, onCount }: { customer: CustomerItem; onCount?:
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
         <p className="card-section-title">Tasks</p>
         <Link to="/todo" className="text-xs text-indigo-400 hover:text-indigo-300">View all →</Link>
       </div>
@@ -1573,7 +1595,7 @@ function SmsThreadSection({
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">Texts</p>
       </div>
 
@@ -1676,7 +1698,7 @@ function EmailThreadSection({
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">Email Thread</p>
       </div>
       {messages.length === 0 ? (
@@ -1778,7 +1800,7 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">Campaigns</p>
       </div>
       <div className="divide-y divide-gray-700/30">
@@ -1903,7 +1925,7 @@ function RelatedRecordsSection({
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">Related Records</p>
       </div>
 
@@ -1937,7 +1959,7 @@ function RelatedRecordsSection({
                 <Link
                   key={inv.id}
                   to={`/invoices/${inv.id}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
                 >
                   <span className="text-sm text-gray-300 truncate">{inv.invoiceNumber || 'Draft'}</span>
                   <span className="flex items-center gap-2 shrink-0">
@@ -1968,7 +1990,7 @@ function RelatedRecordsSection({
                 <Link
                   key={p.id}
                   to={`/proposals/${p.id}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
                 >
                   <span className="text-sm text-gray-300 truncate">{p.proposalNumber || 'Draft'}</span>
                   <span className="flex items-center gap-2 shrink-0">
@@ -1994,7 +2016,7 @@ function RelatedRecordsSection({
                 <Link
                   key={w.id}
                   to={`/warranties?${scope}`}
-                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                  className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
                 >
                   <span className="text-sm text-gray-300 truncate">{w.title || 'Untitled'}</span>
                   <span className="flex items-center gap-2 shrink-0">
@@ -2018,7 +2040,7 @@ function RelatedRecordsSection({
               <Link
                 key={sp.id}
                 to={`/service-plans?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{sp.title || 'Untitled'}</span>
                 <span className="flex items-center gap-2 shrink-0">
@@ -2041,7 +2063,7 @@ function RelatedRecordsSection({
               <Link
                 key={r.id}
                 to={`/service-requests?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{r.description || 'No description'}</span>
                 <span className="flex items-center gap-2 shrink-0">
@@ -2064,7 +2086,7 @@ function RelatedRecordsSection({
               <Link
                 key={t.id}
                 to={`/time-tracking?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{t.clockedInBy || 'Unknown'}</span>
                 <span className="flex items-center gap-2 shrink-0">
@@ -2085,7 +2107,7 @@ function RelatedRecordsSection({
               <Link
                 key={sr.id}
                 to={`/signing-requests?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{sr.document.templateName || 'Untitled document'}</span>
                 <span className="flex items-center gap-2 shrink-0">
@@ -2108,7 +2130,7 @@ function RelatedRecordsSection({
               <Link
                 key={po.id}
                 to={`/purchase-orders?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">{po.poNumber || 'Draft'}</span>
                 <span className="flex items-center gap-2 shrink-0">
@@ -2131,7 +2153,7 @@ function RelatedRecordsSection({
               <Link
                 key={r.id}
                 to={`/referrals?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">Referred: {r.referredName || 'Unknown'}</span>
                 {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
@@ -2141,7 +2163,7 @@ function RelatedRecordsSection({
               <Link
                 key={r.id}
                 to={`/referrals?${scope}`}
-                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-800/50 rounded-lg px-1.5 -mx-1.5 transition-colors"
+                className="flex items-center justify-between gap-2 py-1 hover:bg-gray-700/60 rounded-lg px-1.5 -mx-1.5 transition-colors"
               >
                 <span className="text-sm text-gray-300 truncate">Referred by: {r.referrerName || 'Unknown'}</span>
                 {r.referredAmount > 0 && <span className="text-sm text-gray-400 shrink-0">{fmtCurrency(r.referredAmount)}</span>}
@@ -2203,7 +2225,7 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <p className="card-section-title">Activity Log</p>
       </div>
 
@@ -2856,7 +2878,7 @@ function DocumentsSection({ customerId, onCount }: { customerId: string; onCount
 
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
         <p className="card-section-title">
           Files {docs.length > 0 && <span className="text-gray-600 font-normal normal-case">({docs.length})</span>}
         </p>
@@ -3074,7 +3096,7 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
 
   return (
     <div className="card">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 rounded-t-xl flex items-center justify-between">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 rounded-t-xl flex items-center justify-between">
         <p className="card-section-title">
           Sequences {activeEnrollments.length > 0 && (
             <span className="text-gray-600 font-normal normal-case">({activeEnrollments.length} active)</span>
@@ -3279,7 +3301,7 @@ function LoadingSkeleton() {
 function FieldGroupSkeleton({ rows }: { rows: number }) {
   return (
     <div className="card overflow-hidden">
-      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
+      <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
         <div className="h-4 bg-gray-700 rounded w-24" />
       </div>
       <div className="divide-y divide-gray-700/30">
