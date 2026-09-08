@@ -67,8 +67,9 @@ export default function MenuPage() {
   /**
    * Search across all 59 features.
    *
-   * The launcher had none, so reaching a feature meant knowing which of six
-   * categories someone had filed it under — and Tools alone holds 22 items.
+   * The launcher had none, so reaching a feature meant knowing which of the
+   * categories someone had filed it under — and Tools alone used to hold 22
+   * items before Integrations and the per-customer records were split out.
    * Matches the label and the group name, so "vendor" finds both Vendors and
    * Vendor Scorecards, and "crm" lists the whole category.
    */

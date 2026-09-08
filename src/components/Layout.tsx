@@ -16,6 +16,9 @@ import RemindersPanel from './RemindersPanel'
 
 import { type NavItem, NAV_GROUPS, ALL_ITEMS } from '../config/navigation'
 
+/** Bump the suffix whenever a group is added to or removed from NAV_GROUPS. */
+const NAV_GROUPS_KEY = 'thelight.nav.groups.v2'
+
 // ─── Main layout ──────────────────────────────────────────────────────────────
 
 const ROLE_BADGE: Record<string, { label: string; classes: string }> = {
@@ -121,10 +124,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return [...favItems, ...rest].slice(0, 4)
   }, [favorites, allItemsMap])
 
-  // Which groups are open (expanded)
+  // Which groups are open (expanded).
+  //
+  // The key is versioned because this stores open ids, not closed ones: a group
+  // added after someone's preference was saved isn't in their set, so it would
+  // render collapsed with no hint it exists. Bumping the suffix when the group
+  // list changes costs one reset of which sections are folded.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem('thelight.nav.groups')
+      const raw = localStorage.getItem(NAV_GROUPS_KEY)
       if (raw) return new Set<string>(JSON.parse(raw))
     } catch { /* ignore */ }
     return new Set(NAV_GROUPS.map(g => g.id))
@@ -138,7 +146,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem('thelight.nav.groups', JSON.stringify([...openGroups]))
+      localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify([...openGroups]))
     } catch { /* ignore */ }
   }, [openGroups])
 
