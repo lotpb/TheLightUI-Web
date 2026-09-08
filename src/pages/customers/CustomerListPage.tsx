@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
 import { useLocation, useSearchParams, Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { subscribeToCustomers, importCustomersFromJSON, bulkDeactivate, bulkAssignSalesman, bulkAssignSalesmanUser, setPaymentStatus, setEmployeeStatus, REALTIME_LIMIT } from '../../services/customerService'
@@ -25,40 +25,8 @@ import ConfirmModal from '../../components/ConfirmModal'
 import { Icon, ICONS } from '../../components/Icon'
 import { subscribeToSavedViews, createSavedView, deleteSavedView } from '../../services/savedViewService'
 import type { SavedView } from '../../models/savedView'
-import { useMediaQuery } from '../../hooks/useMediaQuery'
-
-/** Lazy so the record-detail chunk is only fetched once a pane is opened —
- *  most visits to a list never open one. */
-const CustomerDetailPane = lazy(() => import('./CustomerDetailPage'))
 
 const PAGE_SIZE = 50
-
-/**
- * Viewport width at which a record opens in a pane beside the list instead of
- * replacing it. Below this the list keeps its full width and a row navigates to
- * /records/:id as before.
- *
- * The budget, with the nav rail expanded (w-56 = 224px) and the page's px-4:
- *
- *   viewport   content   list   pane
- *     1152       896      320    560
- *     1280      1024      320    688
- *     1536      1280      384    880
- *
- * 1152 is the floor. It was 1280, which shut out a lot of laptops for no good
- * reason — but 1024 is genuinely too small: it leaves the pane 368px, and the
- * record's identity card, four-across action grid and eight tabs all need more
- * than that. Narrowing the list column to 320px below 2xl is what buys the
- * extra 128px of headroom. Collapsing the rail (w-14) adds another 168px.
- */
-const SPLIT_MIN_WIDTH = 1152
-
-/**
- * List column width in the split view. 320px fits a row's name, status pill and
- * two tags before truncation bites; it widens to 384px at 2xl, where the pane
- * no longer needs the space.
- */
-const SPLIT_LIST_WIDTH = 'w-80 2xl:w-96'
 
 type SortField = 'name' | 'date' | 'location' | 'active' | 'score' | 'rating'
 type SortDir   = 'asc' | 'desc'
@@ -192,31 +160,22 @@ function QuickFilterButton({ label, active, onClick }: { label: ReactNode; activ
  * filter. It's a disclosure there, collapsed by default, and always open at lg
  * where it has its own 208px column beside the list.
  */
-function QuickFilterPanel({ open, onToggle, activeCount, stacked = false, children }: {
+function QuickFilterPanel({ open, onToggle, activeCount, children }: {
   open: boolean
   onToggle: () => void
   activeCount: number
-  /**
-   * Forces the narrow presentation — disclosure above the list — at every
-   * width. Set by the split view, where the panel sits inside a ~384px column,
-   * so the `lg:` side-by-side column can't apply however wide the window is.
-   * Both variants are spelled out because Tailwind needs literal class names.
-   */
-  stacked?: boolean
   children: ReactNode
 }) {
   return (
-    <div className={stacked
-      ? 'w-full shrink-0 card p-3 order-first'
-      : 'w-full lg:w-52 shrink-0 card p-3 order-first lg:order-none'}>
+    <div className="w-full lg:w-52 shrink-0 card p-3 order-first lg:order-none">
       {/* Reports how many of its own filters are on, so collapsing it can
           never hide an active filter without saying so. */}
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className={`${stacked ? '' : 'lg:hidden '}w-full flex items-center gap-2 px-1 py-1 rounded text-xs font-bold uppercase tracking-wider text-gray-200
-                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500`}
+        className="lg:hidden w-full flex items-center gap-2 px-1 py-1 rounded text-xs font-bold uppercase tracking-wider text-gray-200
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
       >
         <Icon d={ICONS.funnel} className="w-3.5 h-3.5 shrink-0" />
         Common Filters
@@ -224,12 +183,8 @@ function QuickFilterPanel({ open, onToggle, activeCount, stacked = false, childr
         <span className="flex-1" />
         <Icon d={ICONS.chevronDown} className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {!stacked && (
-        <p className="hidden lg:block text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
-      )}
-      <div className={stacked
-        ? `${open ? 'block' : 'hidden'} space-y-1 mt-2`
-        : `${open ? 'block' : 'hidden'} lg:block space-y-1 mt-2 lg:mt-0`}>
+      <p className="hidden lg:block text-xs font-bold uppercase tracking-wider text-gray-200 mb-2 px-1">Common Filters</p>
+      <div className={`${open ? 'block' : 'hidden'} lg:block space-y-1 mt-2 lg:mt-0`}>
         {children}
       </div>
     </div>
@@ -321,43 +276,8 @@ export default function CustomerListPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [hitRecordCap, setHitRecordCap] = useState(false)
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
-
-  // ── Split view ──────────────────────────────────────────────────────────
-  //
-  // Working a call list used to mean list → record → Back → list: a full
-  // navigation each way that dropped scroll position and re-ran the query.
-  // Wide enough, the record opens in a pane beside the list and the list stays
-  // exactly where it was.
-  //
-  // The selection lives in the URL so a reload keeps it, but as `?selected=` on
-  // the list route — `/records/:id` stays the canonical single-record address,
-  // so every link from another module still lands on the full page and Cmd-click
-  // on a row still opens it there.
-  const splitAvailable = useMediaQuery(`(min-width: ${SPLIT_MIN_WIDTH}px)`)
-  const selectedId = searchParams.get('selected') ?? ''
-  const splitOpen  = splitAvailable && selectedId !== ''
-
-  // replace, not push: clicking through twenty records shouldn't bury the page
-  // you arrived from under twenty history entries. Back leaves the list, the
-  // pane's own Close button clears the selection.
-  //
-  // Deliberately no Escape shortcut. ConfirmModal — which the pane raises for
-  // Delete and Deactivate — listens for Escape on `document` and doesn't stop
-  // propagation, so a second document listener here would fire alongside it and
-  // dismiss the record out from under its own confirmation dialog. Wiring that
-  // up properly means giving the app real modal focus management, which is a
-  // bigger change than this one.
-  const setSelected = useCallback((id: string) => {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev)
-      if (id) next.set('selected', id); else next.delete('selected')
-      return next
-    }, { replace: true })
-  }, [setSearchParams])
-
-  const closePane = useCallback(() => setSelected(''), [setSelected])
   const debouncedSearch = useDebounce(search)
   const [showInactive, setShowInactive] = useState(
     () => localStorage.getItem('thelight.showInactive') === 'true'
@@ -1100,13 +1020,7 @@ export default function CustomerListPage() {
   }
 
   return (
-    /* The width cap lifts while a pane is open — the list keeps its own column
-       and everything gained goes to the record beside it. */
-    <div className={
-      splitOpen                ? 'max-w-[100rem] mx-auto px-4 py-6'
-      : hasQuickFilterSidebar  ? 'max-w-5xl mx-auto px-4 py-6'
-      :                          'max-w-3xl mx-auto px-4 py-6'
-    }>
+    <div className={hasQuickFilterSidebar ? 'max-w-5xl mx-auto px-4 py-6' : 'max-w-3xl mx-auto px-4 py-6'}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
         <h1 className="text-2xl font-bold text-white">{CATEGORY_LABELS[cat]}</h1>
@@ -1683,24 +1597,11 @@ export default function CustomerListPage() {
         </div>
       )}
 
-      {/* Split row: list column on the left, open record on the right. Both
-          wrappers collapse to nothing when no pane is open, so the untouched
-          layout below is exactly what it was. */}
-      <div className={splitOpen ? 'flex gap-4 items-start' : ''}>
-      <div className={splitOpen ? `${SPLIT_LIST_WIDTH} shrink-0` : ''}>
-
       {/* Side-by-side only at the width this layout was designed for. The page
           caps at max-w-5xl (1024px), so below lg the 208px sidebar was just
           eating the record list. Stacked, the filters sit above the list
-          (order-first) rather than below 50 rows of records.
-
-          A pane forces the stacked form at every width: the list is down to a
-          384px column, which the 208px filter sidebar would halve. */}
-      <div className={
-        !hasQuickFilterSidebar ? ''
-        : splitOpen            ? 'flex flex-col gap-4'
-        :                        'flex flex-col lg:flex-row gap-4 lg:items-start'
-      }>
+          (order-first) rather than below 50 rows of records. */}
+      <div className={hasQuickFilterSidebar ? 'flex flex-col lg:flex-row gap-4 lg:items-start' : ''}>
       <div className={hasQuickFilterSidebar ? 'flex-1 min-w-0' : ''}>
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
         {/* Header strip. No longer gated on canBulkAction — it carries the
@@ -1767,8 +1668,6 @@ export default function CustomerListPage() {
               customer={c}
               selected={selectedIds.has(c.id)}
               onToggle={() => toggleOne(c.id)}
-              open={splitAvailable ? () => setSelected(c.id) : null}
-              active={c.id === selectedId}
               showCheckbox={perms.canBulkAction}
               health={healthReady ? healthFor(c) : null}
               healthLoading={healthLoading}
@@ -1850,7 +1749,6 @@ export default function CustomerListPage() {
           open={quickFiltersOpen}
           onToggle={() => setQuickFiltersOpen(v => !v)}
           activeCount={quickFilterCount}
-          stacked={splitOpen}
         >
           <QuickFilterButton
             label="Active Employees"
@@ -1900,7 +1798,6 @@ export default function CustomerListPage() {
           open={quickFiltersOpen}
           onToggle={() => setQuickFiltersOpen(v => !v)}
           activeCount={quickFilterCount}
-          stacked={splitOpen}
         >
 
           {/* Titled. The first six buttons were one undifferentiated stack of
@@ -1990,7 +1887,6 @@ export default function CustomerListPage() {
           open={quickFiltersOpen}
           onToggle={() => setQuickFiltersOpen(v => !v)}
           activeCount={quickFilterCount}
-          stacked={splitOpen}
         >
 
           <QuickFilterButton
@@ -2047,7 +1943,6 @@ export default function CustomerListPage() {
           open={quickFiltersOpen}
           onToggle={() => setQuickFiltersOpen(v => !v)}
           activeCount={quickFilterCount}
-          stacked={splitOpen}
         >
 
           <QuickFilterButton
@@ -2109,20 +2004,6 @@ export default function CustomerListPage() {
         </QuickFilterPanel>
       )}
       </div>
-      </div>
-
-      {/* Record pane. Sticky and independently scrollable so a long record
-          doesn't drag the list up with it, and keyed on the id so switching
-          rows remounts rather than leaving the previous record's tab state and
-          subscriptions in place. */}
-      {splitOpen && (
-        <div className="flex-1 min-w-0 sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto">
-          <Suspense fallback={<div className="card h-64 animate-pulse" />}>
-            <CustomerDetailPane key={selectedId} id={selectedId} embedded onClose={closePane} />
-          </Suspense>
-        </div>
-      )}
-      </div>
 
       {csvImportOpen && (
         <CSVImportModal
@@ -2182,8 +2063,6 @@ function CustomerRow({
   customer: c,
   selected,
   onToggle,
-  open = null,
-  active = false,
   showCheckbox = true,
   health = null,
   healthLoading = false,
@@ -2193,13 +2072,6 @@ function CustomerRow({
   customer: CustomerItem
   selected: boolean
   onToggle: () => void
-  /**
-   * Opens the record in the list's pane instead of navigating. Null below the
-   * split breakpoint, where the row's link is followed normally.
-   */
-  open?: (() => void) | null
-  /** This is the record currently shown in the pane. */
-  active?: boolean
   showCheckbox?: boolean
   /** True only while invoices/plans are genuinely in flight — see the page. */
   healthLoading?: boolean
@@ -2258,15 +2130,7 @@ function CustomerRow({
   ].filter(Boolean)
 
   return (
-    /* Three states, and they have to stay distinguishable: `selected` is the
-       bulk-action checkbox (indigo tint), `active` is the record open in the
-       pane (ring, so it doesn't read as checked). ring-inset avoids the 2px
-       content shift a left border would cause on every row it lands on. */
-    <div className={`group flex items-center gap-3 px-4 py-3 transition-colors ${
-      selected ? 'bg-indigo-600/10'
-      : active  ? 'bg-gray-700/40 ring-1 ring-inset ring-indigo-500/40'
-      :           'hover:bg-gray-700/30'
-    }`}>
+    <div className={`group flex items-center gap-3 px-4 py-3 transition-colors ${selected ? 'bg-indigo-600/10' : 'hover:bg-gray-700/30'}`}>
       {/* Avatar doubles as the selection toggle */}
       {showCheckbox ? (
         <button
@@ -2310,17 +2174,6 @@ function CustomerRow({
       )}
       <Link
         to={`/records/${c.id}`}
-        onClick={e => {
-          // In the split view a plain click selects in place. Modifier clicks
-          // fall through to the href, so Cmd-click still opens the record
-          // full-page in a new tab — which is why this stays an anchor with a
-          // real destination rather than becoming a button.
-          if (!open) return
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-          e.preventDefault()
-          open()
-        }}
-        aria-current={active ? 'true' : undefined}
         className="flex items-center gap-3 flex-1 min-w-0"
       >
         <div className="min-w-0 flex-1">

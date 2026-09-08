@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getCustomer, deleteCustomer, deactivateCustomer, updateCustomer, setFollowUpDate, setContactAttempts } from '../../services/customerService'
+import { getCustomer, deleteCustomer, deactivateCustomer, updateCustomer, setFollowUpDate, setContactAttempts, setCalledFlag } from '../../services/customerService'
 import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerItem, type CustomerCategory } from '../../models/customer'
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
@@ -187,32 +187,14 @@ function DetailTabBar({
 }
 
 /**
- * The record detail. Mounted two ways:
- *
- *  - as the `/records/:id` route, taking its id from the URL — the canonical,
- *    shareable address for a record, and where every link from another module
- *    still lands;
- *  - embedded in the record list's split pane, taking `id` as a prop.
- *
- * Embedded, it drops the page chrome the pane already provides (outer width
- * container, Back button) and stacks its own two-column layout, since the pane
- * is itself a column.
+ * The record detail, mounted as the `/records/:id` route — the canonical,
+ * shareable address for a record, and where every link from another module
+ * lands.
  */
-export default function CustomerDetailPage({
-  id: idProp,
-  embedded = false,
-  onClose,
-}: {
-  id?: string
-  embedded?: boolean
-  onClose?: () => void
-} = {}) {
+export default function CustomerDetailPage() {
   const params = useParams<{ id: string }>()
-  const id = idProp ?? params.id
-  const navBack  = useNavBack('/records')
-  // Embedded there's nothing to go back to — closing the pane is the exit, and
-  // it's also where a delete has to leave you.
-  const dismiss = embedded && onClose ? onClose : navBack
+  const id = params.id
+  const dismiss = useNavBack('/records')
   const toast = useToast()
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
   const [loading, setLoading] = useState(true)
@@ -322,14 +304,14 @@ export default function CustomerDetailPage({
 
   const labels = usePickerStore(s => s.labels)
 
-  if (loading) return <LoadingSkeleton embedded={embedded} />
+  if (loading) return <LoadingSkeleton />
 
   if (!customer) {
     return (
-      <div className={embedded ? 'card px-4 py-16 text-center' : 'max-w-2xl mx-auto px-4 py-16 text-center'}>
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <p className="text-gray-400">Record not found.</p>
         <button onClick={dismiss} className="mt-4 text-indigo-400 hover:text-indigo-300">
-          {embedded ? 'Close' : '← Go back'}
+          ← Go back
         </button>
       </div>
     )
@@ -345,18 +327,13 @@ export default function CustomerDetailPage({
   const hasCompanyName = customer.companyName.trim() !== ''
 
   return (
-    <div className={embedded ? '' : 'max-w-6xl mx-auto px-4 py-6'}>
-      {/* Back + actions. Embedded, the left slot dismisses the pane instead of
-          unwinding history, and a full-page link is offered because the pane
-          can't be bookmarked or shared. */}
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      {/* Back + actions */}
       <div className="flex items-start justify-between mb-6 gap-2 flex-wrap">
         <button onClick={dismiss} className="text-indigo-400 hover:text-indigo-300 text-sm mt-1">
-          {embedded ? '✕ Close' : '← Back'}
+          ← Back
         </button>
         <div className="flex gap-2 flex-wrap justify-end">
-          {embedded && (
-            <Link to={`/records/${id}`} className="btn-secondary text-sm px-3 py-1.5">Full page</Link>
-          )}
           <Link to={`/records/${id}/edit`} className="btn-secondary text-sm px-3 py-1.5">Edit</Link>
           <button onClick={() => setConfirmOpen(true)} disabled={deleting} className="btn-danger inline-flex items-center gap-1.5 text-sm px-3 py-1.5">
             {/* The label stays. Swapping it for '…' collapsed the button to a
@@ -368,15 +345,9 @@ export default function CustomerDetailPage({
         </div>
       </div>
 
-      {/* Embedded, this stays one column at every width: the pane is already
-          the right-hand column of the record list, and a 340px sidebar inside
-          it would be a third. Sticky is dropped for the same reason — the pane
-          itself is what scrolls. */}
-      <div className={embedded
-        ? 'grid grid-cols-1 gap-6 items-start'
-        : 'grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start'}>
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
         {/* ── Sidebar: identity, status, actions, tags ─────────────────── */}
-        <aside className={embedded ? 'space-y-4' : 'space-y-4 lg:sticky lg:top-6'}>
+        <aside className="space-y-4 lg:sticky lg:top-6">
           {/* One identity card, left-aligned, name first.
               The name used to live in a card of its own — a card doing the job
               of a font size — above a second card that declared
@@ -563,7 +534,7 @@ export default function CustomerDetailPage({
 
           <CalledSection
             customer={customer}
-            onUpdateAttempts={attempts => setCustomer({ ...customer, contactAttempts: attempts })}
+            onUpdate={patch => setCustomer({ ...customer, ...patch })}
           />
         </aside>
 
@@ -1181,12 +1152,16 @@ function FollowUpSection({
 
 function CalledSection({
   customer,
-  onUpdateAttempts,
+  onUpdate,
 }: {
   customer: CustomerItem
-  onUpdateAttempts: (attempts: number) => void
+  onUpdate: (patch: Partial<CustomerItem>) => void
 }) {
-  const called = (customer.category.toLowerCase() === 'vendor' ? customer.salesman : customer.callback).toLowerCase() === 'yes'
+  // Vendors keep the flag in `salesman`, every other category in `callback`
+  // (see vendorFields in models/customer), so the write target depends on the
+  // record's category as much as the read does.
+  const calledField = customer.category.toLowerCase() === 'vendor' ? 'salesman' : 'callback'
+  const called = customer[calledField].toLowerCase() === 'yes'
   const [saving, setSaving] = useState(false)
   const toast = useToast()
 
@@ -1196,13 +1171,55 @@ function CalledSection({
     setSaving(true)
     try {
       await setContactAttempts(customer.id, attempts)
-      onUpdateAttempts(attempts)
+      onUpdate({ contactAttempts: attempts })
     } catch {
       toast('Could not save attempts', 'error')
     } finally {
       setSaving(false)
     }
   }
+
+  // The flag was read-only here, so marking a record called meant a trip
+  // through the edit form. Toggling carries the counter with it, by the same
+  // two rules the reconciliation below applies on load: Yes means at least one
+  // attempt, No means none.
+  async function handleToggleCalled() {
+    const next = !called
+    const attempts = next ? Math.max(1, customer.contactAttempts) : 0
+    setSaving(true)
+    try {
+      await setCalledFlag(customer.id, customer.category, next)
+      if (attempts !== customer.contactAttempts) {
+        await setContactAttempts(customer.id, attempts)
+      }
+      const value = next ? 'Yes' : 'No'
+      onUpdate(calledField === 'salesman'
+        ? { salesman: value, contactAttempts: attempts }
+        : { callback: value, contactAttempts: attempts })
+    } catch {
+      toast('Could not save called', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // The counter has to agree with the flag: Called = Yes means at least one
+  // attempt was made, Called = No means none were. The flag gets set from the
+  // edit form, the record list's bulk action and the callback queue, none of
+  // which touch the counter, so both directions are reconciled here — 0 → 1
+  // when called, anything → 0 when not.
+  //
+  // Keyed on the record id so it runs once per record, off the values as
+  // loaded. Re-running on every change would mean a failed save re-fires the
+  // effect forever, and the − button could never take a called record back
+  // down to 0.
+  const reconciledId = useRef<string | null>(null)
+  useEffect(() => {
+    if (reconciledId.current === customer.id) return
+    reconciledId.current = customer.id
+    if (called && customer.contactAttempts === 0) handleChange(1)
+    else if (!called && customer.contactAttempts !== 0) handleChange(0)
+  }, [customer.id, called, customer.contactAttempts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="card overflow-hidden">
@@ -1215,39 +1232,58 @@ function CalledSection({
         <span className="text-xs font-medium text-gray-400">Attempts</span>
       </div>
       <div className="px-4 py-3 flex items-center justify-between">
-        <span className="flex items-center gap-1.5">
+        {/* The one control for the flag. The pill in the header card stays a
+            readout, the same split the Active pill and its action tile use. */}
+        <button
+          type="button"
+          onClick={handleToggleCalled}
+          disabled={saving}
+          aria-pressed={called}
+          aria-label={called ? 'Called — clear' : 'Not called — mark as called'}
+          className="flex items-center gap-1.5 -mx-1.5 px-1.5 py-1 rounded-md hover:bg-gray-700/50
+                     disabled:opacity-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
           <svg className={`w-4 h-4 fill-current shrink-0 ${called ? 'text-green-400' : 'text-gray-400'}`} viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
           <span className={called ? 'text-white' : 'text-gray-400'}>{called ? 'Yes' : 'No'}</span>
-        </span>
+        </button>
         <div className="flex items-center gap-2">
           {saving && (
             <span className="w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
           )}
           {/* w-6 h-6 = 24px, the WCAG 2.5.8 minimum; these were 20px. The − and
               + glyphs are Icon SVGs so they inherit the button's colour and
-              disabled state instead of being typeset text. */}
+              disabled state instead of being typeset text.
+
+              Both are hidden at 0 attempts, which under the reconciliation
+              above only happens on a Called = No record — there the counter is
+              pinned at 0, so a click would only save a value the next load
+              undoes. The count itself stays visible either way. */}
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => handleChange(customer.contactAttempts - 1)}
-              disabled={saving || customer.contactAttempts <= 0}
-              aria-label="One fewer contact attempt"
-              className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
-                         disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-            >
-              <Icon d={ICONS.minus} className="w-3.5 h-3.5" />
-            </button>
+            {customer.contactAttempts > 0 && (
+              <button
+                type="button"
+                onClick={() => handleChange(customer.contactAttempts - 1)}
+                disabled={saving}
+                aria-label="One fewer contact attempt"
+                className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
+                           disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.minus} className="w-3.5 h-3.5" />
+              </button>
+            )}
             <span className="text-gray-300 font-medium w-4 text-center tabular-nums">{customer.contactAttempts}</span>
-            <button
-              type="button"
-              onClick={() => handleChange(customer.contactAttempts + 1)}
-              disabled={saving}
-              aria-label="One more contact attempt"
-              className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
-                         disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-            >
-              <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
-            </button>
+            {customer.contactAttempts > 0 && (
+              <button
+                type="button"
+                onClick={() => handleChange(customer.contactAttempts + 1)}
+                disabled={saving}
+                aria-label="One more contact attempt"
+                className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
+                           disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -3179,9 +3215,9 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
  * grid, every card moved, and the most prominent thing in the placeholder turned
  * out not to exist.
  */
-function LoadingSkeleton({ embedded = false }: { embedded?: boolean }) {
+function LoadingSkeleton() {
   return (
-    <div className={embedded ? 'animate-pulse' : 'max-w-6xl mx-auto px-4 py-6 animate-pulse'}>
+    <div className="max-w-6xl mx-auto px-4 py-6 animate-pulse">
       {/* Back + actions */}
       <div className="flex items-start justify-between mb-6 gap-2">
         <div className="h-4 bg-gray-700 rounded w-14 mt-1" />
@@ -3191,9 +3227,7 @@ function LoadingSkeleton({ embedded = false }: { embedded?: boolean }) {
         </div>
       </div>
 
-      <div className={embedded
-        ? 'grid grid-cols-1 gap-6 items-start'
-        : 'grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start'}>
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
         <aside className="space-y-4">
           {/* Name */}
           <div className="card px-4 py-2 flex justify-center">
