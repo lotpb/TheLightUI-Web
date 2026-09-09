@@ -7,6 +7,7 @@ import {
 } from '../../services/chatService'
 import { initials, displayName, type ChatMessage, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
+import { useChatStore } from '../../stores/chatStore'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
 import { usePrefStore } from '../../stores/prefStore'
 
@@ -31,6 +32,19 @@ export default function ChatLogPage() {
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /**
+   * Opening a conversation is what marks it read.
+   *
+   * Read state used to be one global timestamp stamped when the *inbox* opened,
+   * so glancing at the list cleared the nav badge while every row kept its dot
+   * for ever. Re-run when new messages land too, so a conversation you're
+   * sitting in doesn't start accruing an unread count behind the open window.
+   */
+  const markConversationRead = useChatStore(s => s.markConversationRead)
+  useEffect(() => {
+    if (contactId) markConversationRead(contactId)
+  }, [contactId, messages.length, markConversationRead])
 
   // Fetch both user profiles once
   useEffect(() => {

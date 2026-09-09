@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { subscribeToInbox, fetchChatUser } from '../../services/chatService'
+import { fetchChatUser } from '../../services/chatService'
+import { Icon, ICONS } from '../../components/Icon'
 import { username, relativeTime, initials, displayName, type RecentMessage, type ChatUser } from '../../models/chat'
 import { useAuthStore } from '../../stores/authStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -12,50 +13,22 @@ import { usePrefStore } from '../../stores/prefStore'
 
 export default function ChatInboxPage() {
   const user = useAuthStore(s => s.user)
-  const markRead = useChatStore(s => s.markRead)
   usePageTitle('Messages')
-  const [messages, setMessages] = useState<RecentMessage[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Straight from the store, which Layout already keeps watching for the nav
+  // badge. This page used to open a second subscription to the same collection
+  // and keep its own copy of the list — double the reads, and two maps that
+  // could disagree about what the inbox contained.
+  const messages = useChatStore(s => s.messages)
+  const loading = useChatStore(s => s.loading)
+  const error = useChatStore(s => s.error)
+  const isUnread = useChatStore(s => s.isUnread)
+  const unreadCount = useChatStore(s => s.unreadCount)
   const [contactProfiles, setContactProfiles] = useState<Map<string, ChatUser>>(new Map())
   const [query, setQuery] = useState('')
   const debouncedQuery = useDebounce(query)
   const searchInputRef = useRef<HTMLInputElement>(null)
   useSearchShortcut(searchInputRef, () => setQuery(''))
-  // track seen ids to upsert like iOS does
-  const mapRef = useRef(new Map<string, RecentMessage>())
   const fetchedIds = useRef(new Set<string>())
-
-  // Clear the unread badge whenever the inbox is open
-  useEffect(() => { markRead() }, [])
-
-  useEffect(() => {
-    if (!user) return
-    setLoading(true)
-
-    const unsub = subscribeToInbox(
-      user.uid,
-      changed => {
-        for (const msg of changed) {
-          mapRef.current.set(msg.id, msg)
-        }
-        // Sort newest first
-        const sorted = Array.from(mapRef.current.values())
-          .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-        setMessages(sorted)
-        setLoading(false)
-      },
-      err => { setError(err.message); setLoading(false) },
-    )
-
-    return () => {
-      unsub()
-      mapRef.current.clear()
-      fetchedIds.current.clear()
-      setMessages([])
-      setContactProfiles(new Map())
-    }
-  }, [user])
 
   // Fetch profiles only for contacts not yet loaded — merges into existing cache
   useEffect(() => {
@@ -75,6 +48,16 @@ export default function ChatInboxPage() {
     })
   }, [messages, user])
 
+  /**
+   * Matches the message text and the email as well as the display name.
+   *
+   * It only tested the display name, which has two problems. The placeholder
+   * says "Search conversations", so searching for something you remember saying
+   * found nothing. And the name is asynchronous — until fetchChatUser resolves
+   * a contact it's the email's local part, so "John" matched nothing and then
+   * suddenly matched, with no explanation. Including the email means results
+   * don't depend on what has finished loading.
+   */
   const q = debouncedQuery.trim().toLowerCase()
   const filtered = q
     ? messages.filter(msg => {
@@ -82,6 +65,8 @@ export default function ChatInboxPage() {
         const profile = contactProfiles.get(contactId)
         const name = profile ? displayName(profile) : username(msg.email)
         return name.toLowerCase().includes(q)
+          || msg.email.toLowerCase().includes(q)
+          || msg.text.toLowerCase().includes(q)
       })
     : messages
 
@@ -90,9 +75,12 @@ export default function ChatInboxPage() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold text-white">Messages</h1>
-          {!loading && messages.length > 0 && (
+          {/* The unread count, which is what an indigo pill beside a title
+              promises. It showed messages.length — how many conversations you
+              have — in the exact visual language of an unread counter. */}
+          {!loading && unreadCount > 0 && (
             <span className="bg-indigo-600/30 text-indigo-300 text-xs font-semibold px-2 py-0.5 rounded-full border border-indigo-500/30">
-              {messages.length}
+              {unreadCount} unread
             </span>
           )}
         </div>
@@ -102,28 +90,34 @@ export default function ChatInboxPage() {
       </div>
 
       {/* Search bar */}
+      {/* Shared icons rather than two hand-inlined SVGs, and gray-400 rather
+          than gray-500 (3.04:1 on a card in dark mode, which is the default). */}
       <div className="relative mb-4">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-        </svg>
+        <label htmlFor="chat-search" className="sr-only">Search conversations</label>
+        <Icon
+          d={ICONS.search}
+          className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"
+        />
         <input
+          id="chat-search"
           ref={searchInputRef}
           type="search"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search conversations…"
-          className="input-field pl-9 py-2 text-sm"
+          placeholder="Search names and messages…"
+          className="input-field pl-9 pr-10 py-2 text-sm"
         />
+        {/* p-1.5 takes the target from the bare 16px glyph to 28px, over the
+            24px floor — it's the only way to dismiss a query. */}
         {query && (
           <button
             type="button"
             onClick={() => setQuery('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-600/50 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             aria-label="Clear search"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+            <Icon d={ICONS.close} className="w-4 h-4" />
           </button>
         )}
       </div>
@@ -139,7 +133,8 @@ export default function ChatInboxPage() {
           Array.from({ length: 4 }).map((_, i) => <InboxSkeleton key={i} />)
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-3xl mb-3">💬</p>
+            {/* Drawn, not 💬 — emoji paint their own bitmap and ignore `color`. */}
+            <Icon d={ICONS.chat} className="w-8 h-8 mx-auto mb-3 text-gray-400" />
             {q ? (
               <p className="text-gray-400">No conversations match &ldquo;{query}&rdquo;</p>
             ) : (
@@ -159,6 +154,7 @@ export default function ChatInboxPage() {
               message={msg}
               currentUserId={user?.uid ?? ''}
               contactProfile={contactProfiles.get(contactId)}
+              unread={isUnread(msg)}
             />
           })
         )}
@@ -167,7 +163,18 @@ export default function ChatInboxPage() {
   )
 }
 
-function InboxRow({ message: m, currentUserId, contactProfile }: { message: RecentMessage; currentUserId: string; contactProfile?: ChatUser }) {
+function InboxRow({ message: m, currentUserId, contactProfile, unread }: {
+  message: RecentMessage
+  currentUserId: string
+  contactProfile?: ChatUser
+  /**
+   * Genuinely unread — from them, and newer than the last time you opened this
+   * conversation. The bold name and the dot keyed off `!isFromMe` before, which
+   * only means "they spoke last": reading a conversation never cleared it, and
+   * replying was the only thing that did.
+   */
+  unread: boolean
+}) {
   // The contact is the other person (not us)
   const contactId = currentUserId === m.fromId ? m.toId : m.fromId
   const contactEmail = m.email
@@ -198,15 +205,24 @@ function InboxRow({ message: m, currentUserId, contactProfile }: { message: Rece
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className={`truncate ${!isFromMe ? 'font-bold text-white' : 'font-semibold text-gray-100'}`}>{name}</span>
+          <span className={`truncate ${unread ? 'font-bold text-white' : 'font-semibold text-gray-100'}`}>{name}</span>
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-xs text-gray-500">{relativeTime(m.timestamp)}</span>
-            {!isFromMe && <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0" />}
+            {/* gray-400: gray-500 is 3.04:1 on a card in dark mode, and this is
+                on every row. */}
+            <span className="text-xs text-gray-400">{relativeTime(m.timestamp)}</span>
+            {unread && <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0" aria-label="Unread" />}
           </div>
         </div>
-        <p className={`text-sm truncate mt-0.5 ${!isFromMe ? 'text-gray-200' : 'text-gray-400'}`}>
-          {isFromMe && <span className="text-gray-500">You: </span>}
-          {m.text === 'Photo' ? '📷 Photo' : m.text}
+        <p className={`text-sm truncate mt-0.5 ${unread ? 'text-gray-200' : 'text-gray-400'}`}>
+          {isFromMe && <span className="text-gray-400">You: </span>}
+          {/* A drawn icon rather than 📷, which ignores `color` and sat at a
+              different weight from everything around it. */}
+          {m.text === 'Photo' ? (
+            <span className="inline-flex items-center gap-1 align-middle">
+              <Icon d={ICONS.photo} className="w-3.5 h-3.5 shrink-0" />
+              Photo
+            </span>
+          ) : m.text}
         </p>
       </div>
     </Link>

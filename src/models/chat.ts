@@ -35,6 +35,14 @@ export interface RecentMessage {
 
 // -- Parsers --
 
+/**
+ * Falls back to "now", which is right for the case that actually produces it:
+ * a message you just sent, echoed locally before serverTimestamp() resolves.
+ *
+ * It does mean a genuinely malformed document pins itself to the top of the
+ * inbox labelled "just now" — the inbox sorts on this. Worth knowing when a
+ * conversation appears at the top for no reason.
+ */
 function ts(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
   return new Date()
@@ -91,12 +99,26 @@ export function username(email: string): string {
   return email.split('@')[0] ?? email
 }
 
+/**
+ * `just now` · `28m ago` · `12h ago` · `3d ago` · `Mar 5` · `Mar 5, 2024`
+ *
+ * The day branch had no upper bound, so a conversation from two years back read
+ * "730d ago" — a number nobody converts to a date in their head. Relative time
+ * stops being useful about a week out; past that an actual date is both shorter
+ * and readable, and the year appears only when it isn't the current one.
+ */
 export function relativeTime(date: Date): string {
   const diff = Math.max(0, Date.now() - date.getTime()) / 1000
   if (diff < 60) return 'just now'
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
+  const now = new Date()
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  })
 }
 
 export function initials(email: string): string {
