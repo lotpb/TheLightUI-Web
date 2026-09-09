@@ -2,33 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import PartialDataBanner from '../../components/PartialDataBanner'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   AreaChart, Area,
 } from 'recharts'
 import { subscribeToCustomers } from '../../services/customerService'
 import type { CustomerItem } from '../../models/customer'
+import { useChartTheme } from '../../hooks/useChartTheme'
 
 type Category = 'Customer' | 'Lead' | 'Vendor' | 'Employee'
 
 const CATEGORIES: Category[] = ['Customer', 'Lead', 'Vendor', 'Employee']
-
-const COLORS = [
-  { from: '#818cf8', to: '#4338ca' },
-  { from: '#a78bfa', to: '#6d28d9' },
-  { from: '#22d3ee', to: '#0e7490' },
-  { from: '#34d399', to: '#047857' },
-  { from: '#fbbf24', to: '#b45309' },
-  { from: '#f87171', to: '#b91c1c' },
-  { from: '#f472b6', to: '#be185d' },
-  { from: '#a3e635', to: '#4d7c0f' },
-]
-
-const TOOLTIP_STYLE = {
-  contentStyle: { backgroundColor: '#111827', border: '1px solid #374151', borderRadius: 10, boxShadow: '0 10px 25px rgba(0,0,0,0.4)' },
-  labelStyle: { color: '#f3f4f6', fontWeight: 600 },
-  itemStyle: { color: '#e5e7eb' },
-  cursor: false as const,
-}
 
 function formatCurrency(n: number) {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -106,8 +89,24 @@ function IconPrint() {
 
 // ── Chart components ──────────────────────────────────────────────────────────
 
+/**
+ * One flat colour for every bar in the chart.
+ *
+ * Each bar used to get its own gradient by index — ten bars, ten colours, for
+ * data whose only variable is length. That advertises a dimension that isn't
+ * there, and with eight gradients feeding up to ten bars the ninth and tenth
+ * silently repeated the first two, implying a relationship as well. The accent
+ * now identifies the chart, not the row; `accentIndex` is what makes "By Job"
+ * and "By Product" tell each other apart.
+ *
+ * Flat rather than a gradient, too. A left-to-right ramp on a horizontal bar
+ * shades the end that encodes the value, which is the one part of a bar that
+ * should be reading at full strength.
+ */
 function HorizontalBarChart({ data, accentIndex = 0 }: { data: { name: string; value: number }[]; accentIndex?: number }) {
-  if (!data.length) return <p className="text-gray-500 text-sm py-4 text-center">No data</p>
+  const theme = useChartTheme()
+  if (!data.length) return <p className="text-gray-400 text-sm py-4 text-center">No data</p>
+  const accent = theme.accents[accentIndex % theme.accents.length]
   return (
     <div className="space-y-2.5">
       <ResponsiveContainer width="100%" height={Math.max(160, data.length * 52)}>
@@ -116,39 +115,33 @@ function HorizontalBarChart({ data, accentIndex = 0 }: { data: { name: string; v
           layout="vertical"
           margin={{ left: 8, right: 56, top: 4, bottom: 4 }}
         >
-          <defs>
-            {COLORS.map((c, i) => (
-              <linearGradient key={i} id={`hbar${i}`} x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor={c.from} stopOpacity={0.9} />
-                <stop offset="100%" stopColor={c.to} stopOpacity={1} />
-              </linearGradient>
-            ))}
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
           <XAxis
             type="number"
-            tick={{ fill: '#6b7280', fontSize: 10 }}
+            tick={{ fill: theme.tick, fontSize: 10 }}
             tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
-            axisLine={{ stroke: '#374151' }}
+            axisLine={{ stroke: theme.axisLine }}
             tickLine={false}
           />
           <YAxis
             type="category"
             dataKey="name"
             width={88}
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: theme.label, fontSize: 11 }}
             axisLine={false}
             tickLine={false}
           />
           <Tooltip
             formatter={(v: number) => [formatCurrency(v), 'Amount']}
-            {...TOOLTIP_STYLE}
+            {...theme.tooltip}
           />
-          <Bar dataKey="value" radius={[0, 5, 5, 0]} activeBar={false} label={{ position: 'right', formatter: (v: number) => formatCurrency(v), fill: '#9ca3af', fontSize: 10 }}>
-            {data.map((_, i) => (
-              <Cell key={i} fill={`url(#hbar${(accentIndex + i) % COLORS.length})`} />
-            ))}
-          </Bar>
+          <Bar
+            dataKey="value"
+            fill={accent}
+            radius={[0, 5, 5, 0]}
+            activeBar={false}
+            label={{ position: 'right', formatter: (v: number) => formatCurrency(v), fill: theme.label, fontSize: 10 }}
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -156,42 +149,46 @@ function HorizontalBarChart({ data, accentIndex = 0 }: { data: { name: string; v
 }
 
 function MonthlyAreaChart({ data }: { data: { month: string; total: number }[] }) {
-  if (!data.length) return <p className="text-gray-500 text-sm py-4 text-center">No data</p>
+  const theme = useChartTheme()
+  if (!data.length) return <p className="text-gray-400 text-sm py-4 text-center">No data</p>
+  // The area keeps its vertical wash — that fades away from the line rather than
+  // along it, so it doesn't shade the value the way a bar gradient does.
+  const accent = theme.accents[0]
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart data={data} margin={{ left: 4, right: 8, top: 16, bottom: 4 }}>
         <defs>
           <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.5} />
-            <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+            <stop offset="0%" stopColor={accent} stopOpacity={0.5} />
+            <stop offset="100%" stopColor={accent} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
         <XAxis
           dataKey="month"
-          tick={{ fill: '#6b7280', fontSize: 11 }}
-          axisLine={{ stroke: '#374151' }}
+          tick={{ fill: theme.tick, fontSize: 11 }}
+          axisLine={{ stroke: theme.axisLine }}
           tickLine={false}
         />
         <YAxis
           tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
-          tick={{ fill: '#6b7280', fontSize: 11 }}
+          tick={{ fill: theme.tick, fontSize: 11 }}
           width={44}
           axisLine={false}
           tickLine={false}
         />
         <Tooltip
           formatter={(v: number) => [formatCurrency(v), 'Revenue']}
-          {...TOOLTIP_STYLE}
+          {...theme.tooltip}
         />
         <Area
           type="monotone"
           dataKey="total"
-          stroke="#6366f1"
+          stroke={accent}
           strokeWidth={2.5}
           fill="url(#areaGrad)"
-          dot={{ fill: '#6366f1', strokeWidth: 0, r: 3 }}
-          activeDot={{ r: 5, fill: '#818cf8', strokeWidth: 0 }}
+          dot={{ fill: accent, strokeWidth: 0, r: 3 }}
+          activeDot={{ r: 5, fill: accent, strokeWidth: 0 }}
         />
       </AreaChart>
     </ResponsiveContainer>
@@ -214,9 +211,13 @@ function StatCard({ label, value, icon, gradient, iconBg, iconColor, sub }: Stat
   return (
     <div className={`relative overflow-hidden rounded-2xl border border-gray-700/40 p-5 ${gradient}`}>
       <div className="flex items-start justify-between">
-        <div>
+        {/* min-w-0 so a long value can't push the icon out of the card, and
+            text-xl until lg. At three columns the icon shares this row, which
+            leaves the value 16px of width on a 390px phone and 100px at 640 —
+            a $1,234,568 needs about 144px at text-2xl and 120px at text-xl. */}
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">{label}</p>
-          <p className="text-2xl font-bold text-white">{value}</p>
+          <p className="text-xl lg:text-2xl font-bold text-white tabular-nums">{value}</p>
           {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
         </div>
         <div className={`flex-shrink-0 rounded-xl p-2.5 ${iconBg} ${iconColor}`}>
@@ -388,7 +389,7 @@ export default function ChartPage() {
 
       {loading ? (
         <div className="space-y-4 animate-pulse">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[1, 2, 3].map(i => <div key={i} className="card h-24 rounded-2xl" />)}
           </div>
           {[240, 200, 180].map((h, i) => (
@@ -399,12 +400,15 @@ export default function ChartPage() {
         <div className="card rounded-2xl px-4 py-16 text-center">
           <p className="text-3xl mb-3">📊</p>
           <p className="text-gray-300 font-medium">No {category.toLowerCase()}s found</p>
-          <p className="text-gray-500 text-sm mt-1">Try selecting a different category</p>
+          {/* gray-400, not gray-500 — 3.04:1 on a card, and it's the line that
+              tells you what to do about an empty chart. Same swap as the
+              charts' own "No data". */}
+          <p className="text-gray-400 text-sm mt-1">Try selecting a different category</p>
         </div>
       ) : (
         <div className="space-y-6">
           {/* Stat cards */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <StatCard
               label="Total"
               value={items.length.toLocaleString()}
