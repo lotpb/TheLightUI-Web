@@ -188,7 +188,37 @@ onAuthStateChanged(auth, async (user) => {
     let role      = typeof tokenResult.claims['role']      === 'string' ? tokenResult.claims['role']      : undefined
 
     if (!companyId) {
-      // Existing user predating multi-tenancy — create their company now
+      // Give the onUserCreated trigger a chance to land before falling back.
+      //
+      // This branch fires for two different people: a legacy user who genuinely
+      // has no company, and anyone who registered a second ago — whose token
+      // never carries a companyId yet, because the Auth trigger that assigns it
+      // runs server-side in parallel with this. Calling setupAccount straight
+      // away raced the trigger, and for an invited user setupAccount won that
+      // race by creating them a company of their own, so they landed as the
+      // owner of an empty company instead of a member of the one that invited
+      // them.
+      //
+      // Refreshing the token is the cheap check: the trigger sets custom claims,
+      // so a forced refresh picks them up as soon as it has run. Three tries
+      // over ~1.2s covers the trigger's normal cold-start; past that we assume
+      // there's genuinely nothing to wait for. setupAccount itself now reads the
+      // live claims and honours a pending invitation, so losing this race is no
+      // longer harmful — this just avoids the round-trip in the common case.
+      for (let attempt = 0; attempt < 3 && !companyId; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 400))
+        if (generation !== authGeneration) return
+        const retry = await user.getIdTokenResult(true)
+        if (generation !== authGeneration) return
+        if (typeof retry.claims['companyId'] === 'string' && retry.claims['companyId']) {
+          companyId = retry.claims['companyId']
+          role = typeof retry.claims['role'] === 'string' ? retry.claims['role'] : role
+        }
+      }
+    }
+
+    if (!companyId) {
+      // Legacy user predating multi-tenancy — create their company now.
       const fns = getFunctions()
       const setupAccount = httpsCallable<object, { companyId: string; role: string }>(fns, 'setupAccount')
       const result = await setupAccount({})

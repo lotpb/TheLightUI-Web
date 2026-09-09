@@ -4,21 +4,61 @@ import * as functions from 'firebase-functions/v1'
 import { FieldValue } from 'firebase-admin/firestore'
 import { db, auth, escapeHtml, makeRateLimiter, isSuperAdmin, isoOrNull, SUPER_ADMIN_EMAILS } from './common'
 
-// ── New user signup ─────────────────────────────────────────────────────────────
-// Creates a company (or joins one via invitation) and sets custom claims.
-export const onUserCreated = functions.auth.user().onCreate(async (user) => {
-  const inviteSnap = await db
+/**
+ * Invitations are matched on an exact string, so the casing has to be settled
+ * in one place.
+ *
+ * Nothing normalised it before: `inviteUser` stored whatever was typed into the
+ * box and `onUserCreated` matched `where('email','==',user.email)`. Invite
+ * "John@Example.com" and the query misses on signup, which sent the invitee
+ * down the "no invitation found" branch and made them the owner of a brand-new
+ * company instead of a member of yours.
+ */
+export function normaliseEmail(email: string | undefined | null): string {
+  return (email ?? '').trim().toLowerCase()
+}
+
+/**
+ * The pending invitation for an email, if there is one.
+ *
+ * Queries the normalised value and then falls back to the raw one, because
+ * invitations written before this was normalised are still sitting in the
+ * collection with their original casing.
+ */
+export async function findPendingInvite(rawEmail: string | undefined | null) {
+  const email = normaliseEmail(rawEmail)
+  if (!email) return null
+
+  const byNormalised = await db
     .collection('invitations')
-    .where('email', '==', user.email)
+    .where('email', '==', email)
     .where('status', '==', 'pending')
     .limit(1)
     .get()
+  if (!byNormalised.empty) return byNormalised.docs[0]
+
+  // Legacy invitations, stored with whatever casing the inviter typed.
+  if (rawEmail && rawEmail !== email) {
+    const byRaw = await db
+      .collection('invitations')
+      .where('email', '==', rawEmail)
+      .where('status', '==', 'pending')
+      .limit(1)
+      .get()
+    if (!byRaw.empty) return byRaw.docs[0]
+  }
+  return null
+}
+
+// ── New user signup ─────────────────────────────────────────────────────────────
+// Creates a company (or joins one via invitation) and sets custom claims.
+export const onUserCreated = functions.auth.user().onCreate(async (user) => {
+  const invite = await findPendingInvite(user.email)
 
   let companyId: string
   let role: 'owner' | 'member'
 
-  if (!inviteSnap.empty) {
-    const invite = inviteSnap.docs[0]
+  if (invite) {
     companyId = invite.data().companyId as string
     role = 'member'
     await invite.ref.update({
@@ -64,6 +104,39 @@ export const setupAccount = functions.https.onCall(async (data, context) => {
     return { companyId: token.companyId as string, role: token.role as string }
   }
 
+  // The claim in `token` is whatever the caller's cached ID token carried, which
+  // for a user who registered a moment ago is nothing — onUserCreated may not
+  // have run yet, and even once it has, the client's token won't show it until
+  // it refreshes. So this guard alone can't tell "brand-new user mid-signup"
+  // from "legacy user who genuinely has no company", and the client calls this
+  // for both. Read the authoritative claims instead of trusting the token.
+  const live = (await auth.getUser(uid)).customClaims ?? {}
+  if (typeof live['companyId'] === 'string' && live['companyId']) {
+    return { companyId: live['companyId'], role: (live['role'] as string) ?? 'member' }
+  }
+
+  // Still nothing, so onUserCreated hasn't landed. If this user was invited,
+  // honour the invitation rather than racing it — creating a company here is
+  // what made invitees the owner of an empty company of their own.
+  const invite = await findPendingInvite(token.email as string | undefined)
+  if (invite) {
+    const invitedCompanyId = invite.data().companyId as string
+    await invite.ref.update({
+      status: 'accepted',
+      acceptedAt: FieldValue.serverTimestamp(),
+      acceptedByUid: uid,
+    })
+    await auth.setCustomUserClaims(uid, { companyId: invitedCompanyId, role: 'member' })
+    await db.collection('users').doc(uid).set({
+      companyId: invitedCompanyId,
+      email: token.email ?? '',
+      displayName: token.name ?? '',
+      role: 'member',
+      createdAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
+    return { companyId: invitedCompanyId, role: 'member' }
+  }
+
   const ref = db.collection('companies').doc()
   const companyId = ref.id
 
@@ -106,10 +179,14 @@ export const inviteUser = functions
     throw new functions.https.HttpsError('permission-denied', 'Only owners and admins can invite users')
   }
 
-  const { email } = data as { email: string }
-  if (!email || typeof email !== 'string') {
+  const { email: rawEmail } = data as { email: string }
+  if (!rawEmail || typeof rawEmail !== 'string') {
     throw new functions.https.HttpsError('invalid-argument', 'A valid email is required')
   }
+  // Stored lowercase so onUserCreated's exact-match lookup can find it. Typing
+  // "John@Example.com" into the invite box used to produce an invitation no
+  // signup would ever match.
+  const email = normaliseEmail(rawEmail)
 
   // Avoid duplicate pending invites
   const existing = await db
