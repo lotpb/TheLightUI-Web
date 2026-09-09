@@ -32,7 +32,7 @@ export default function LoginPage() {
       const pendingCode = sessionStorage.getItem('pendingInviteCode')
       if (pendingCode) {
         sessionStorage.removeItem('pendingInviteCode')
-        navigate(`/join?code=${pendingCode}`, { replace: true })
+        navigate(`/join?code=${pendingCode}&auto=1`, { replace: true })
       } else {
         navigate('/menu', { replace: true })
       }
