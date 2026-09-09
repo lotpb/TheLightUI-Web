@@ -17,21 +17,97 @@ function formatCurrency(n: number) {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 }
 
+/**
+ * Axis ticks: $400, $2.5K, $45K, $1.3M.
+ *
+ * The ticks were `$${(v / 1000).toFixed(0)}k`, which divides by a thousand no
+ * matter the range. Any value under $500 came out as "$0k", so a category whose
+ * amounts are in the hundreds got an axis reading $0k, $0k, $0k — and at the
+ * other end $1,250,000 read "$1250k" instead of $1.3M.
+ *
+ * Intl's compact notation picks the unit from the value, so both ends behave and
+ * the thresholds aren't ours to maintain.
+ */
+const COMPACT_CURRENCY = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+function compactCurrency(n: number) {
+  return COMPACT_CURRENCY.format(n)
+}
+
+/**
+ * Width of the category axis, and how far a label can run before it truncates.
+ *
+ * ~6.2px per character at the 11px the ticks render at.
+ */
+const AXIS_CHAR_PX = 6.2
+const AXIS_MIN_WIDTH = 72
+const AXIS_MAX_WIDTH = 140
+
+/**
+ * Fit the axis to the names it actually has to show, up to a cap.
+ *
+ * It was a flat `width={88}`, so anything past about fourteen characters was
+ * cut off by the axis box — "Kitchen Remodel" needs 93px, "Bathroom
+ * Renovation" 118px — and job, product and contractor names are exactly the
+ * data that runs long. Short names got 88px whether they needed it or not,
+ * which is chart area spent on nothing.
+ */
+function categoryAxisWidth(names: string[]): number {
+  const longest = names.reduce((n, s) => Math.max(n, s.length), 0)
+  return Math.min(AXIS_MAX_WIDTH, Math.max(AXIS_MIN_WIDTH, Math.ceil(longest * AXIS_CHAR_PX) + 8))
+}
+
+/** Trims to what the axis can show. The tooltip still carries the full name. */
+function truncateToWidth(s: string, px: number): string {
+  const max = Math.floor(px / AXIS_CHAR_PX)
+  return s.length <= max ? s : `${s.slice(0, Math.max(1, max - 1))}…`
+}
+
+/**
+ * Records dated before this are treated as bad data, not history.
+ *
+ * The legacy 2015 import carries "0000-00-00" placeholders, which arrive as the
+ * epoch or as unparseable dates. Unfiltered they put a "Dec 69" column and an
+ * "Invalid Date" column on the axis — both already visible today — and once the
+ * gaps below are filled they would stretch the series to 672 points.
+ */
+const MIN_PLAUSIBLE_YEAR = 2000
+
+/**
+ * Revenue per month across the whole span, including the months with none.
+ *
+ * This only emitted months that had records, so a gap closed up: revenue in
+ * January, February and May rendered as three evenly spaced points and the line
+ * ran Feb → May as though it were one step. A revenue trend that drops its zero
+ * months doesn't just lose detail, it reports the wrong shape — a dead quarter
+ * looks like no quarter at all.
+ *
+ * Keyed on year * 12 + month so the walk from first to last is arithmetic rather
+ * than string parsing and calendar rollover.
+ */
 function groupByMonth(items: CustomerItem[]) {
-  const map: Record<string, number> = {}
+  const byMonth = new Map<number, number>()
   for (const item of items) {
-    const d = new Date(item.creationDate)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    map[key] = (map[key] ?? 0) + item.amount
+    const d = item.creationDate instanceof Date ? item.creationDate : new Date(item.creationDate)
+    if (isNaN(d.getTime()) || d.getFullYear() < MIN_PLAUSIBLE_YEAR) continue
+    const key = d.getFullYear() * 12 + d.getMonth()
+    byMonth.set(key, (byMonth.get(key) ?? 0) + item.amount)
   }
-  return Object.entries(map)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, total]) => {
-      const [year, m] = month.split('-')
-      const label = new Date(Number(year), Number(m) - 1)
-        .toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-      return { month: label, total }
-    })
+  if (byMonth.size === 0) return []
+
+  const keys = [...byMonth.keys()].sort((a, b) => a - b)
+  const out: { month: string; total: number }[] = []
+  for (let key = keys[0]; key <= keys[keys.length - 1]; key++) {
+    const label = new Date(Math.floor(key / 12), key % 12)
+      .toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+    out.push({ month: label, total: byMonth.get(key) ?? 0 })
+  }
+  return out
 }
 
 function groupByField(items: CustomerItem[], key: keyof CustomerItem) {
@@ -107,6 +183,7 @@ function HorizontalBarChart({ data, accentIndex = 0 }: { data: { name: string; v
   const theme = useChartTheme()
   if (!data.length) return <p className="text-gray-400 text-sm py-4 text-center">No data</p>
   const accent = theme.accents[accentIndex % theme.accents.length]
+  const axisWidth = categoryAxisWidth(data.map(d => d.name))
   return (
     <div className="space-y-2.5">
       <ResponsiveContainer width="100%" height={Math.max(160, data.length * 52)}>
@@ -119,14 +196,15 @@ function HorizontalBarChart({ data, accentIndex = 0 }: { data: { name: string; v
           <XAxis
             type="number"
             tick={{ fill: theme.tick, fontSize: 10 }}
-            tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+            tickFormatter={compactCurrency}
             axisLine={{ stroke: theme.axisLine }}
             tickLine={false}
           />
           <YAxis
             type="category"
             dataKey="name"
-            width={88}
+            width={axisWidth}
+            tickFormatter={(v: string) => truncateToWidth(v, axisWidth - 8)}
             tick={{ fill: theme.label, fontSize: 11 }}
             axisLine={false}
             tickLine={false}
@@ -171,9 +249,9 @@ function MonthlyAreaChart({ data }: { data: { month: string; total: number }[] }
           tickLine={false}
         />
         <YAxis
-          tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+          tickFormatter={compactCurrency}
           tick={{ fill: theme.tick, fontSize: 11 }}
-          width={44}
+          width={48}
           axisLine={false}
           tickLine={false}
         />
@@ -282,6 +360,15 @@ export default function ChartPage() {
   const leadSourceTotals = useMemo(() => groupByField(items, 'leadSource'), [items])
 
   const activeRate = items.length > 0 ? Math.round((activeCount / items.length) * 100) : 0
+
+  // Months that actually earned something, which is what this label always
+  // meant. monthlySales.length is now the span rather than the count, because
+  // the series carries its empty months — so reading it here would have quietly
+  // turned "across 3 months" into "across 14".
+  const monthsWithRevenue = useMemo(
+    () => monthlySales.filter(m => m.total > 0).length,
+    [monthlySales],
+  )
 
   function handlePrint() {
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -434,7 +521,7 @@ export default function ChartPage() {
               gradient="bg-gradient-to-br from-gray-800 to-gray-900"
               iconBg="bg-amber-500/20"
               iconColor="text-amber-400"
-              sub={monthlySales.length > 0 ? `across ${monthlySales.length} months` : undefined}
+              sub={monthsWithRevenue > 0 ? `across ${monthsWithRevenue} month${monthsWithRevenue === 1 ? '' : 's'}` : undefined}
             />
           </div>
 
