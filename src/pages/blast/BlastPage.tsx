@@ -1,14 +1,28 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToCustomers } from '../../services/customerService'
 import { fullName, CATEGORIES, type CustomerItem } from '../../models/customer'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
+import { Icon, ICONS } from '../../components/Icon'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type Channel = 'email' | 'sms'
+
+/**
+ * How many BCC addresses a mailto: link is allowed to carry.
+ *
+ * One constant because the limit used to be written out in four places — the
+ * disabled test, a title tooltip, an inline "(limit 40)" and a paragraph — which
+ * is four chances for them to disagree. The slice below is unreachable while the
+ * button is disabled above the limit; it stays as the belt to that braces.
+ */
+const MAIL_BCC_LIMIT = 40
+
+/** How many recipients the inline list renders before it stops. */
+const LIST_PREVIEW = 50
 
 function applyTemplate(tpl: string, c: CustomerItem): string {
   return tpl
@@ -18,7 +32,32 @@ function applyTemplate(tpl: string, c: CustomerItem): string {
     .replace(/\{salesman\}/g, c.salesman)
 }
 
-function csvEscape(s: string) { return `"${s.replace(/"/g, '""')}"` }
+/**
+ * Quote-escaped, and defused for spreadsheets.
+ *
+ * A cell starting with = + - or @ is a formula to Excel and Sheets, so a city
+ * or a name beginning with one executes on open. Prefixing a tab keeps the
+ * value readable while making it inert.
+ */
+function csvEscape(s: string) {
+  const v = /^[=+\-@]/.test(s) ? `\t${s}` : s
+  return `"${v.replace(/"/g, '""')}"`
+}
+
+/**
+ * The page promises "only contacts with a valid email"; the filter used to be
+ * `!c.email`, which is presence, not validity. A record reading "n/a" counted
+ * as a recipient and went into the copied list and the CSV. Same `includes('@')`
+ * test the bulk-email modal on /customers already applies.
+ */
+function hasEmail(c: CustomerItem): boolean {
+  return c.email.trim().includes('@')
+}
+
+/** At least a few digits — enough to reject "none" and "n/a". */
+function hasPhone(c: CustomerItem): boolean {
+  return c.phone.replace(/\D/g, '').length >= 7
+}
 
 const BLAST_EXAMPLES: Array<{ name: string; channel: Channel | 'both'; subject: string; body: string }> = [
   {
@@ -47,6 +86,8 @@ const BLAST_EXAMPLES: Array<{ name: string; channel: Channel | 'both'; subject: 
   },
 ]
 
+const MERGE_TAGS = ['{first}', '{lastname}', '{city}', '{salesman}'] as const
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BlastPage() {
@@ -68,8 +109,21 @@ export default function BlastPage() {
   const [subject, setSubject] = useState('Hi {first}, a message for you')
   const [body,    setBody]    = useState('')
 
-  const [copied, setCopied] = useState<'contacts' | 'msg' | null>(null)
+  const [copied, setCopied] = useState<'contacts' | null>(null)
   const [showList, setShowList] = useState(false)
+
+  /**
+   * Which field a merge tag should land in.
+   *
+   * The chips used to reach the textarea through
+   * document.getElementById('blast-body') and nothing else — so with the cursor
+   * in Subject, which also runs through applyTemplate and therefore accepts
+   * tags, clicking {first} silently appended it to the body instead.
+   */
+  const subjectRef = useRef<HTMLInputElement>(null)
+  const bodyRef    = useRef<HTMLTextAreaElement>(null)
+  const [tagTarget, setTagTarget] = useState<'subject' | 'body'>('body')
+  const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const unsub = subscribeToCustomers(
@@ -78,6 +132,10 @@ export default function BlastPage() {
     )
     return unsub
   }, [companyId])
+
+  // Subject only exists on the email channel, so a stale target would send tags
+  // into a field that isn't on screen.
+  useEffect(() => { if (channel === 'sms') setTagTarget('body') }, [channel])
 
   const salesmen = useMemo(() => {
     const s = new Set<string>()
@@ -93,8 +151,8 @@ export default function BlastPage() {
 
   const matched = useMemo(() => {
     return customers.filter(c => {
-      if (channel === 'email' && !c.email) return false
-      if (channel === 'sms'   && !c.phone) return false
+      if (channel === 'email' && !hasEmail(c)) return false
+      if (channel === 'sms'   && !hasPhone(c)) return false
       if (category && c.category.toLowerCase() !== category.toLowerCase()) return false
       if (salesman && c.salesman !== salesman) return false
       if (cbFilter === 'yes' && c.callback.toLowerCase() !== 'yes') return false
@@ -108,15 +166,19 @@ export default function BlastPage() {
     const list = channel === 'email'
       ? matched.map(c => c.email).join(', ')
       : matched.map(c => c.phone).join(', ')
-    await navigator.clipboard.writeText(list)
-    setCopied('contacts')
-    toast(`${matched.length} ${channel === 'email' ? 'emails' : 'numbers'} copied to clipboard`, 'success')
-    setTimeout(() => setCopied(null), 2500)
+    try {
+      await navigator.clipboard.writeText(list)
+      setCopied('contacts')
+      toast(`${matched.length} ${channel === 'email' ? 'emails' : 'numbers'} copied to clipboard`, 'success')
+      setTimeout(() => setCopied(null), 2500)
+    } catch {
+      toast('Could not copy to the clipboard.', 'error')
+    }
   }
 
   function openMailApp() {
     if (matched.length === 0) return
-    const bcc = matched.slice(0, 40).map(c => c.email).join(',')
+    const bcc = matched.slice(0, MAIL_BCC_LIMIT).map(c => c.email).join(',')
     const params = new URLSearchParams()
     if (subject) params.set('subject', subject)
     if (body)    params.set('body', body)
@@ -167,6 +229,31 @@ export default function BlastPage() {
     setBody(ex.body)
   }
 
+  /** Inserts at the caret of whichever field was last focused. */
+  function insertTag(tag: string) {
+    const el = tagTarget === 'subject' ? subjectRef.current : bodyRef.current
+    const value = tagTarget === 'subject' ? subject : body
+    const setValue = tagTarget === 'subject' ? setSubject : setBody
+    if (!el) { setValue(value + tag); return }
+    const start = el.selectionStart ?? value.length
+    const end   = el.selectionEnd ?? value.length
+    setValue(value.slice(0, start) + tag + value.slice(end))
+    setTimeout(() => {
+      el.focus()
+      el.setSelectionRange(start + tag.length, start + tag.length)
+    }, 0)
+  }
+
+  /** Reveals the list and takes you to it — otherwise this button did exactly
+   *  what the small "Show list" toggle above it did, and nothing at all when
+   *  the list was already open. */
+  function revealList() {
+    setShowList(true)
+    setTimeout(() => listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
+  }
+
+  const overMailLimit = channel === 'email' && matched.length > MAIL_BCC_LIMIT
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
 
@@ -183,7 +270,7 @@ export default function BlastPage() {
           <p className="text-sm text-gray-400 mt-0.5">
             Filter a segment, then copy it, export it, or open it in your mail app
           </p>
-          <p className="text-xs text-gray-500 mt-1">
+          <p className="text-xs text-gray-400 mt-1">
             Nothing is sent or logged from here.{' '}
             <Link to="/campaigns" className="text-indigo-400 hover:text-indigo-300">
               Email Campaigns
@@ -193,41 +280,47 @@ export default function BlastPage() {
         </div>
         {!loading && (
           <div className="text-right shrink-0">
-            <p className="text-2xl font-bold text-white">{matched.length}</p>
-            <p className="text-xs text-gray-500">recipients matched</p>
+            <p className="text-2xl font-bold text-white tabular-nums">{matched.length}</p>
+            <p className="text-xs text-gray-400">recipients matched</p>
           </div>
         )}
       </div>
 
-      {/* Channel toggle */}
-      <div className="flex gap-2">
+      {/* Channel toggle. Drawn icons, not ✉️/💬 — emoji paint their own bitmap
+          and ignore `color`, so the glyph looked identical whether the tab was
+          active or not while its label went white. */}
+      <div className="flex gap-2 flex-wrap items-center">
         {(['email', 'sms'] as Channel[]).map(ch => (
           <button
             key={ch}
             onClick={() => setChannel(ch)}
+            aria-pressed={channel === ch}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
               channel === ch
                 ? 'bg-indigo-600 text-white'
                 : 'bg-gray-800 text-gray-400 hover:text-gray-200'
             }`}
           >
-            <span>{ch === 'email' ? '✉️' : '💬'}</span>
+            <Icon d={ch === 'email' ? ICONS.envelope : ICONS.chat} className="w-4 h-4 shrink-0" />
             {ch === 'email' ? 'Email' : 'SMS'}
           </button>
         ))}
-        <span className="ml-auto text-xs text-gray-600 self-center">
-          Only contacts with a {channel === 'email' ? 'valid email' : 'phone number'} are shown
+        <span className="ml-auto text-xs text-gray-400">
+          Only contacts with {channel === 'email' ? 'an email address' : 'a phone number'} are shown
         </span>
       </div>
 
       {/* Segment Filters */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-          <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Segment Filters</p>
+        {/* bg-gray-900, not bg-gray-800/50: the card is bg-gray-800, and fifty
+            percent of a colour over itself is that colour — all three strips on
+            this page measured 1.000:1 and rendered as nothing but a border. */}
+        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
+          <p className="card-section-title">Segment Filters</p>
           {(category || salesman || cbFilter || city) && (
             <button
               onClick={() => { setCategory(''); setSalesman(''); setCbFilter(''); setCity('') }}
-              className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+              className="text-xs text-gray-400 hover:text-red-400 transition-colors"
             >
               Clear all
             </button>
@@ -235,9 +328,8 @@ export default function BlastPage() {
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Category */}
           <div>
-            <p className="text-xs text-gray-500 mb-2 font-medium">Category</p>
+            <p className="text-xs text-gray-400 mb-2 font-medium">Category</p>
             <div className="flex gap-1.5 flex-wrap">
               <button
                 onClick={() => setCategory('')}
@@ -264,10 +356,10 @@ export default function BlastPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Salesman */}
             <div>
-              <p className="text-xs text-gray-500 mb-1.5 font-medium">Salesman</p>
+              <label htmlFor="blast-salesman" className="text-xs text-gray-400 mb-1.5 font-medium block">Salesman</label>
               <select
+                id="blast-salesman"
                 value={salesman}
                 onChange={e => setSalesman(e.target.value)}
                 className="input-field text-sm py-1.5 w-full"
@@ -277,10 +369,10 @@ export default function BlastPage() {
               </select>
             </div>
 
-            {/* Callback status */}
             <div>
-              <p className="text-xs text-gray-500 mb-1.5 font-medium">Callback Status</p>
+              <label htmlFor="blast-callback" className="text-xs text-gray-400 mb-1.5 font-medium block">Callback Status</label>
               <select
+                id="blast-callback"
                 value={cbFilter}
                 onChange={e => setCbFilter(e.target.value)}
                 className="input-field text-sm py-1.5 w-full"
@@ -291,10 +383,10 @@ export default function BlastPage() {
               </select>
             </div>
 
-            {/* City */}
             <div>
-              <p className="text-xs text-gray-500 mb-1.5 font-medium">City</p>
+              <label htmlFor="blast-city" className="text-xs text-gray-400 mb-1.5 font-medium block">City</label>
               <input
+                id="blast-city"
                 type="text"
                 list="city-list"
                 value={city}
@@ -312,20 +404,19 @@ export default function BlastPage() {
 
       {/* Message Composer */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50">
-          <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">Message</p>
+        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900">
+          <p className="card-section-title">Message</p>
         </div>
 
         <div className="p-4 space-y-3">
-          {/* Starter examples */}
           {!body && (
             <div className="flex flex-wrap gap-1.5 items-center">
-              <span className="text-xs text-gray-600">Start from an example:</span>
+              <span className="text-xs text-gray-400">Start from an example:</span>
               {examples.map(ex => (
                 <button
                   key={ex.name}
                   onClick={() => applyExample(ex)}
-                  className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:border-indigo-500 hover:text-indigo-300 transition-colors"
+                  className="px-2 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:border-indigo-500 hover:text-indigo-300 transition-colors"
                 >
                   {ex.name}
                 </button>
@@ -333,55 +424,47 @@ export default function BlastPage() {
             </div>
           )}
 
-          {/* Merge tag chips */}
+          {/* Merge tags. py-1 rather than py-0.5 — these were 20px against the
+              24px floor of WCAG 2.5.8. */}
           <div className="flex gap-1.5 flex-wrap items-center">
-            <span className="text-xs text-gray-600">Merge tags:</span>
-            {['{first}', '{lastname}', '{city}', '{salesman}'].map(tag => (
+            <span className="text-xs text-gray-400">
+              Merge tags{channel === 'email' ? ` → ${tagTarget === 'subject' ? 'Subject' : 'Message'}` : ''}:
+            </span>
+            {MERGE_TAGS.map(tag => (
               <button
                 key={tag}
-                onClick={async () => {
-                  const ta = document.getElementById('blast-body') as HTMLTextAreaElement | null
-                  if (ta) {
-                    const start = ta.selectionStart
-                    const end   = ta.selectionEnd
-                    const next  = body.slice(0, start) + tag + body.slice(end)
-                    setBody(next)
-                    setTimeout(() => {
-                      ta.focus()
-                      ta.setSelectionRange(start + tag.length, start + tag.length)
-                    }, 0)
-                  } else {
-                    setBody(b => b + tag)
-                  }
-                }}
-                className="px-2 py-0.5 rounded text-xs font-mono bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/40 transition-colors"
+                onClick={() => insertTag(tag)}
+                className="px-2 py-1 rounded text-xs font-mono bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/40 transition-colors"
               >
                 {tag}
               </button>
             ))}
           </div>
 
-          {/* Subject (email only) */}
           {channel === 'email' && (
             <div>
-              <label className="text-xs text-gray-500 mb-1 block">Subject</label>
+              <label htmlFor="blast-subject" className="text-xs text-gray-400 mb-1 block">Subject</label>
               <input
+                id="blast-subject"
+                ref={subjectRef}
                 type="text"
                 value={subject}
                 onChange={e => setSubject(e.target.value)}
+                onFocus={() => setTagTarget('subject')}
                 placeholder="Subject line…"
                 className="input-field w-full text-sm py-2"
               />
             </div>
           )}
 
-          {/* Body */}
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">Message body</label>
+            <label htmlFor="blast-body" className="text-xs text-gray-400 mb-1 block">Message body</label>
             <textarea
               id="blast-body"
+              ref={bodyRef}
               value={body}
               onChange={e => setBody(e.target.value)}
+              onFocus={() => setTagTarget('body')}
               rows={channel === 'email' ? 7 : 4}
               placeholder={
                 channel === 'email'
@@ -392,10 +475,9 @@ export default function BlastPage() {
             />
           </div>
 
-          {/* Live preview */}
           {body && matched[0] && (
-            <div className="rounded-xl bg-gray-800/60 border border-gray-700/40 p-3 space-y-1.5">
-              <p className="text-xs font-medium text-gray-500">Preview — {fullName(matched[0])}</p>
+            <div className="rounded-xl bg-gray-900 border border-gray-700/40 p-3 space-y-1.5">
+              <p className="text-xs font-medium text-gray-400">Preview — {fullName(matched[0])}</p>
               {channel === 'email' && subject && (
                 <p className="text-xs font-semibold text-gray-300">
                   Subject: {applyTemplate(subject, matched[0])}
@@ -409,33 +491,28 @@ export default function BlastPage() {
 
       {/* Actions + Recipients */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
-          <p className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Recipients
-            <span className="ml-2 text-gray-600 normal-case font-normal">
-              ({loading ? '…' : matched.length})
-            </span>
-          </p>
+        {/* The count that used to sit here duplicated the headline figure at the
+            top of the page, at gray-600. The list below states its own range. */}
+        <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-900 flex items-center justify-between">
+          <p className="card-section-title">Recipients</p>
           {matched.length > 0 && (
             <button
               onClick={() => setShowList(v => !v)}
-              className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
             >
               {showList ? 'Hide list' : 'Show list'}
             </button>
           )}
         </div>
 
-        {/* Action buttons */}
         <div className="p-4 space-y-3">
           {matched.length === 0 ? (
-            <p className="text-sm text-gray-500 text-center py-4">
+            <p className="text-sm text-gray-400 text-center py-4">
               {loading ? 'Loading contacts…' : 'No contacts match these filters.'}
             </p>
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* Copy contacts */}
                 <button
                   onClick={copyContacts}
                   className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
@@ -444,7 +521,7 @@ export default function BlastPage() {
                       : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
                   }`}
                 >
-                  <span>{copied === 'contacts' ? '✓' : channel === 'email' ? '📋' : '📋'}</span>
+                  <Icon d={copied === 'contacts' ? ICONS.check : ICONS.clipboard} className="w-4 h-4 shrink-0" />
                   {copied === 'contacts'
                     ? 'Copied!'
                     : channel === 'email'
@@ -452,44 +529,41 @@ export default function BlastPage() {
                       : `Copy ${matched.length} Numbers`}
                 </button>
 
-                {/* Email-specific: Open in Mail App */}
                 {channel === 'email' && (
                   <button
                     onClick={openMailApp}
-                    disabled={matched.length > 40}
-                    title={matched.length > 40 ? 'Too many recipients for Mail App — use Copy instead' : undefined}
+                    disabled={overMailLimit}
                     className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 transition-colors border border-indigo-700/30 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <span>✉️</span>
+                    <Icon d={ICONS.envelope} className="w-4 h-4 shrink-0" />
                     Open in Mail App
-                    {matched.length > 40 && <span className="text-xs text-gray-500">(limit 40)</span>}
                   </button>
                 )}
 
-                {/* SMS-specific: Show send list */}
                 {channel === 'sms' && (
                   <button
-                    onClick={() => setShowList(true)}
+                    onClick={revealList}
                     className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors border border-green-700/30"
                   >
-                    <span>💬</span>
+                    <Icon d={ICONS.chat} className="w-4 h-4 shrink-0" />
                     Send One by One
                   </button>
                 )}
               </div>
 
-              {/* Export CSV */}
               <button
                 onClick={exportCSV}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors border border-gray-700/50"
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-gray-800 text-gray-300 hover:text-white transition-colors border border-gray-700/50"
               >
-                <span>⬇️</span>
+                <Icon d={ICONS.downloadTray} className="w-4 h-4 shrink-0" />
                 Export CSV with personalized messages
               </button>
 
-              {matched.length > 40 && channel === 'email' && (
-                <p className="text-xs text-amber-500/80 text-center">
-                  Mail App is limited to 40 BCC recipients. Use Copy Emails or Export CSV for larger lists.
+              {/* The one place the mail limit is explained, and the only one
+                  that says what to do instead. */}
+              {overMailLimit && (
+                <p className="text-xs text-amber-400 text-center">
+                  Mail App is limited to {MAIL_BCC_LIMIT} BCC recipients. Use Copy Emails or Export CSV for larger lists.
                 </p>
               )}
             </>
@@ -498,10 +572,13 @@ export default function BlastPage() {
 
         {/* Recipient list */}
         {showList && matched.length > 0 && (
-          <div className="border-t border-gray-700/50">
+          <div ref={listRef} className="border-t border-gray-700/50">
             <div className="max-h-72 overflow-y-auto divide-y divide-gray-700/30">
-              {matched.map(c => (
-                <div key={c.id} className="flex items-center gap-3 px-4 py-2.5 group hover:bg-gray-700/20">
+              {/* Capped. This rendered every match — a 5,000-contact segment
+                  mounted 5,000 rows, each carrying a mailto:/sms: href with the
+                  whole interpolated body, to show about four at a time. */}
+              {matched.slice(0, LIST_PREVIEW).map(c => (
+                <div key={c.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-700/30">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
                       <Link
@@ -511,31 +588,36 @@ export default function BlastPage() {
                         {fullName(c)}
                       </Link>
                       {c.city && (
-                        <span className="text-xs text-gray-600 shrink-0">{c.city}</span>
+                        <span className="text-xs text-gray-400 shrink-0">{c.city}</span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-xs text-gray-400 truncate">
                       {channel === 'email' ? c.email : c.phone}
                     </p>
                   </div>
-                  {channel === 'sms' ? (
-                    <a
-                      href={`sms:${c.phone}${body ? `?&body=${encodeURIComponent(applyTemplate(body, c))}` : ''}`}
-                      className="shrink-0 text-xs text-green-400 hover:text-green-300 transition-colors px-2 py-1 rounded-lg bg-green-500/10"
-                    >
-                      Send ↗
-                    </a>
-                  ) : (
-                    <a
-                      href={`mailto:${c.email}${subject || body ? `?${new URLSearchParams({ ...(subject ? { subject: applyTemplate(subject, c) } : {}), ...(body ? { body: applyTemplate(body, c) } : {}) }).toString()}` : ''}`}
-                      className="shrink-0 text-xs text-indigo-400 hover:text-indigo-300 transition-colors px-2 py-1 rounded-lg bg-indigo-500/10"
-                    >
-                      Send ↗
-                    </a>
-                  )}
+                  <a
+                    href={channel === 'sms'
+                      ? `sms:${c.phone}${body ? `?&body=${encodeURIComponent(applyTemplate(body, c))}` : ''}`
+                      : `mailto:${c.email}${subject || body ? `?${new URLSearchParams({ ...(subject ? { subject: applyTemplate(subject, c) } : {}), ...(body ? { body: applyTemplate(body, c) } : {}) }).toString()}` : ''}`}
+                    className={`shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors ${
+                      channel === 'sms'
+                        ? 'text-green-400 hover:text-green-300 bg-green-500/10'
+                        : 'text-indigo-400 hover:text-indigo-300 bg-indigo-500/10'
+                    }`}
+                  >
+                    Send
+                    <Icon d={ICONS.arrowRight} className="w-3 h-3 shrink-0" />
+                  </a>
                 </div>
               ))}
             </div>
+            {/* Says what it's showing, rather than letting the scrollbar imply
+                the list is complete. */}
+            <p className="px-4 py-2 text-xs text-gray-400 border-t border-gray-700/30 text-center">
+              {matched.length > LIST_PREVIEW
+                ? `Showing the first ${LIST_PREVIEW} of ${matched.length} — Copy or Export covers all of them`
+                : `${matched.length} recipient${matched.length === 1 ? '' : 's'}`}
+            </p>
           </div>
         )}
       </div>
