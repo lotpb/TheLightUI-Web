@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { useIsLightMode } from './useIsLightMode'
 
 /**
  * Colours for a recharts chart, per theme.
@@ -93,28 +93,7 @@ const LIGHT: ChartTheme = {
   },
 }
 
-function isLightMode(): boolean {
-  return typeof document !== 'undefined' &&
-    document.documentElement.classList.contains('light-mode')
-}
-
-/**
- * The palette for the current theme, kept live.
- *
- * Settings toggles light mode by adding a class to <html> without a reload, so
- * reading the class once at mount would leave every chart on the previous
- * theme's colours until navigation. A MutationObserver on that one attribute is
- * what makes the switch reach an SVG.
- */
+/** The palette for the current theme, kept live. */
 export function useChartTheme(): ChartTheme {
-  const [light, setLight] = useState(isLightMode)
-
-  useEffect(() => {
-    const el = document.documentElement
-    const observer = new MutationObserver(() => setLight(el.classList.contains('light-mode')))
-    observer.observe(el, { attributes: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
-  }, [])
-
-  return light ? LIGHT : DARK
+  return useIsLightMode() ? LIGHT : DARK
 }

@@ -301,7 +301,10 @@ export default function CustomerListPage() {
   // Collapsed by default there, always open at lg where it has its own column.
   const [quickFiltersOpen, setQuickFiltersOpen] = useState(false)
   const [filterSalesman, setFilterSalesman] = useState('')
-  const [filterState, setFilterState]       = useState('')
+  // Seeded from ?state=, alongside the ?q= this page already accepted, so
+  // /heatmap can hand off a place. It arrives as the grouping key (uppercase),
+  // which is why the comparison below is case-insensitive.
+  const [filterState, setFilterState]       = useState(() => searchParams.get('state') ?? '')
   const [filterLeadSource, setFilterLeadSource] = useState('')
   const [filterProduct, setFilterProduct]   = useState('')
   const [filterCallback, setFilterCallback] = useState('')
@@ -818,7 +821,13 @@ export default function CustomerListPage() {
     }
     // Advanced filters
     if (filterSalesman) items = items.filter(c => c.salesman === filterSalesman)
-    if (filterState)    items = items.filter(c => c.state === filterState)
+    // Case-insensitive: the dropdown's options come from the data so an exact
+    // match served it, but ?state= arrives uppercased from /heatmap, and
+    // records spelled "ny" and "NY" were two separate places either way.
+    if (filterState) {
+      const want = filterState.trim().toLowerCase()
+      items = items.filter(c => c.state.trim().toLowerCase() === want)
+    }
     if (filterLeadSource) items = items.filter(c => c.leadSource === filterLeadSource)
     if (filterProduct)  items = items.filter(c => c.product === filterProduct)
     if (filterCallback === 'yes') items = items.filter(c => c.callback.toLowerCase() === 'yes')
