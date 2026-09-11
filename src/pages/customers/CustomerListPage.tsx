@@ -98,8 +98,18 @@ function useClickOutside(
     function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
+    // Escape too. All five popovers on this page use this hook — Sort,
+    // Actions, Views, Filters and Tag — so one opened from the keyboard could
+    // only be closed by reaching for the mouse.
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
     document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
   }, [active, ref, onClose])
 }
 
@@ -245,7 +255,6 @@ function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6, 
 export default function CustomerListPage() {
   const { pathname } = useLocation()
   const cat: CustomerCategory = PATH_TO_CATEGORY[pathname] ?? 'Lead'
-  const hasQuickFilterSidebar = cat === 'Employee' || cat === 'Lead' || cat === 'Customer' || cat === 'Vendor'
   usePageTitle(CATEGORY_LABELS[cat])
   const companyId = useAuthStore(s => s.companyId)
   const user = useAuthStore(s => s.user)
@@ -294,6 +303,7 @@ export default function CustomerListPage() {
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [page, setPage] = useState(1)
+  const [pageInput, setPageInput] = useState('1')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [tagOpen, setTagOpen]     = useState(false)
   const tagRef = useRef<HTMLDivElement>(null)
@@ -555,9 +565,17 @@ export default function CustomerListPage() {
   // write left the row showing the new value with no indication it hadn't
   // persisted. Lifted here so they can report through the toast.
   /** Clamped, and scrolls the list back to the top like Prev/Next always did. */
+  /** Commit whatever is in the page-jump box, clamped, or restore it. */
+  function commitPageInput() {
+    const n = parseInt(pageInput, 10)
+    if (Number.isFinite(n)) goToPage(Math.min(Math.max(n, 1), pageCount))
+    else setPageInput(String(page))
+  }
+
   function goToPage(n: number) {
     const next = Math.min(Math.max(1, n), pageCount)
     setPage(next)
+    setPageInput(String(next))
     listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
@@ -803,6 +821,69 @@ export default function CustomerListPage() {
 
   const activeFilterCount = panelFilterCount + quickFilterCount
 
+  /**
+   * Every narrowing currently in force, named, each with its own dismiss.
+   *
+   * Nineteen filters live across three surfaces — the Filters panel, the
+   * Common Filters sidebar and the Tag dropdown — and the only report of them
+   * was a count: "23 of 412 records · 2 filters". Finding out which two meant
+   * opening two panels and hunting for the selects that didn't say "All".
+   * It also swallowed the ?state= hand-off from /heatmap: you arrived at a
+   * list narrowed to one state with nothing on screen naming it.
+   *
+   * Built from the same panelShows* flags the counts use, so a chip can't
+   * appear for a control this category doesn't render.
+   */
+  const activeFilters = useMemo(() => {
+    const out: { id: string; label: string; value: string; clear: () => void }[] = []
+    const add = (id: string, label: string, value: string, clear: () => void) => {
+      if (value) out.push({ id, label, value, clear })
+    }
+    add('search', 'Search', debouncedSearch.trim(), () => setSearch(''))
+    add('tag', 'Tag', tagFilter ? `#${tagFilter}` : '', () => setTagFilter(null))
+
+    // Filters panel
+    if (panelShowsSalesman)   add('salesman', labels.salesman ?? 'Salesman', filterSalesman, () => setFilterSalesman(''))
+    add('state', 'State', filterState, () => setFilterState(''))
+    add('source', 'Source', filterLeadSource, () => setFilterLeadSource(''))
+    add('product', 'Product', filterProduct, () => setFilterProduct(''))
+    if (panelShowsCallback)   add('callback', 'Called', filterCallback === 'yes' ? 'Yes' : filterCallback === 'no' ? 'No' : '', () => setFilterCallback(''))
+    add('from', 'Created from', filterDateFrom, () => setFilterDateFrom(''))
+    add('to', 'Created to', filterDateTo, () => setFilterDateTo(''))
+    if (panelShowsAmount) {
+      add('min', 'Min amount', filterAmtMin && `$${Number(filterAmtMin).toLocaleString()}`, () => setFilterAmtMin(''))
+      add('max', 'Max amount', filterAmtMax && `$${Number(filterAmtMax).toLocaleString()}`, () => setFilterAmtMax(''))
+    }
+
+    // Common Filters sidebar
+    add('status', 'Status', filterLeadStatus, () => setFilterLeadStatus(''))
+    add('quality', 'Quality', filterQuality === 'hot' ? `Hot (score ${SCORE_BANDS[0].min}+)` : filterQuality === 'stale' ? 'Stale (open 30+ days)' : '', () => setFilterQuality(''))
+    add('assignment', 'Assigned', filterAssignment === 'mine' ? 'Me' : filterAssignment === 'unassigned' ? 'Nobody' : '', () => setFilterAssignment(''))
+    add('health', 'Health', filterHealth, () => setFilterHealth(''))
+    add('payment', 'Payment', filterPaymentStatus, () => setFilterPaymentStatus(''))
+    // `salesman` doubles as a Yes/No flag, and it means a different thing on
+    // each of the two routes that use it.
+    add(
+      'flag',
+      cat === 'Vendor' ? 'Callback' : 'Salesperson',
+      filterSalesmanFlag === 'yes' ? 'Yes' : filterSalesmanFlag === 'no' ? 'No' : '',
+      () => setFilterSalesmanFlag(''),
+    )
+    add('profession', 'Profession', filterProfession, () => setFilterProfession(''))
+    add('rating', 'Rating', filterRating, () => setFilterRating(''))
+    add('manager', 'Manager', filterManager, () => setFilterManager(''))
+    add('employment', 'Employment', filterEmployeeStatus, () => setFilterEmployeeStatus(''))
+    return out
+  }, [
+    debouncedSearch, tagFilter, cat, labels.salesman,
+    panelShowsSalesman, panelShowsCallback, panelShowsAmount,
+    filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
+    filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+    filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
+    filterSalesmanFlag, filterProfession, filterRating, filterManager, filterEmployeeStatus,
+  ])
+
+
   // The tag has its own control and was counted by neither, so a tag-only
   // filter left the record line silent about why the list had shrunk — and sent
   // a zero-result list to the "No customers yet · Add the first one →" empty
@@ -903,7 +984,7 @@ export default function CustomerListPage() {
       healthReady, healthFor])
 
   // Reset to page 1 whenever anything changes the filtered set
-  useEffect(() => { setPage(1) }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
+  useEffect(() => { setPage(1); setPageInput('1') }, [debouncedSearch, cat, showInactive, tagFilter, sortField, sortDir,
     filterSalesman, filterState, filterLeadSource, filterProduct, filterCallback,
     filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
     filterLeadStatus, filterQuality, filterAssignment, filterHealth, filterPaymentStatus,
@@ -917,6 +998,13 @@ export default function CustomerListPage() {
   // Bulk selection derived values (must come after filtered/paginated)
   const allFilteredIds  = useMemo(() => new Set(filtered.map(c => c.id)), [filtered])
   const allPageSelected = paginated.length > 0 && paginated.every(c => selectedIds.has(c.id))
+  /** Selected records the current page doesn't show. */
+  const offPageSelected = useMemo(() => {
+    const onPage = new Set(paginated.map(c => c.id))
+    let n = 0
+    for (const id of selectedIds) if (!onPage.has(id)) n++
+    return n
+  }, [paginated, selectedIds])
   const someSelected    = selectedIds.size > 0
 
   // Keep the selection inside the visible set. The clear-on-change effect above
@@ -1033,8 +1121,13 @@ export default function CustomerListPage() {
     }
   }
 
+  // The page width and the two sidebar wrappers were ternaries on a flag
+  // that OR'd together all four members of CustomerCategory, so it was
+  // unconditionally true: the max-w-3xl fallback and the two empty
+  // branches could never run. Harmless, but they read as "this page has
+  // a narrow mode" to whoever adds the next category.
   return (
-    <div className={hasQuickFilterSidebar ? 'max-w-5xl mx-auto px-4 py-6' : 'max-w-3xl mx-auto px-4 py-6'}>
+    <div className="max-w-5xl mx-auto px-4 py-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
         <h1 className="text-2xl font-bold text-white">{CATEGORY_LABELS[cat]}</h1>
@@ -1066,8 +1159,12 @@ export default function CustomerListPage() {
               />
               <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${sortOpen ? 'rotate-180' : ''}`} />
             </button>
+            {/* min-w-full: the trigger reports the current sort, so it is
+                routinely wider than the 40 the panel was fixed at, and a
+                dropdown narrower than the button it hangs from reads as
+                misaligned. */}
             {sortOpen && (
-              <div className="absolute right-0 mt-1 w-40 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
+              <div className="absolute right-0 mt-1 w-40 min-w-full bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
                 {sortFieldsFor(cat).map(field => (
                   <button
                     key={field}
@@ -1145,20 +1242,26 @@ export default function CustomerListPage() {
         </div>
       </div>
 
-      {/* Category tabs */}
-      <div className="flex gap-1 mb-4 bg-gray-800/50 p-1 rounded-xl">
+      {/* Category tabs.
+          2×2 below sm. Four flex-1 tabs with no horizontal padding left 84px
+          each on a 390px phone, and "Customers 412" / "Employees 412" need
+          about 98px — so two of the four ran past their own pill, including
+          the active one, which is a filled indigo background. Two rows give
+          each tab 173px and cost one line of height. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 mb-4 bg-gray-800/50 p-1 rounded-xl">
         {CATEGORY_ORDER.map(c => (
           <Link
             key={c}
             to={`/${c.toLowerCase()}s`}
-            className={`flex-1 text-center text-sm font-medium py-1.5 rounded-lg transition-colors ${
+            className={`min-w-0 text-center text-sm font-medium px-2 py-1.5 rounded-lg transition-colors
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${
               cat === c
                 ? 'bg-indigo-600 text-white'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            <span className="flex items-center justify-center gap-1.5">
-              {CATEGORY_LABELS[c]}
+            <span className="flex items-center justify-center gap-1.5 min-w-0">
+              <span className="truncate">{CATEGORY_LABELS[c]}</span>
               {/* No opacity. These were the faintest text on the page — the
                   inactive counts measured 2.72:1 dark / 2.59:1 light against
                   their own tab, while the label beside them sits at 7.00:1, and
@@ -1473,6 +1576,38 @@ export default function CustomerListPage() {
         </div>
       )}
 
+      {/* Names what is narrowing the list, and lets each one go individually.
+          The record line beneath still carries the counts; this carries the
+          reasons. */}
+      {activeFilters.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {activeFilters.map(f => (
+            <button
+              key={f.id}
+              onClick={f.clear}
+              aria-label={`Remove filter ${f.label} ${f.value}`}
+              className="group inline-flex items-center gap-1.5 pl-2 pr-1.5 py-1 rounded-lg text-xs
+                         bg-indigo-600/20 border border-indigo-500/50 text-indigo-200
+                         hover:bg-indigo-600/30 hover:border-indigo-400 transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              <span className="text-indigo-300/80">{f.label}</span>
+              <span className="font-medium max-w-[10rem] truncate">{f.value}</span>
+              <Icon d={ICONS.close} className="w-3 h-3 shrink-0 text-indigo-300 group-hover:text-white" />
+            </button>
+          ))}
+          {activeFilters.length > 1 && (
+            <button
+              onClick={clearAllFilters}
+              className="text-xs text-gray-300 hover:text-gray-100 px-2 py-1 rounded-lg transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3 text-red-300 text-sm mb-4">
           {error}
@@ -1495,6 +1630,17 @@ export default function CustomerListPage() {
             <Icon d={ICONS.close} className="w-4 h-4" />
           </button>
           <span className="text-sm font-medium text-white">{selectedIds.size} selected</span>
+          {/* Selection isn't cleared when you page, which is the right
+              behaviour and was invisible: select five on page 1, page on,
+              select three more, and the bar read "8 selected" while five of
+              them were somewhere you couldn't see — and Deactivate acted on
+              all eight. The two scopes are also easy to confuse, the header
+              checkbox saying "Select page" and this saying "Select all". */}
+          {offPageSelected > 0 && (
+            <span className="text-xs text-amber-300">
+              incl. {offPageSelected} not on this page
+            </span>
+          )}
           {selectedIds.size < allFilteredIds.size && (
             <button onClick={selectAll} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
               Select all {filtered.length}
@@ -1615,13 +1761,16 @@ export default function CustomerListPage() {
           caps at max-w-5xl (1024px), so below lg the 208px sidebar was just
           eating the record list. Stacked, the filters sit above the list
           (order-first) rather than below 50 rows of records. */}
-      <div className={hasQuickFilterSidebar ? 'flex flex-col lg:flex-row gap-4 lg:items-start' : ''}>
-      <div className={hasQuickFilterSidebar ? 'flex-1 min-w-0' : ''}>
+      <div className="flex flex-col lg:flex-row gap-4 lg:items-start">
+      <div className="flex-1 min-w-0">
       <div ref={listTopRef} className="card divide-y divide-gray-700/50">
         {/* Header strip. No longer gated on canBulkAction — it carries the
-            column legend now, which every role needs, not just the checkbox. */}
+            column legend now, which every role needs, not just the checkbox.
+            bg-gray-900, not bg-gray-800/30: 50% of a colour over itself is
+            that colour, so at 1.000:1 nothing separated this strip from the
+            first record but its border. */}
         {!listLoading && filtered.length > 0 && (
-          <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
+          <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700/50 bg-gray-900">
             {perms.canBulkAction ? (
               <>
                 {/* id + htmlFor: this was a bare checkbox with its label in a
@@ -1642,7 +1791,10 @@ export default function CustomerListPage() {
               <span className="text-xs text-gray-400">Name</span>
             )}
             <div className="flex-1" />
-            <span className="hidden sm:block text-xs text-gray-400">{CLUSTER_LEGEND[cat]}</span>
+            {/* Was hidden below sm — the one width where the amount / score /
+                health cluster is hardest to read, because the row has the
+                least space to label anything. */}
+            <span className="text-xs text-gray-400 text-right truncate">{CLUSTER_LEGEND[cat]}</span>
           </div>
         )}
         {listLoading ? (
@@ -1720,16 +1872,19 @@ export default function CustomerListPage() {
             </div>
             <div className="flex items-center gap-1.5 text-xs text-gray-400">
               <label htmlFor="page-jump" className="sr-only">Jump to page</label>
+              {/* Committed on every keystroke, so typing "12" navigated to
+                  page 1 first and re-rendered fifty rows on the way. Enter or
+                  blur now, with the field free to hold an intermediate value
+                  in between. */}
               <input
                 id="page-jump"
                 type="number"
                 min={1}
                 max={pageCount}
-                value={page}
-                onChange={e => {
-                  const n = parseInt(e.target.value, 10)
-                  if (Number.isFinite(n)) goToPage(n)
-                }}
+                value={pageInput}
+                onChange={e => setPageInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitPageInput() }}
+                onBlur={commitPageInput}
                 className="input-field w-14 text-xs py-1 text-center tabular-nums"
               />
               <span className="tabular-nums whitespace-nowrap">of {pageCount}</span>
@@ -2627,6 +2782,29 @@ function BulkEmailModal({
   const [step, setStep] = useState<'compose' | 'review'>('compose')
   const titleId = 'bulk-email-title'
   const { subject, body } = draft
+  const subjectRef = useRef<HTMLInputElement>(null)
+  const bodyRef    = useRef<HTMLTextAreaElement>(null)
+  /** Which field a tag button should write into — whichever was last focused. */
+  const [tagTarget, setTagTarget] = useState<'subject' | 'body'>('body')
+
+  /**
+   * Insert a merge tag at the cursor.
+   *
+   * They were inert text you had to retype by hand, and a typo is only
+   * discovered in a customer's inbox. Same behaviour as the /blast composer.
+   */
+  function insertTag(tag: string) {
+    const el = tagTarget === 'subject' ? subjectRef.current : bodyRef.current
+    const current = tagTarget === 'subject' ? subject : body
+    const start = el?.selectionStart ?? current.length
+    const end   = el?.selectionEnd   ?? current.length
+    const next  = current.slice(0, start) + tag + current.slice(end)
+    onDraftChange(tagTarget === 'subject' ? { subject: next, body } : { subject, body: next })
+    requestAnimationFrame(() => {
+      el?.focus()
+      el?.setSelectionRange(start + tag.length, start + tag.length)
+    })
+  }
 
   const ready = subject.trim() !== '' && body.trim() !== '' && emailCount > 0
   const overCap = emailCount > MAX_EMAIL_RECIPIENTS
@@ -2703,9 +2881,11 @@ function BulkEmailModal({
               <label htmlFor="bulk-subject" className="block text-xs text-gray-400 mb-1.5">Subject</label>
               <input
                 id="bulk-subject"
+                ref={subjectRef}
                 type="text"
                 autoFocus
                 value={subject}
+                onFocus={() => setTagTarget('subject')}
                 onChange={e => onDraftChange({ subject: e.target.value, body })}
                 required
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
@@ -2717,19 +2897,36 @@ function BulkEmailModal({
               <label htmlFor="bulk-body" className="block text-xs text-gray-400 mb-1.5">Body</label>
               <textarea
                 id="bulk-body"
+                ref={bodyRef}
                 value={body}
+                onFocus={() => setTagTarget('body')}
                 onChange={e => onDraftChange({ subject, body: e.target.value })}
                 required
                 rows={7}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400 resize-none"
                 placeholder="Write your message…"
               />
-              <p className="text-xs text-gray-400 mt-1">
-                Merge tags:{' '}
+              {/* Buttons, not prose. The hint was inert text at the same
+                  colour as its own label, so the tags neither stood out from
+                  "Merge tags:" nor did anything. */}
+              <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                <span className="text-xs text-gray-400">
+                  Insert into {tagTarget === 'subject' ? 'subject' : 'body'}:
+                </span>
                 {MERGE_TAGS.map(t => (
-                  <code key={t} className="font-mono text-indigo-300 mr-1.5">{`{${t}}`}</code>
+                  <button
+                    key={t}
+                    type="button"
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => insertTag(`{${t}}`)}
+                    className="px-1.5 py-0.5 rounded text-xs font-mono bg-gray-800 border border-gray-700
+                               text-indigo-300 hover:border-indigo-500 hover:text-indigo-200 transition-colors
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    {`{${t}}`}
+                  </button>
                 ))}
-              </p>
+              </div>
             </div>
 
             <div className="flex gap-3 pt-1">
