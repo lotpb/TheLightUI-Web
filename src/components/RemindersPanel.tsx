@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Notification, NotifType, NotificationSupport, RecentActivity } from '../hooks/useReminders'
 import type { AppNotification } from '../models/notification'
+import DonutChart, { DonutLegend, type DonutSlice } from './DonutChart'
 
 interface Props {
   notifications: Notification[]
@@ -57,6 +58,42 @@ const URGENCY_GROUPS: Array<{ key: Notification['urgency']; label: string; label
   { key: 'soon',     label: 'This Week', labelColor: 'text-gray-400' },
 ]
 
+/** Beyond this the legend stops being matchable to the arcs at 320px wide. */
+const MAX_SLICES = 5
+
+const URGENCY_SHORT: Record<Notification['urgency'], string> = {
+  overdue: 'Overdue', today: 'Today', tomorrow: 'Tomorrow', soon: 'This week',
+}
+
+/** Activity notification types are free strings written by Cloud Functions. */
+function humanise(type: string): string {
+  const t = type.replace(/[_-]+/g, ' ').trim()
+  return t ? t[0].toUpperCase() + t.slice(1).toLowerCase() : 'Other'
+}
+
+/**
+ * Counts by key, largest first, with the tail folded into "Other".
+ *
+ * The activity feed's `type` is an open set, so without a cap a company with
+ * nine notification kinds would get nine arcs in a 108px donut and a legend
+ * nobody can match to them.
+ */
+function toSlices(counts: Map<string, number>, label: (k: string) => string): DonutSlice[] {
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  const head = sorted.slice(0, MAX_SLICES)
+  const tail = sorted.slice(MAX_SLICES)
+  const slices: DonutSlice[] = head.map(([k, v], i) => ({ key: k, label: label(k), value: v, tone: i }))
+  if (tail.length > 0) {
+    slices.push({
+      key: '__other',
+      label: `Other (${tail.length})`,
+      value: tail.reduce((s, [, v]) => s + v, 0),
+      tone: MAX_SLICES,
+    })
+  }
+  return slices
+}
+
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
 export default function RemindersPanel({
@@ -70,6 +107,8 @@ export default function RemindersPanel({
   }, [onClose])
 
   const [tab, setTab] = useState<'reminders' | 'activity'>('reminders')
+  /** Two cuts of the same reminders, rather than two cramped donuts. */
+  const [breakdown, setBreakdown] = useState<'urgency' | 'type'>('urgency')
 
   const grouped = URGENCY_GROUPS.map(g => ({
     ...g,
@@ -83,6 +122,27 @@ export default function RemindersPanel({
   )
   const hasAny = notifications.length > 0
   const unreadCount = appNotifications.filter(n => !n.read).length
+
+  // Fixed order, so a slice keeps its colour as counts change — Overdue is
+  // always red and Follow-up always amber, however many of each there are.
+  const urgencySlices: DonutSlice[] = URGENCY_GROUPS.map((g, i) => ({
+    key: g.key,
+    label: URGENCY_SHORT[g.key],
+    value: notifications.filter(n => n.urgency === g.key).length,
+    tone: i,
+  }))
+  const typeSlices: DonutSlice[] = (Object.keys(TYPE_META) as NotifType[]).map((t, i) => ({
+    key: t,
+    label: TYPE_META[t].label,
+    value: byType[t],
+    tone: i,
+  }))
+  const reminderSlices = breakdown === 'urgency' ? urgencySlices : typeSlices
+
+  const activitySlices = toSlices(
+    appNotifications.reduce((m, n) => m.set(n.type, (m.get(n.type) ?? 0) + 1), new Map<string, number>()),
+    humanise,
+  )
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -135,6 +195,20 @@ export default function RemindersPanel({
                 </button>
               )}
             </div>
+            {/* The feed answers "what happened"; the donut answers "what kind
+                of thing keeps happening", which a reverse-chronological list
+                can't show at all. */}
+            {appNotifications.length > 0 && (
+              <div className="flex items-center gap-3 px-3 py-3 border-b border-gray-800/60">
+                <DonutChart
+                  slices={activitySlices}
+                  palette="category"
+                  centerValue={String(appNotifications.length)}
+                  centerLabel="events"
+                />
+                <DonutLegend slices={activitySlices} palette="category" />
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto">
               {appNotifications.length === 0 ? (
                 <p className="p-6 text-sm text-gray-500 text-center">No notifications yet</p>
@@ -163,19 +237,37 @@ export default function RemindersPanel({
           </>
         ) : (
         <>
-        {/* Type summary strip */}
+        {/* Was a flat strip of "3 Follow-ups" pills: the counts without the
+            proportions, and only ever by type. The donut carries the same
+            numbers in its legend and adds the split the pills couldn't show,
+            with a toggle so the other cut isn't a second cramped chart. */}
         {hasAny && (
-          <div className="flex gap-2 px-3 py-2 border-b border-gray-800/60 flex-wrap">
-            {(Object.entries(byType) as [NotifType, number][])
-              .filter(([, count]) => count > 0)
-              .map(([type, count]) => {
-                const m = TYPE_META[type]
-                return (
-                  <span key={type} className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${m.bg} ${m.text} font-medium`}>
-                    {m.icon} {count} {m.label}{count !== 1 ? 's' : ''}
-                  </span>
-                )
-              })}
+          <div className="px-3 py-3 border-b border-gray-800/60">
+            <div role="group" aria-label="Break down by" className="flex rounded-lg overflow-hidden border border-gray-700 text-xs mb-3">
+              {([['urgency', 'By urgency'], ['type', 'By type']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={breakdown === key}
+                  onClick={() => setBreakdown(key)}
+                  className={`flex-1 py-1 font-medium transition-colors
+                              focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${
+                    breakdown === key ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <DonutChart
+                slices={reminderSlices}
+                palette={breakdown === 'urgency' ? 'urgency' : 'type'}
+                centerValue={String(notifications.length)}
+                centerLabel="due"
+              />
+              <DonutLegend slices={reminderSlices} palette={breakdown === 'urgency' ? 'urgency' : 'type'} />
+            </div>
           </div>
         )}
 
