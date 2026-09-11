@@ -409,7 +409,7 @@ export default function SettingsPage() {
    */
   const listsDirty = useMemo(() => {
     if (!loaded) return false
-    const listChanged = LIST_KEYS.some(k => local[k].join(' ') !== (lists[k] ?? []).join(' '))
+    const listChanged = LIST_KEYS.some(k => local[k].join('\u0000') !== (lists[k] ?? []).join('\u0000'))
     const labelChanged = LIST_KEYS.some(
       k => (localLabels[k as keyof PickerLabels] ?? '') !== (storedLabels[k as keyof PickerLabels] ?? '')
     )

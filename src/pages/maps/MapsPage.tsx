@@ -37,6 +37,14 @@ const MODES: { key: TravelMode; label: string }[] = [
 
 const FALLBACK_CENTER = { lat: 26.35, lng: -80.1 }
 
+/**
+ * The panel was always on screen — 320px on desktop, 45vh on a phone, with no
+ * way to dismiss it. On a phone that is most of the screen gone before the map
+ * starts, which is the wrong trade when you are following a route. Remembered,
+ * because someone who wants the map full-bleed wants it that way next time.
+ */
+const PANEL_KEY = 'thelight.mapsPanel'
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function MapsPage() {
@@ -65,6 +73,14 @@ export default function MapsPage() {
   const [travelMode, setTravelMode] = useState<TravelMode>('DRIVING')
   const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const [pendingFence, setPendingFence] = useState<{ lat: number; lng: number } | null>(null)
+  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== 'false')
+
+  const togglePanel = useCallback(() => {
+    setPanelOpen(open => {
+      localStorage.setItem(PANEL_KEY, String(!open))
+      return !open
+    })
+  }, [])
 
   const { favorites, geofences, geofenceAlerts, geofenceStates,
     setBuiltInAddress, addCustomFavorite, removeCustomFavorite,
@@ -122,11 +138,18 @@ export default function MapsPage() {
   const mapOptions = useMemo<google.maps.MapOptions>(() => ({
     disableDefaultUI: false,
     zoomControl: true,
+    // Google puts zoom at the bottom right by default, which is where the
+    // Recenter button lives. Optional-chained because this memo also runs on
+    // the renders before the SDK has loaded; if it's undefined Google keeps
+    // its default, and `isLoaded` brings us back here once it isn't.
+    zoomControlOptions: window.google?.maps?.ControlPosition
+      ? { position: window.google.maps.ControlPosition.RIGHT_TOP }
+      : undefined,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
     styles: light ? [] : darkMapStyles,
-  }), [light])
+  }), [light, isLoaded])
 
   const calculateRoute = useCallback(async (address: string, mode: TravelMode) => {
     if (!position) { setRouteError('Waiting for your location…'); return }
@@ -195,8 +218,8 @@ export default function MapsPage() {
   return (
     <div className="flex flex-col md:flex-row h-full overflow-hidden">
       {/* ── Side panel ── */}
-      <div className="w-full md:w-80 shrink-0 flex flex-col bg-gray-900 border-r border-gray-800 z-10
-                      md:h-full h-[45vh] overflow-hidden">
+      <div className={`w-full md:w-80 shrink-0 flex-col bg-gray-900 border-r border-gray-800 z-10
+                       md:h-full h-[45vh] overflow-hidden ${panelOpen ? 'flex' : 'hidden'}`}>
         <div className="p-3 border-b border-gray-800 space-y-2">
           <div className="flex gap-2">
             <label htmlFor="map-destination" className="sr-only">Destination address</label>
@@ -390,6 +413,31 @@ export default function MapsPage() {
             />
           ))}
         </GoogleMap>
+
+        {/* On the map rather than on the panel's edge: the panel is
+            overflow-hidden, so an edge tab would be clipped, and a control
+            that moves when you press it is hard to press twice. */}
+        <button
+          onClick={togglePanel}
+          aria-label={panelOpen ? 'Hide the side panel' : 'Show the side panel'}
+          aria-expanded={panelOpen}
+          className="absolute top-3 left-3 h-9 pl-2 pr-3 rounded-full shadow-lg backdrop-blur-sm
+                     flex items-center gap-1.5 border border-gray-700 bg-gray-900/85 text-gray-200
+                     hover:text-white transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
+          {/* The panel is to the left on desktop and above on a phone, so the
+              chevron has to point differently at each breakpoint. */}
+          <Icon
+            d={ICONS.chevronLeft}
+            className={`w-4 h-4 hidden md:block transition-transform ${panelOpen ? '' : 'rotate-180'}`}
+          />
+          <Icon
+            d={ICONS.chevronDown}
+            className={`w-4 h-4 md:hidden transition-transform ${panelOpen ? 'rotate-180' : ''}`}
+          />
+          <span className="text-xs font-medium">{panelOpen ? 'Hide' : 'Panel'}</span>
+        </button>
 
         {position && (
           <button
