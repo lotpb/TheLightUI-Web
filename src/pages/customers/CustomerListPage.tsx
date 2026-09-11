@@ -18,6 +18,7 @@ import { tagColor } from '../../utils/tagColor'
 import { leadStatusColor, LEAD_STATUS_OPTIONS, isCanonicalLeadStatus } from '../../utils/leadStatusColor'
 import { dealAgeDays, dealAgeClasses } from '../../utils/dealLength'
 import { scoreLead, scoreBreakdown, SCORE_BANDS, scoreBandRange } from '../../utils/leadScore'
+import { mergeTags, unknownTags, MERGE_TAGS } from '../../utils/mergeTags'
 import { calculateHealthScore, healthBreakdown, HEALTH_BANDS, healthBandRange, type CustomerHealth, type HealthLabel } from '../../utils/customerHealth'
 import { useSharedInvoices, useSharedServicePlans } from '../../hooks/useSharedCollections'
 import CSVImportModal from '../../components/CSVImportModal'
@@ -283,6 +284,10 @@ export default function CustomerListPage() {
     () => localStorage.getItem('thelight.showInactive') === 'true'
   )
   const [importing, setImporting] = useState(false)
+  // On the page, not in the modal: Escape and Cancel close the dialog, and a
+  // draft that evaporates on a stray keypress is its own reason not to use a
+  // confirmation step. Reopening restores what was typed.
+  const [emailDraft, setEmailDraft] = useState({ subject: '', body: '' })
   const [csvImportOpen, setCsvImportOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
@@ -2023,18 +2028,25 @@ export default function CustomerListPage() {
           }}
         />
       )}
-      {emailModalOpen && (
-        <BulkEmailModal
-          recipientCount={selectedIds.size}
-          emailCount={filtered.filter(c => selectedIds.has(c.id) && c.email?.includes('@')).length}
-          working={bulkWorking}
-          onSend={(subject, body) => {
-            setEmailModalOpen(false)
-            handleBulkEmail(subject, body)
-          }}
-          onClose={() => setEmailModalOpen(false)}
-        />
-      )}
+      {emailModalOpen && (() => {
+        const withEmail = filtered.filter(c => selectedIds.has(c.id) && c.email?.includes('@'))
+        return (
+          <BulkEmailModal
+            recipientCount={selectedIds.size}
+            emailCount={withEmail.length}
+            sample={withEmail[0] ?? null}
+            draft={emailDraft}
+            onDraftChange={setEmailDraft}
+            working={bulkWorking}
+            onSend={(subject, body) => {
+              setEmailModalOpen(false)
+              setEmailDraft({ subject: '', body: '' })
+              handleBulkEmail(subject, body)
+            }}
+            onClose={() => setEmailModalOpen(false)}
+          />
+        )
+      })()}
 
       {/* Bulk deactivate confirmation. This hides every selected record from
           the list, and "Select all" sits one button away, so the selection can
@@ -2575,33 +2587,92 @@ function SkeletonRow({ cat }: { cat: CustomerCategory }) {
   )
 }
 
+/** The server rejects anything above this; the review step says so first. */
+const MAX_EMAIL_RECIPIENTS = 500
+
+/**
+ * Compose, then review, then send.
+ *
+ * This fires `bulkSendEmail`, which puts real mail in real customers'
+ * inboxes, and it had no confirmation step at all — one press of a button
+ * labelled "Send to 412 recipients" and it was done. The Deactivate button
+ * eight pixels away, which is reversible and internal, opens a ConfirmModal.
+ *
+ * The subject also opened prefilled with `'Hi {first}, a message for you'` —
+ * a real value, not a placeholder — so `required` was already satisfied and
+ * you could send that to the whole list without ever touching the field. It
+ * starts empty now, and the review step shows exactly what one recipient
+ * will receive, with the merge tags resolved.
+ */
 function BulkEmailModal({
   recipientCount,
   emailCount,
+  sample,
+  draft,
+  onDraftChange,
   working,
   onSend,
   onClose,
 }: {
   recipientCount: number
   emailCount: number
+  /** The first selected record with an email — whose message we preview. */
+  sample: CustomerItem | null
+  draft: { subject: string; body: string }
+  onDraftChange: (draft: { subject: string; body: string }) => void
   working: boolean
   onSend: (subject: string, body: string) => void
   onClose: () => void
 }) {
-  const [subject, setSubject] = useState('Hi {first}, a message for you')
-  const [body, setBody]       = useState('')
+  const [step, setStep] = useState<'compose' | 'review'>('compose')
+  const titleId = 'bulk-email-title'
+  const { subject, body } = draft
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!subject.trim() || !body.trim()) return
-    onSend(subject, body)
-  }
+  const ready = subject.trim() !== '' && body.trim() !== '' && emailCount > 0
+  const overCap = emailCount > MAX_EMAIL_RECIPIENTS
+  const strays = useMemo(() => unknownTags(`${subject}\n${body}`), [subject, body])
+
+  const fields = sample
+    ? { first: sample.first, lastname: sample.lastname, city: sample.city, salesman: sample.salesman }
+    : {}
+  const previewSubject = mergeTags(subject, fields)
+  const previewBody    = mergeTags(body, fields)
+
+  // Escape and the backdrop step back from review rather than discarding the
+  // draft, and the draft lives on the page, so closing and reopening keeps it.
+  const dismiss = useCallback(() => {
+    if (step === 'review') setStep('compose')
+    else onClose()
+  }, [step, onClose])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') dismiss() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [dismiss])
+
+  // Return focus to whatever opened the dialog.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    return () => opener?.focus?.()
+  }, [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={dismiss} />
+      {/* Was a plain div: no role, no aria-modal, no Escape, no autofocus —
+          the only modal in the app that wasn't a dialog, on the most
+          consequential surface in the page. */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative w-full max-w-lg bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl animate-slide-up"
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700/60">
-          <h2 className="text-base font-semibold text-white">Send Email</h2>
+          <h2 id={titleId} className="text-base font-semibold text-white">
+            {step === 'compose' ? 'Send email' : 'Review before sending'}
+          </h2>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -2612,63 +2683,146 @@ function BulkEmailModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* Recipient summary */}
-          <div className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
-            emailCount === 0
-              ? 'bg-red-900/30 border border-red-700/50 text-red-300'
-              : 'bg-indigo-900/30 border border-indigo-700/50 text-indigo-300'
-          }`}>
-            <Icon d={ICONS.envelope} className="w-4 h-4 shrink-0" />
-            {emailCount === 0
-              ? `None of the ${recipientCount} selected records have an email address.`
-              : `${emailCount} of ${recipientCount} selected record${recipientCount !== 1 ? 's' : ''} have an email address.`}
-          </div>
+        {step === 'compose' ? (
+          <form
+            onSubmit={e => { e.preventDefault(); if (ready) setStep('review') }}
+            className="p-6 space-y-4"
+          >
+            <div className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+              emailCount === 0
+                ? 'bg-red-900/30 border border-red-700/50 text-red-300'
+                : 'bg-indigo-900/30 border border-indigo-700/50 text-indigo-300'
+            }`}>
+              <Icon d={ICONS.envelope} className="w-4 h-4 shrink-0" />
+              {emailCount === 0
+                ? `None of the ${recipientCount} selected records have an email address.`
+                : `${emailCount} of ${recipientCount} selected record${recipientCount !== 1 ? 's' : ''} have an email address.`}
+            </div>
 
-          <div>
-            <label className="block text-xs text-gray-400 mb-1.5">Subject</label>
-            <input
-              type="text"
-              value={subject}
-              onChange={e => setSubject(e.target.value)}
-              required
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
-              placeholder="Email subject…"
-            />
-          </div>
+            <div>
+              <label htmlFor="bulk-subject" className="block text-xs text-gray-400 mb-1.5">Subject</label>
+              <input
+                id="bulk-subject"
+                type="text"
+                autoFocus
+                value={subject}
+                onChange={e => onDraftChange({ subject: e.target.value, body })}
+                required
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400"
+                placeholder="Hi {first}, a message for you"
+              />
+            </div>
 
-          <div>
-            <label className="block text-xs text-gray-400 mb-1.5">Body</label>
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              required
-              rows={7}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400 resize-none"
-              placeholder="Write your message…"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Merge tags: <span className="text-gray-400 font-mono">{'{first}'}</span> <span className="text-gray-400 font-mono">{'{lastname}'}</span> <span className="text-gray-400 font-mono">{'{city}'}</span> <span className="text-gray-400 font-mono">{'{salesman}'}</span>
-            </p>
-          </div>
+            <div>
+              <label htmlFor="bulk-body" className="block text-xs text-gray-400 mb-1.5">Body</label>
+              <textarea
+                id="bulk-body"
+                value={body}
+                onChange={e => onDraftChange({ subject, body: e.target.value })}
+                required
+                rows={7}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-indigo-500 placeholder-gray-400 resize-none"
+                placeholder="Write your message…"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Merge tags:{' '}
+                {MERGE_TAGS.map(t => (
+                  <code key={t} className="font-mono text-indigo-300 mr-1.5">{`{${t}}`}</code>
+                ))}
+              </p>
+            </div>
 
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2 rounded-xl border border-gray-700 text-sm text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={working || emailCount === 0 || !subject.trim() || !body.trim()}
-              className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {working ? 'Sending…' : `Send to ${emailCount} recipient${emailCount !== 1 ? 's' : ''}`}
-            </button>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 py-2 rounded-xl border border-gray-700 text-sm text-gray-300 hover:text-gray-100 hover:border-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!ready}
+                className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Review
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="p-6 space-y-4">
+            <div className="px-3 py-2 rounded-lg text-sm bg-amber-900/25 border border-amber-600/40 text-amber-200 flex items-start gap-2">
+              <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                This sends immediately to <strong className="tabular-nums">{emailCount}</strong>{' '}
+                customer{emailCount !== 1 ? 's' : ''} and cannot be recalled.
+                {recipientCount > emailCount && (
+                  <> {recipientCount - emailCount} selected record{recipientCount - emailCount !== 1 ? 's have' : ' has'} no email and will be skipped.</>
+                )}
+              </span>
+            </div>
+
+            {overCap && (
+              <div className="px-3 py-2 rounded-lg text-sm bg-red-900/30 border border-red-700/50 text-red-300 flex items-start gap-2">
+                <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+                {/* The server throws above 500 and the UI never mentioned it,
+                    so a large selection failed only after you pressed Send. */}
+                <span>Maximum {MAX_EMAIL_RECIPIENTS} recipients per send. Narrow the selection and try again.</span>
+              </div>
+            )}
+
+            {strays.length > 0 && (
+              <div className="px-3 py-2 rounded-lg text-sm bg-amber-900/25 border border-amber-600/40 text-amber-200 flex items-start gap-2">
+                <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  {strays.map(t => <code key={t} className="font-mono mr-1">{t}</code>)}
+                  {strays.length === 1 ? 'is not a merge tag' : 'are not merge tags'} and will be sent as written.
+                </span>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs text-gray-400 mb-1.5">
+                {sample
+                  ? <>What {(fullName(sample) || sample.email).trim()} will receive</>
+                  : 'Preview'}
+              </p>
+              <div className="rounded-lg border border-gray-700 bg-gray-800 overflow-hidden">
+                <p className="px-3 py-2 text-sm font-semibold text-gray-100 border-b border-gray-700 break-words">
+                  {previewSubject || <span className="text-gray-400 font-normal">(no subject)</span>}
+                </p>
+                <p className="px-3 py-2 text-sm text-gray-200 whitespace-pre-wrap max-h-48 overflow-y-auto break-words">
+                  {previewBody}
+                </p>
+              </div>
+              {!sample && (
+                <p className="text-xs text-gray-400 mt-1">
+                  No sample record available, so merge tags are shown unresolved.
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setStep('compose')}
+                disabled={working}
+                className="flex-1 py-2 rounded-xl border border-gray-700 text-sm text-gray-300 hover:text-gray-100 hover:border-gray-600 transition-colors disabled:opacity-40"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => onSend(subject, body)}
+                disabled={working || !ready || overCap}
+                className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {working ? 'Sending…' : `Send ${emailCount} email${emailCount !== 1 ? 's' : ''}`}
+              </button>
+            </div>
           </div>
-        </form>
+        )}
       </div>
     </div>
   )
