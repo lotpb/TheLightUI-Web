@@ -19,6 +19,13 @@ export interface MapGeofence {
 // Per-geofence runtime state (not persisted — recomputed from live location)
 export type GeofenceState = 'inside' | 'outside' | 'unknown'
 
+/**
+ * The panel has always told people "Max 20" and nothing enforced it, so the
+ * limit was a claim rather than a rule. Exported so the page can disable
+ * placement at the cap instead of silently dropping the tap.
+ */
+export const MAX_GEOFENCES = 20
+
 interface MapStore {
   favorites: MapFavorite[]
   geofences: MapGeofence[]
@@ -67,6 +74,7 @@ export const useMapStore = create<MapStore>()(
         set(s => ({ favorites: s.favorites.filter(f => f.id !== id) })),
 
       addGeofence: (name, lat, lng, radius) => {
+        if (get().geofences.length >= MAX_GEOFENCES) return
         // Unique name — append number if collision (mirrors GeofenceManager.uniqueIdentifier)
         const existing = new Set(get().geofences.map(g => g.name))
         let finalName = name || `Geofence ${get().geofences.length + 1}`

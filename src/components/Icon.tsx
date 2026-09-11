@@ -86,6 +86,15 @@ export const ICONS = {
   // per-cell border segments, which is absurd at the 16px this renders at.
   tableGrid: 'M3.75 6.75h16.5v10.5H3.75zM3.75 10.5h16.5M3.75 14.25h16.5M9 6.75v10.5M15 6.75v10.5',
   home: 'm2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25',
+  // For /maps, which used 🏠 and 🏢 for its Home and Work favourites and a
+  // fullwidth ＋ for Add — emoji paint their own bitmap and ignore `color`,
+  // so none of them could dim with the row they sit in.
+  briefcase: 'M20.25 14.15v4.075c0 1.313-.938 2.44-2.237 2.629-1.116.163-2.25.288-3.4.376V18.75a.75.75 0 0 0-.75-.75h-3.75a.75.75 0 0 0-.75.75v2.48c-1.15-.088-2.284-.213-3.4-.376A2.663 2.663 0 0 1 3.75 18.225V14.15M20.25 14.15c.51-.31.82-.863.82-1.462V6.75a2.25 2.25 0 0 0-2.25-2.25H5.18a2.25 2.25 0 0 0-2.25 2.25v5.938c0 .599.31 1.152.82 1.462M20.25 14.15A24.3 24.3 0 0 1 12 15.75c-2.9 0-5.702-.508-8.25-1.6M16.5 4.5V3.75a1.5 1.5 0 0 0-1.5-1.5h-6a1.5 1.5 0 0 0-1.5 1.5V4.5',
+  // "Recenter on me" — the control that replaces the map silently snapping
+  // back to your location on every GPS tick.
+  crosshair: 'M12 3v2.25m0 13.5V21M21 12h-2.25M5.25 12H3m15 0a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-3.75 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z',
+  // Hand-off to real turn-by-turn navigation.
+  externalLink: 'M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25',
   // For /chart, which had hand-rolled IconUsers/IconCheck/IconDollar/IconPrint
   // locally rather than import this set, and used a 📊 emoji for its empty
   // state — the same trap the file header describes.
