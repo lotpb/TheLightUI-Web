@@ -36,7 +36,7 @@ export interface DonutSlice {
 
 type Palette = { slices: string[]; empty: string }
 
-const URGENCY_DARK: Palette  = { slices: ['#ff2d55', '#ffe500', '#00e5ff', '#00ff9d'], empty: '#1a7f5e' }
+const URGENCY_DARK: Palette  = { slices: ['#ff2d55', '#ffff00', '#00e5ff', '#00ff9d'], empty: '#1a7f5e' }
 const URGENCY_LIGHT: Palette = { slices: ['#f43f5e', '#b45309', '#0284c7', '#059669'], empty: '#a7f3d0' }
 
 const TYPE_DARK: Palette  = { slices: ['#ffe500', '#c77dff', '#00ff9d', '#ff8a00'], empty: '#1a7f5e' }
