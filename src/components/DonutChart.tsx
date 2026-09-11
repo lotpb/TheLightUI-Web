@@ -36,15 +36,15 @@ export interface DonutSlice {
 
 type Palette = { slices: string[]; empty: string }
 
-const URGENCY_DARK: Palette  = { slices: ['#ff2d55', '#ffe500', '#00e5ff', '#aab8d0'], empty: '#374151' }
-const URGENCY_LIGHT: Palette = { slices: ['#f43f5e', '#b45309', '#0284c7', '#64748b'], empty: '#cbd5e1' }
+const URGENCY_DARK: Palette  = { slices: ['#ff2d55', '#ffe500', '#00e5ff', '#00ff9d'], empty: '#1a7f5e' }
+const URGENCY_LIGHT: Palette = { slices: ['#f43f5e', '#b45309', '#0284c7', '#059669'], empty: '#a7f3d0' }
 
-const TYPE_DARK: Palette  = { slices: ['#ffe500', '#c77dff', '#00ff9d', '#ff8a00'], empty: '#374151' }
-const TYPE_LIGHT: Palette = { slices: ['#b45309', '#8b5cf6', '#0d9488', '#f43f5e'], empty: '#cbd5e1' }
+const TYPE_DARK: Palette  = { slices: ['#ffe500', '#c77dff', '#00ff9d', '#ff8a00'], empty: '#1a7f5e' }
+const TYPE_LIGHT: Palette = { slices: ['#b45309', '#8b5cf6', '#059669', '#f43f5e'], empty: '#a7f3d0' }
 
-/** Five named slices plus a neutral for "Other" — see MAX_SLICES in the panel. */
-const CATEGORY_DARK: Palette  = { slices: ['#7c5cff', '#00ff9d', '#ffe500', '#ff2d55', '#00e5ff', '#aab8d0'], empty: '#374151' }
-const CATEGORY_LIGHT: Palette = { slices: ['#6366f1', '#059669', '#b45309', '#f43f5e', '#0284c7', '#64748b'], empty: '#cbd5e1' }
+/** Five named slices plus one for "Other" — see MAX_SLICES in the panel. */
+const CATEGORY_DARK: Palette  = { slices: ['#7c5cff', '#00ff9d', '#ffe500', '#ff2d55', '#00e5ff', '#ff8a00'], empty: '#1a7f5e' }
+const CATEGORY_LIGHT: Palette = { slices: ['#6366f1', '#059669', '#b45309', '#f43f5e', '#0284c7', '#ea580c'], empty: '#a7f3d0' }
 
 export type DonutPalette = 'urgency' | 'type' | 'category'
 
