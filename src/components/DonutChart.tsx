@@ -12,8 +12,16 @@ import { useIsLightMode } from '../hooks/useIsLightMode'
  * which is #111827 in dark mode and #e8eef5 in light — at or above the 3:1
  * that WCAG 1.4.11 asks of a non-text graphic, with no two slices closer
  * than an RGB distance of 60 so they can be told apart and matched to the
- * legend. One palette can't do both themes: the 400-level hues that read on
- * the dark panel land between 1.43:1 and 2.55:1 on the light one.
+ * legend. One palette can't do both themes: the hues that read on the dark
+ * panel land between 1.43:1 and 2.55:1 on the light one.
+ *
+ * These are the second pass, picked brighter on request. Mean luminance rose
+ * 4.5 to 11 points per palette. The two bars above are what kept it honest:
+ * in light mode the 600-level shades that looked right failed outright
+ * (yellow-600 is 2.52:1 on that panel), so each light slot takes the
+ * brightest shade of its hue that still clears 3:1 — and the brightest
+ * orange that passed sat only 54 from the amber beside it, so Appointment
+ * is a rose there instead.
  */
 
 export interface DonutSlice {
@@ -26,15 +34,15 @@ export interface DonutSlice {
 
 type Palette = { slices: string[]; empty: string }
 
-const URGENCY_DARK: Palette  = { slices: ['#f87171', '#fbbf24', '#60a5fa', '#94a3b8'], empty: '#374151' }
-const URGENCY_LIGHT: Palette = { slices: ['#b91c1c', '#a16207', '#1d4ed8', '#475569'], empty: '#cbd5e1' }
+const URGENCY_DARK: Palette  = { slices: ['#ff5470', '#ffd23f', '#4cc9f0', '#c3cede'], empty: '#374151' }
+const URGENCY_LIGHT: Palette = { slices: ['#f43f5e', '#b45309', '#0284c7', '#64748b'], empty: '#cbd5e1' }
 
-const TYPE_DARK: Palette  = { slices: ['#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185'], empty: '#374151' }
-const TYPE_LIGHT: Palette = { slices: ['#a16207', '#6d28d9', '#0f766e', '#be123c'], empty: '#cbd5e1' }
+const TYPE_DARK: Palette  = { slices: ['#ffd23f', '#b388ff', '#22e5c8', '#ff6b35'], empty: '#374151' }
+const TYPE_LIGHT: Palette = { slices: ['#b45309', '#8b5cf6', '#0d9488', '#f43f5e'], empty: '#cbd5e1' }
 
-/** Five named slices plus a grey for "Other" — see MAX_SLICES in the panel. */
-const CATEGORY_DARK: Palette  = { slices: ['#818cf8', '#34d399', '#fbbf24', '#fb7185', '#7dd3fc', '#94a3b8'], empty: '#374151' }
-const CATEGORY_LIGHT: Palette = { slices: ['#4338ca', '#047857', '#a16207', '#be123c', '#7e22ce', '#475569'], empty: '#cbd5e1' }
+/** Five named slices plus a neutral for "Other" — see MAX_SLICES in the panel. */
+const CATEGORY_DARK: Palette  = { slices: ['#7c8cff', '#2ce69b', '#ffd23f', '#ff5470', '#4cc9f0', '#c3cede'], empty: '#374151' }
+const CATEGORY_LIGHT: Palette = { slices: ['#6366f1', '#059669', '#b45309', '#f43f5e', '#0284c7', '#64748b'], empty: '#cbd5e1' }
 
 export type DonutPalette = 'urgency' | 'type' | 'category'
 
