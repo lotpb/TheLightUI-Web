@@ -15,13 +15,15 @@ import { useIsLightMode } from '../hooks/useIsLightMode'
  * legend. One palette can't do both themes: the hues that read on the dark
  * panel land between 1.43:1 and 2.55:1 on the light one.
  *
- * These are the second pass, picked brighter on request. Mean luminance rose
- * 4.5 to 11 points per palette. The two bars above are what kept it honest:
- * in light mode the 600-level shades that looked right failed outright
- * (yellow-600 is 2.52:1 on that panel), so each light slot takes the
- * brightest shade of its hue that still clears 3:1 — and the brightest
- * orange that passed sat only 54 from the amber beside it, so Appointment
- * is a rose there instead.
+ * Dark mode is deliberately neon — it was picked as the loudest of four
+ * directions offered, over a brand-indigo family, a warm ramp, and simply
+ * reusing useChartTheme's accents. Nothing subtle is intended here.
+ *
+ * Light mode does not follow it there and can't: neon on a near-white panel
+ * is both illegible and unpleasant, and the shades below are already the
+ * brightest of each hue that clears 3:1 — yellow-600 measures 2.52:1 on that
+ * panel, so there is no headroom left. The two themes diverge in character
+ * on purpose.
  */
 
 export interface DonutSlice {
@@ -34,14 +36,14 @@ export interface DonutSlice {
 
 type Palette = { slices: string[]; empty: string }
 
-const URGENCY_DARK: Palette  = { slices: ['#ff5470', '#ffd23f', '#4cc9f0', '#c3cede'], empty: '#374151' }
+const URGENCY_DARK: Palette  = { slices: ['#ff2d55', '#ffe500', '#00e5ff', '#aab8d0'], empty: '#374151' }
 const URGENCY_LIGHT: Palette = { slices: ['#f43f5e', '#b45309', '#0284c7', '#64748b'], empty: '#cbd5e1' }
 
-const TYPE_DARK: Palette  = { slices: ['#ffd23f', '#b388ff', '#22e5c8', '#ff6b35'], empty: '#374151' }
+const TYPE_DARK: Palette  = { slices: ['#ffe500', '#c77dff', '#00ff9d', '#ff8a00'], empty: '#374151' }
 const TYPE_LIGHT: Palette = { slices: ['#b45309', '#8b5cf6', '#0d9488', '#f43f5e'], empty: '#cbd5e1' }
 
 /** Five named slices plus a neutral for "Other" — see MAX_SLICES in the panel. */
-const CATEGORY_DARK: Palette  = { slices: ['#7c8cff', '#2ce69b', '#ffd23f', '#ff5470', '#4cc9f0', '#c3cede'], empty: '#374151' }
+const CATEGORY_DARK: Palette  = { slices: ['#7c5cff', '#00ff9d', '#ffe500', '#ff2d55', '#00e5ff', '#aab8d0'], empty: '#374151' }
 const CATEGORY_LIGHT: Palette = { slices: ['#6366f1', '#059669', '#b45309', '#f43f5e', '#0284c7', '#64748b'], empty: '#cbd5e1' }
 
 export type DonutPalette = 'urgency' | 'type' | 'category'
