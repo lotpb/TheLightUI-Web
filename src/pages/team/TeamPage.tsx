@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { createInvite, subscribeToInvites, type InviteRecord } from '../../services/inviteService'
+import {
+  createInvite, revokeInvite, subscribeToInvites, type InviteRecord,
+  subscribeToEmailInvites, revokeEmailInvite, type EmailInviteRecord,
+} from '../../services/inviteService'
+import { unifyInvites, type UnifiedInvite, type InviteState } from '../../models/invite'
+import ConfirmModal from '../../components/ConfirmModal'
+import { Icon, ICONS } from '../../components/Icon'
+import { useDismissOnOutside } from '../../hooks/useDismissOnOutside'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   subscribeToTeam, setMemberRole, removeTeamMember,
@@ -25,13 +32,17 @@ function lastSeenText(lastSeen: Date | null): string | null {
   return lastSeen.toLocaleDateString()
 }
 
-function onlineBadge(isOnline: boolean) {
-  if (!isOnline) return null
-  return (
-    <span className="px-2 py-0.5 rounded-full text-xs font-semibold border bg-green-500/15 text-green-300 border-green-600/30">
-      Online
-    </span>
-  )
+/**
+ * One presence string, not three signals.
+ *
+ * Each row carried a green dot on the avatar, an "Online" pill under the
+ * email, and a last-seen timestamp on the right — the dot and the pill saying
+ * the same thing twice in a 672px row. The dot stays (it's free, it's on the
+ * avatar) and this replaces the pill and the timestamp with one value.
+ */
+function presenceText(member: { isOnline: boolean; lastSeen: Date | null }): string | null {
+  if (member.isOnline) return 'Online now'
+  return lastSeenText(member.lastSeen)
 }
 
 const ROLES = ['owner', 'admin', 'salesman', 'viewer'] as const
@@ -54,6 +65,23 @@ function roleBadge(role: string | null) {
   )
 }
 
+/** Pending / joined / expired / revoked, told apart at a glance. */
+const INVITE_STATE_CHIP: Record<InviteState, { label: string; classes: string }> = {
+  pending: { label: 'Outstanding', classes: 'bg-indigo-500/20 text-indigo-300 border-indigo-600/30' },
+  joined:  { label: 'Joined',      classes: 'bg-green-500/15 text-green-300 border-green-600/30' },
+  expired: { label: 'Expired',     classes: 'bg-gray-700 text-gray-300 border-gray-600/40' },
+  revoked: { label: 'Revoked',     classes: 'bg-red-500/15 text-red-300 border-red-600/30' },
+}
+
+function InviteStateChip({ state }: { state: InviteState }) {
+  const cfg = INVITE_STATE_CHIP[state]
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border shrink-0 ${cfg.classes}`}>
+      {cfg.label}
+    </span>
+  )
+}
+
 function canManage(myRole: string | null): boolean {
   return myRole === 'owner' || myRole === 'admin'
 }
@@ -67,6 +95,9 @@ function MemberCard({
   onRoleChange,
   onRemove,
   coloredAvatars,
+  menuOpen,
+  onToggleMenu,
+  onCloseMenu,
 }: {
   member: TeamMember
   isMe: boolean
@@ -74,13 +105,22 @@ function MemberCard({
   onRoleChange: (m: TeamMember, role: Role) => void
   onRemove: (m: TeamMember) => void
   coloredAvatars: boolean
+  /** Lifted to the page: `showMenu` was per-card, so every member's menu
+   *  could be open at once, each holding a "Remove from team". */
+  menuOpen: boolean
+  onToggleMenu: () => void
+  onCloseMenu: () => void
 }) {
   const name    = memberDisplayName(member)
   const initials = [member.firstName[0], member.lastName[0]].filter(Boolean).join('').toUpperCase() || name[0]?.toUpperCase() || '?'
   const color   = coloredAvatars ? avatarColor(name) : avatarOriginal()
-  const [showMenu, setShowMenu] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // Was `onBlur` on a non-focusable <div>, which never fires: the menu could
+  // only be closed by pressing the same button again.
+  useDismissOnOutside(menuRef, onCloseMenu, menuOpen)
   const isOwner = member.role === 'owner'
   const manage  = canManage(myRole) && !isMe && !isOwner
+  const presence = presenceText(member)
 
   return (
     <div className="card px-4 py-3 flex items-center gap-3 relative">
@@ -107,40 +147,45 @@ function MemberCard({
           {roleBadge(member.role)}
         </div>
         <p className="text-xs text-gray-400 truncate mt-0.5">{member.email}</p>
-        {onlineBadge(member.isOnline) && (
-          <div className="mt-0.5">{onlineBadge(member.isOnline)}</div>
-        )}
         <Link
           to={`/employees?q=${encodeURIComponent(member.email)}`}
-          className="text-xs text-indigo-400 hover:text-indigo-300 mt-1 inline-block"
+          className="text-xs text-indigo-400 hover:text-indigo-300 mt-1 inline-flex items-center gap-1 rounded
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
-          View Employee Record →
+          Employee record
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
         </Link>
       </div>
 
-      {/* Trailing last-seen */}
-      {lastSeenText(member.lastSeen) && (
-        <span className="text-xs font-medium text-gray-400 shrink-0">
-          {lastSeenText(member.lastSeen)}
+      {/* One presence value, replacing the dot's duplicate "Online" pill. */}
+      {presence && (
+        <span className={`text-xs font-medium shrink-0 ${member.isOnline ? 'text-green-400' : 'text-gray-400'}`}>
+          {presence}
         </span>
       )}
 
       {/* Actions (admin/owner only, not self, not other owners) */}
       {manage && (
-        <div className="relative shrink-0">
+        <div ref={menuRef} className="relative shrink-0">
           <button
-            onClick={() => setShowMenu(o => !o)}
-            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+            onClick={onToggleMenu}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={`Manage ${name}`}
+            /* Was text-gray-500 — 3.04:1 on the card — for the only route to
+               role changes and removal. */
+            className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-gray-700 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             title="Manage member"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
             </svg>
           </button>
-          {showMenu && (
+          {menuOpen && (
             <div
+              role="menu"
               className="absolute right-0 top-8 z-20 bg-gray-800 border border-gray-700 rounded-xl shadow-xl min-w-40 overflow-hidden"
-              onBlur={() => setShowMenu(false)}
             >
               <div className="px-3 py-2 border-b border-gray-700/50">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Set Role</p>
@@ -149,7 +194,8 @@ function MemberCard({
                 <button
                   key={r}
                   className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-700 transition-colors capitalize ${member.role === r ? 'text-indigo-400 font-semibold' : 'text-gray-200'}`}
-                  onClick={() => { onRoleChange(member, r); setShowMenu(false) }}
+                  role="menuitem"
+                  onClick={() => { onRoleChange(member, r); onCloseMenu() }}
                 >
                   {r}
                 </button>
@@ -157,7 +203,8 @@ function MemberCard({
               <div className="border-t border-gray-700/50">
                 <button
                   className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-gray-700 transition-colors"
-                  onClick={() => { onRemove(member); setShowMenu(false) }}
+                  role="menuitem"
+                  onClick={() => { onRemove(member); onCloseMenu() }}
                 >
                   Remove from team
                 </button>
@@ -212,13 +259,10 @@ function AllCompanyMemberRow({
           {roleBadge(badgeRole)}
         </div>
         <p className="text-xs text-gray-400 truncate">{member.email}</p>
-        {onlineBadge(member.isOnline) && (
-          <div className="mt-0.5">{onlineBadge(member.isOnline)}</div>
-        )}
       </div>
-      {lastSeenText(member.lastSeen) && (
-        <span className="text-xs font-medium text-gray-400 shrink-0">
-          {lastSeenText(member.lastSeen)}
+      {presenceText(member) && (
+        <span className={`text-xs font-medium shrink-0 ${member.isOnline ? 'text-green-400' : 'text-gray-400'}`}>
+          {presenceText(member)}
         </span>
       )}
     </div>
@@ -247,7 +291,7 @@ function AllCompanyGroup({
             <span className="px-2 py-0.5 rounded-full text-xs bg-gray-700 text-gray-300">{group.plan}</span>
           )}
         </div>
-        <span className="text-xs text-gray-500 shrink-0">
+        <span className="text-xs text-gray-400 shrink-0">
           {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
         </span>
       </div>
@@ -267,7 +311,7 @@ function AllCompanyGroup({
       )}
 
       {group.members.length === 0 ? (
-        <p className="text-xs text-gray-500">No members</p>
+        <p className="text-xs text-gray-400">No members</p>
       ) : (
         <div className="space-y-1">
           {group.members.map(m => (
@@ -297,8 +341,15 @@ export default function TeamPage() {
   const [confirmRemove, setConfirmRemove] = useState<TeamMember | null>(null)
   const [removing, setRemoving]   = useState(false)
   const [invites, setInvites]     = useState<InviteRecord[]>([])
+  const [emailInvites, setEmailInvites] = useState<EmailInviteRecord[]>([])
   const [showInviteHistory, setShowInviteHistory] = useState(false)
+  const [confirmRevoke, setConfirmRevoke] = useState<UnifiedInvite | null>(null)
+  const [revoking, setRevoking]   = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  /** One open member menu at a time. */
+  const [openMenuUid, setOpenMenuUid] = useState<string | null>(null)
 
+  const isAdmin      = role === 'owner' || role === 'admin'
   const isSuperAdmin = isSuperAdminEmail(user?.email)
   const [showAllCompanies, setShowAllCompanies] = useState(false)
   const [allTeams, setAllTeams]     = useState<AllTeamsResult | null>(null)
@@ -320,18 +371,62 @@ export default function TeamPage() {
     return unsub
   }, [companyId])
 
+  // The other invite path. Reading `invitations` needs the owner/admin rule
+  // added alongside this change; a viewer's listener fails and is ignored.
+  useEffect(() => {
+    if (!isAdmin) return
+    const unsub = subscribeToEmailInvites(setEmailInvites, () => setEmailInvites([]))
+    return unsub
+  }, [companyId, isAdmin])
+
+  const history = useMemo(() => unifyInvites(invites, emailInvites), [invites, emailInvites])
+  const pendingCount = history.filter(h => h.state === 'pending').length
+
+  /**
+   * Creating the invite and copying it are two different operations, and they
+   * shared one try/catch.
+   *
+   * createInvite writes the doc first. If clipboard.writeText then threw —
+   * denied permission, insecure context, Safari outside a user gesture — the
+   * same catch fired a red "Failed to generate link", while the link rendered
+   * in the box underneath it and a live single-use invite sat in Firestore.
+   * The natural response, pressing it again, minted another one.
+   */
   async function handleGenerateLink() {
     setInviting(true)
     setGeneratedLink(null)
+    setCopyFailed(false)
+    let link: string
     try {
-      const link = await createInvite(inviteRole, user?.email ?? '')
-      setGeneratedLink(link)
-      await navigator.clipboard.writeText(link)
-      toast('Invite link copied to clipboard!', 'success')
+      link = await createInvite(inviteRole, user?.email ?? '')
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to generate link', 'error')
-    } finally {
+      toast(err instanceof Error ? err.message : 'Could not create the invite', 'error')
       setInviting(false)
+      return
+    }
+    setGeneratedLink(link)
+    setInviting(false)
+    try {
+      await navigator.clipboard.writeText(link)
+      toast('Invite link copied to clipboard.', 'success')
+    } catch {
+      setCopyFailed(true)
+      toast('Invite created — copy the link below.', 'success')
+    }
+  }
+
+  async function handleRevoke(row: UnifiedInvite) {
+    setRevoking(true)
+    try {
+      const id = row.key.slice(row.key.indexOf(':') + 1)
+      if (row.source === 'link') await revokeInvite(id)
+      else await revokeEmailInvite(id)
+      toast('Invite revoked.', 'success')
+      setConfirmRevoke(null)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Revoke failed', 'error')
+    } finally {
+      setRevoking(false)
     }
   }
 
@@ -371,8 +466,6 @@ export default function TeamPage() {
     }
   }
 
-  const isAdmin = role === 'owner' || role === 'admin'
-
   async function loadAllTeams() {
     if (allLoading) return
     setAllLoading(true)
@@ -393,7 +486,7 @@ export default function TeamPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+    <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -401,7 +494,7 @@ export default function TeamPage() {
           <h1 className="text-2xl font-bold text-white">Team</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {loading ? '…' : `${members.length} member${members.length !== 1 ? 's' : ''}`}
-            {companyId && <span className="text-gray-400 ml-2 font-mono text-xs">· {companyId}</span>}
+            {pendingCount > 0 && ` · ${pendingCount} invite${pendingCount !== 1 ? 's' : ''} outstanding`}
           </p>
         </div>
       </div>
@@ -425,68 +518,107 @@ export default function TeamPage() {
               disabled={inviting}
               className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors whitespace-nowrap"
             >
-              {inviting ? '…' : '🔗 Copy Link'}
+              {/* Was a 🔗 emoji, which can't take the button's colour. */}
+              {inviting
+                ? 'Creating…'
+                : <span className="inline-flex items-center gap-1.5"><Icon d={ICONS.link} className="w-4 h-4" />Copy link</span>}
             </button>
           </div>
           {generatedLink && (
-            <div className="mt-3 flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2">
-              <p className="text-xs text-gray-400 truncate flex-1">{generatedLink}</p>
-              <button
-                onClick={() => { navigator.clipboard.writeText(generatedLink); toast('Copied!', 'success') }}
-                className="text-indigo-400 hover:text-indigo-300 text-xs font-semibold shrink-0"
-              >
-                Copy
-              </button>
+            <div className="mt-3">
+              {copyFailed && (
+                <p className="text-xs text-yellow-300 mb-1.5 flex items-start gap-1.5">
+                  <Icon d={ICONS.warning} className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  The invite exists but this browser blocked the clipboard. Copy it by hand.
+                </p>
+              )}
+              <div className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2">
+                <p className="text-xs text-gray-300 truncate flex-1 font-mono">{generatedLink}</p>
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(generatedLink)
+                      setCopyFailed(false)
+                      toast('Copied.', 'success')
+                    } catch {
+                      setCopyFailed(true)
+                      toast('This browser blocked the clipboard — select the link and copy it.', 'error')
+                    }
+                  }}
+                  className="text-indigo-400 hover:text-indigo-300 text-xs font-semibold shrink-0 rounded px-1 py-0.5
+                             focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  Copy
+                </button>
+              </div>
             </div>
           )}
           <p className="text-xs text-gray-400 mt-2">Generate a link and share it. Valid for 7 days, single use.</p>
         </div>
       )}
 
-      {/* Invite history — who signed up via which link */}
-      {isAdmin && invites.length > 0 && (
+      {/* Both invite paths, with a way to take back the outstanding ones. */}
+      {isAdmin && history.length > 0 && (
         <div className="card p-4">
           <button
             onClick={() => setShowInviteHistory(o => !o)}
-            className="w-full flex items-center justify-between"
+            aria-expanded={showInviteHistory}
+            className="w-full flex items-center justify-between gap-2 rounded
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Invite History</p>
-            <svg
-              className={`w-4 h-4 text-gray-500 transition-transform ${showInviteHistory ? 'rotate-180' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-            </svg>
+            <span className="flex items-center gap-2 min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Invite history</p>
+              {pendingCount > 0 && (
+                <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full bg-indigo-600/20 text-indigo-300 border border-indigo-500/40">
+                  {pendingCount} outstanding
+                </span>
+              )}
+            </span>
+            <Icon
+              d={ICONS.chevronDown}
+              className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${showInviteHistory ? 'rotate-180' : ''}`}
+            />
           </button>
           {showInviteHistory && (
-          <div className="space-y-2 mt-3">
-            {invites.map(inv => {
-              const expired = !inv.used && inv.expiresAt.toDate() < new Date()
-              return (
-                <div key={inv.code} className="flex items-center gap-3 text-sm">
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-700 text-gray-300 capitalize shrink-0">
-                    {inv.role}
+            <ul className="mt-3 divide-y divide-gray-700/40">
+              {history.map(row => (
+                <li key={row.key} className="flex items-center gap-2 py-2 text-sm">
+                  {/* Which path it came from. Link invites carry a role;
+                      inviteUser takes none and always assigns member. */}
+                  <span
+                    title={row.source === 'link' ? 'Shared link' : 'Emailed invitation'}
+                    className="shrink-0 text-gray-400"
+                  >
+                    <Icon d={row.source === 'link' ? ICONS.link : ICONS.envelope} className="w-3.5 h-3.5" />
                   </span>
-                  <div className="min-w-0 flex-1">
-                    {inv.used ? (
-                      <p className="text-gray-200 truncate">
-                        Joined by <span className="font-medium">{inv.usedByName || inv.usedByEmail || 'unknown'}</span>
-                      </p>
-                    ) : expired ? (
-                      <p className="text-gray-400">Expired, never used</p>
-                    ) : (
-                      <p className="text-gray-400">Pending — not yet used</p>
-                    )}
-                  </div>
-                  <span className="text-xs text-gray-400 shrink-0">
-                    {inv.used && inv.usedAt
-                      ? inv.usedAt.toDate().toLocaleDateString()
-                      : inv.createdAt?.toDate().toLocaleDateString()}
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-700 text-gray-200 capitalize shrink-0">
+                    {row.role ?? 'member'}
                   </span>
-                </div>
-              )
-            })}
-          </div>
+                  <span className="min-w-0 flex-1 truncate">
+                    {row.state === 'joined'
+                      ? <span className="text-gray-200">Joined by <span className="font-medium">{row.who}</span></span>
+                      : row.who
+                        ? <span className="text-gray-300">{row.who}</span>
+                        : <span className="text-gray-400">Shared link</span>}
+                  </span>
+                  <InviteStateChip state={row.state} />
+                  {row.at && (
+                    <span className="text-xs text-gray-400 shrink-0 tabular-nums">
+                      {row.at.toLocaleDateString()}
+                    </span>
+                  )}
+                  {row.revocable && (
+                    <button
+                      onClick={() => setConfirmRevoke(row)}
+                      className="text-xs text-red-400 hover:text-red-300 font-semibold shrink-0 rounded px-1.5 py-1
+                                 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
@@ -497,7 +629,7 @@ export default function TeamPage() {
           <button onClick={toggleAllCompanies} className="w-full flex items-center justify-between">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">All Companies (Super Admin)</p>
             <svg
-              className={`w-4 h-4 text-gray-500 transition-transform ${showAllCompanies ? 'rotate-180' : ''}`}
+              className={`w-4 h-4 text-gray-400 transition-transform ${showAllCompanies ? 'rotate-180' : ''}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
@@ -508,7 +640,25 @@ export default function TeamPage() {
             <div className="mt-3">
               {allLoading ? (
                 <div className="space-y-2">
-                  {[1, 2, 3].map(i => <div key={i} className="card h-16 animate-pulse" />)}
+                  {/* Stands in for AllCompanyGroup — a header line plus
+                      member rows — not a 64px block. */}
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="py-3 animate-pulse">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="h-4 w-32 bg-gray-700 rounded" />
+                        <div className="h-3 w-20 bg-gray-700/60 rounded" />
+                      </div>
+                      {[1, 2].map(j => (
+                        <div key={j} className="flex items-center gap-3 py-1.5 px-2">
+                          <div className="w-8 h-8 rounded-full bg-gray-700 shrink-0" />
+                          <div className="flex-1 space-y-1">
+                            <div className="h-3.5 w-36 bg-gray-700 rounded" />
+                            <div className="h-3 w-44 bg-gray-700/60 rounded" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
                 </div>
               ) : allError ? (
                 <div>
@@ -528,7 +678,7 @@ export default function TeamPage() {
                       <p className="text-xs text-gray-400">
                         {otherGroups.length} companies · {otherMembers} members
                         {allTeams.generatedAt && (
-                          <span className="text-gray-600"> · as of {allTeams.generatedAt.toLocaleTimeString()}</span>
+                          <span className="text-gray-400"> · as of {allTeams.generatedAt.toLocaleTimeString()}</span>
                         )}
                       </p>
                       <button onClick={() => void loadAllTeams()} className="text-xs text-indigo-400 hover:text-indigo-300">
@@ -559,13 +709,27 @@ export default function TeamPage() {
 
       {/* Member list */}
       {loading ? (
+        /* h-16 against a card that measures ~86px: avatar 40px beside a
+           three-line block of name, email and the employee link, inside
+           py-3. Three members meant a 60px jump when data landed. */
         <div className="space-y-2">
-          {[1, 2, 3].map(i => <div key={i} className="card h-16 animate-pulse" />)}
+          {[1, 2, 3].map(i => (
+            <div key={i} className="card px-4 py-3 flex items-center gap-3 animate-pulse">
+              <div className="w-10 h-10 rounded-full bg-gray-700 shrink-0" />
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="h-4 w-40 bg-gray-700 rounded" />
+                <div className="h-3 w-52 bg-gray-700/60 rounded" />
+                <div className="h-3 w-28 bg-gray-700/60 rounded" />
+              </div>
+              <div className="h-3 w-14 bg-gray-700/60 rounded shrink-0" />
+            </div>
+          ))}
         </div>
       ) : members.length === 0 ? (
         <div className="card p-12 text-center">
-          <p className="text-3xl mb-3">👥</p>
-          <p className="text-gray-400 text-sm">No team members found.</p>
+          {/* Was 👥 — emoji paint their own bitmap and ignore `color`. */}
+          <Icon d={ICONS.user} className="w-8 h-8 mx-auto mb-3 text-gray-400" />
+          <p className="text-gray-300 text-sm">No team members found.</p>
           <p className="text-gray-400 text-xs mt-1">Invite colleagues using the form above.</p>
         </div>
       ) : (
@@ -579,6 +743,9 @@ export default function TeamPage() {
               onRoleChange={handleRoleChange}
               onRemove={setConfirmRemove}
               coloredAvatars={coloredAvats}
+              menuOpen={openMenuUid === m.uid}
+              onToggleMenu={() => setOpenMenuUid(cur => cur === m.uid ? null : m.uid)}
+              onCloseMenu={() => setOpenMenuUid(null)}
             />
           ))}
         </div>
@@ -589,70 +756,49 @@ export default function TeamPage() {
         <div className="card p-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Role Permissions</p>
           <div className="space-y-1.5 text-xs text-gray-400">
-            <p><span className="text-yellow-300 font-semibold">Owner</span> — full access, cannot be changed by others</p>
+            <p><span className="text-yellow-300 font-semibold">Owner</span> — full access. The role can&rsquo;t be granted or removed from this page, by anyone, including the owner</p>
             <p><span className="text-indigo-300 font-semibold">Admin</span> — can invite, change roles, and manage team</p>
             <p><span className="text-teal-300 font-semibold">Salesman</span> — full CRM access, no team management</p>
-            <p><span className="text-gray-400 font-semibold">Viewer</span> — read-only access to records</p>
+            <p><span className="text-gray-200 font-semibold">Viewer</span> — read-only access to records</p>
           </div>
         </div>
       )}
 
-      {/* Confirm remove modal */}
-      {confirmRemove && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-            <p className="text-white font-semibold mb-2">Remove {memberDisplayName(confirmRemove)}?</p>
-            <p className="text-sm text-gray-400 mb-5">
-              They will lose access to the company account. This can be undone by re-inviting them.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConfirmRemove(null)}
-                className="flex-1 btn-secondary py-2 text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleRemove(confirmRemove)}
-                disabled={removing}
-                className="flex-1 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-40 transition-colors"
-              >
-                {removing ? 'Removing…' : 'Remove'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Were two hand-rolled divs: no role, no aria-modal, no Escape, no
+          backdrop dismiss, no autofocus — for this page's destructive
+          actions, while ConfirmModal is imported in ten other files. */}
+      <ConfirmModal
+        isOpen={!!confirmRemove}
+        message={confirmRemove
+          ? `Remove ${memberDisplayName(confirmRemove)}? They lose access to the company account. You can re-invite them afterwards.`
+          : ''}
+        confirmLabel={removing ? 'Removing…' : 'Remove'}
+        onConfirm={() => { if (confirmRemove) void handleRemove(confirmRemove) }}
+        onCancel={() => setConfirmRemove(null)}
+      />
 
-      {/* Confirm delete orphan company modal */}
-      {confirmDeleteCompany && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-            <p className="text-white font-semibold mb-2">
-              Delete {confirmDeleteCompany.name || confirmDeleteCompany.companyId}?
-            </p>
-            <p className="text-sm text-gray-400 mb-5">
-              This permanently deletes the company record. The server re-checks it still has
-              zero users and zero customer records before deleting — it will refuse otherwise.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConfirmDeleteCompany(null)}
-                className="flex-1 btn-secondary py-2 text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDeleteOrphanCompany(confirmDeleteCompany)}
-                disabled={deletingCompany}
-                className="flex-1 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-40 transition-colors"
-              >
-                {deletingCompany ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        isOpen={!!confirmRevoke}
+        message={confirmRevoke
+          ? confirmRevoke.source === 'link'
+            ? 'Revoke this invite link? Anyone holding it will no longer be able to join.'
+            : `Revoke the invitation to ${confirmRevoke.who}? The emailed link will stop working.`
+          : ''}
+        confirmLabel={revoking ? 'Revoking…' : 'Revoke'}
+        onConfirm={() => { if (confirmRevoke) void handleRevoke(confirmRevoke) }}
+        onCancel={() => setConfirmRevoke(null)}
+      />
+
+      <ConfirmModal
+        isOpen={!!confirmDeleteCompany}
+        message={confirmDeleteCompany
+          ? `Delete ${confirmDeleteCompany.name || confirmDeleteCompany.companyId}? This permanently deletes the company record. The server re-checks it has zero users and zero customer records first, and refuses otherwise.`
+          : ''}
+        confirmLabel={deletingCompany ? 'Deleting…' : 'Delete'}
+        onConfirm={() => { if (confirmDeleteCompany) void handleDeleteOrphanCompany(confirmDeleteCompany) }}
+        onCancel={() => setConfirmDeleteCompany(null)}
+      />
+
     </div>
   )
 }

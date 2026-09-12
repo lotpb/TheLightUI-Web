@@ -17,6 +17,9 @@ export interface InviteDoc {
   usedByEmail?: string
   usedByName?: string
   usedAt?: Timestamp
+  /** Cancelled before anyone used it. Distinct from `used`. */
+  revoked?: boolean
+  revokedAt?: Timestamp
 }
 
 export interface InviteRecord extends InviteDoc {
@@ -44,7 +47,24 @@ function parseInviteDoc(d: Record<string, unknown>): InviteDoc {
     usedByEmail: typeof d.usedByEmail === 'string' ? d.usedByEmail : undefined,
     usedByName:  typeof d.usedByName  === 'string' ? d.usedByName  : undefined,
     usedAt:      d.usedAt instanceof Timestamp ? d.usedAt : undefined,
+    revoked:     typeof d.revoked === 'boolean' ? d.revoked : false,
+    revokedAt:   d.revokedAt instanceof Timestamp ? d.revokedAt : undefined,
   }
+}
+
+/**
+ * A link is only as good as the ability to take it back.
+ *
+ * There was no revoke of any kind: a link pasted into the wrong channel stayed
+ * live for its full seven days, and the only alternative was editing Firestore
+ * by hand. Kept as a flag rather than a delete because the history is the
+ * record of who was invited and what happened to it.
+ */
+export async function revokeInvite(code: string): Promise<void> {
+  await updateDoc(doc(db, 'invites', code), {
+    revoked: true,
+    revokedAt: serverTimestamp(),
+  })
 }
 
 export async function createInvite(role: string, createdBy: string): Promise<string> {
@@ -79,6 +99,7 @@ export async function redeemInvite(
   const snap = await getDoc(doc(db, 'invites', code))
   if (!snap.exists()) throw new Error('Invite not found.')
   const invite = parseInviteDoc(snap.data() as Record<string, unknown>)
+  if (invite.revoked) throw new Error('This invite link was cancelled.')
   if (invite.used) throw new Error('This invite link has already been used.')
   if (invite.expiresAt.toDate() < new Date()) throw new Error('This invite link has expired.')
 
@@ -126,3 +147,61 @@ export function subscribeToInvites(
     err => onError?.(err),
   )
 }
+
+// ── Email invitations ─────────────────────────────────────────────────────────
+//
+// The other invite path. `/settings` calls the `inviteUser` callable, which
+// writes to `invitations` and emails a /register link; `/team` writes links to
+// `invites`. Two collections, and the Team page's "Invite History" only ever
+// read one of them — so anyone invited by email was absent from the page that
+// claims to list invites.
+
+export interface EmailInviteRecord {
+  id: string
+  email: string
+  companyId: string
+  invitedBy: string
+  /** 'pending' | 'accepted' | 'revoked' — written by the callable. */
+  status: string
+  createdAt: Timestamp | null
+}
+
+function parseEmailInvite(id: string, d: Record<string, unknown>): EmailInviteRecord {
+  return {
+    id,
+    email:     typeof d.email     === 'string' ? d.email     : '',
+    companyId: typeof d.companyId === 'string' ? d.companyId : '',
+    invitedBy: typeof d.invitedBy === 'string' ? d.invitedBy : '',
+    status:    typeof d.status    === 'string' ? d.status    : 'pending',
+    createdAt: d.createdAt instanceof Timestamp ? d.createdAt : null,
+  }
+}
+
+export function subscribeToEmailInvites(
+  onData: (invites: EmailInviteRecord[]) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const companyId = getCompanyId()
+  if (!companyId) { onData([]); return () => {} }
+  // No orderBy: these docs predate any index, and createdAt is missing on the
+  // oldest of them, which orderBy would silently drop. Sorted client-side.
+  return onSnapshot(
+    query(collection(db, 'invitations'), where('companyId', '==', companyId)),
+    snap => onData(snap.docs.map(d => parseEmailInvite(d.id, d.data() as Record<string, unknown>))),
+    err => onError?.(err),
+  )
+}
+
+export async function revokeEmailInvite(id: string): Promise<void> {
+  await updateDoc(doc(db, 'invitations', id), {
+    status: 'revoked',
+    revokedAt: serverTimestamp(),
+  })
+}
+
+// The unified history model is pure logic with no Firebase or store
+// dependencies, so it lives in models/invite.ts where it can be tested.
+export {
+  unifyInvites,
+  type InviteState, type UnifiedInvite, type InviteLike, type EmailInviteLike,
+} from '../models/invite'

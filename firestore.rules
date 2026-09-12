@@ -297,7 +297,42 @@ service cloud.firestore {
                     && request.resource.data.companyId == resource.data.companyId
                     && request.resource.data.diff(resource.data).affectedKeys()
                          .hasOnly(['used', 'usedBy', 'usedByEmail', 'usedByName', 'usedAt']);
+      // Revoking a pending invite. A separate branch from consumption above,
+      // and gated on canManageTeam() rather than merely being signed in:
+      // burning someone else's link is a team-management action, not
+      // something any authenticated user should reach.
+      allow update: if hasCompanyId()
+                    && canManageTeam()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && resource.data.used == false
+                    && request.resource.data.role == resource.data.role
+                    && request.resource.data.companyId == resource.data.companyId
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['revoked', 'revokedAt', 'revokedBy']);
       allow delete: if false;
+    }
+
+    // ── Email invitations ─────────────────────────────────────────────────────
+    //
+    //   The `inviteUser` callable writes here; /team's invite links write to
+    //   /invites. Two collections, two paths — and this one had no rule at all,
+    //   so the client could not read it and the Team page's "Invite History"
+    //   was blind to every invite sent by email from Settings.
+    //
+    //   Created and emailed server-side only. Owner/admin may read their own
+    //   company's, and revoke a pending one.
+    //
+    match /invitations/{inviteId} {
+      allow get, list: if hasCompanyId()
+                       && canManageTeam()
+                       && resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId()
+                    && canManageTeam()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && resource.data.get('status', '') == 'pending'
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['status', 'revokedAt', 'revokedBy']);
+      allow create, delete: if false;
     }
 
     match /catalog/{itemId} {
