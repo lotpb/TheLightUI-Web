@@ -79,6 +79,7 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     createdAt:  toDate(data.createdAt),
     updatedAt:  toDate(data.updatedAt),
     recurring:       (data.recurring as RecurringInterval | null | undefined) ?? null,
+    recurringPaused: data.recurringPaused === true,
     nextRecurDate:   data.nextRecurDate ? toDate(data.nextRecurDate) : null,
     lastGeneratedAt: data.lastGeneratedAt ? toDate(data.lastGeneratedAt) : null,
     generatedFrom:   data.generatedFrom ? String(data.generatedFrom) : null,
@@ -147,6 +148,7 @@ export async function createInvoice(
     taxRate:    inv.taxRate,
     currency:   inv.currency || 'USD',
     recurring:      inv.recurring     ?? null,
+    recurringPaused: inv.recurringPaused === true,
     nextRecurDate:  inv.nextRecurDate  ? Timestamp.fromDate(inv.nextRecurDate)  : null,
     generatedFrom:  inv.generatedFrom  ?? null,
     createdAt:  serverTimestamp(),
@@ -192,6 +194,7 @@ export async function updateInvoice(
   if (fields.taxRate         !== undefined) updates.taxRate         = fields.taxRate
   if (fields.currency        !== undefined) updates.currency        = fields.currency
   if (fields.recurring        !== undefined) updates.recurring        = fields.recurring ?? null
+  if (fields.recurringPaused  !== undefined) updates.recurringPaused  = fields.recurringPaused === true
   if (fields.nextRecurDate    !== undefined) updates.nextRecurDate    = fields.nextRecurDate    ? Timestamp.fromDate(fields.nextRecurDate)    : null
   if (fields.lastGeneratedAt  !== undefined) updates.lastGeneratedAt  = fields.lastGeneratedAt  ? Timestamp.fromDate(fields.lastGeneratedAt)  : null
   if (fields.paymentLink      !== undefined) updates.paymentLink      = fields.paymentLink ?? null
@@ -219,6 +222,7 @@ function advanceByInterval(from: Date, interval: RecurringInterval): Date {
 
 export async function generateNextInvoice(template: Invoice): Promise<string> {
   if (!template.recurring) throw new Error('Invoice is not set to recurring')
+  if (template.recurringPaused) throw new Error('This schedule is paused. Resume it first.')
   const issueDate = template.nextRecurDate ?? new Date()
   const dueOffset = template.dueDate.getTime() - template.issueDate.getTime()
   const dueDate   = new Date(issueDate.getTime() + Math.max(dueOffset, 0))

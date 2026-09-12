@@ -24,6 +24,12 @@ export const generateRecurringInvoices = functions
     for (const invoiceDoc of snap.docs) {
       try {
         const inv = invoiceDoc.data()
+        // A paused schedule keeps `recurring` set so the app can list and
+        // resume it, and this query selects on `recurring` — so without this
+        // line "paused" would keep issuing invoices every interval. Filtered
+        // here rather than in the query because Firestore can't express
+        // "absent or false" alongside the existing range filter.
+        if (inv['recurringPaused'] === true) continue
         const recurInterval: string = inv['recurring']
         const issueDate = new Date()
         const dueDate   = new Date()
