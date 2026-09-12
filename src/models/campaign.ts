@@ -6,7 +6,6 @@ export type CampaignStatus = 'draft' | 'sent'
 export interface CampaignSegment {
   categories: string[]   // [] = all categories
   salesmen:   string[]   // [] = all salesmen
-  requireEmail: true     // always true — we only email contacts with addresses
 }
 
 export interface Campaign {
@@ -18,14 +17,24 @@ export interface Campaign {
   segment: CampaignSegment
   status: CampaignStatus
   sentAt: Date | null
+  /** What the provider accepted, not the size of the audience. */
   sentCount: number
+  /** Rows the provider rejected. Written by sendCampaignEmails. */
+  failedCount: number
   openCount: number
   clickCount: number
   createdAt: Date
   updatedAt: Date
 }
 
-export type RecipientStatus = 'sent' | 'opened' | 'clicked' | 'bounced'
+/**
+ * 'pending' is new. The client writes recipient rows, then the
+ * sendCampaignEmails function mails them and moves each to sent or bounced —
+ * so a row that never got as far as the provider is distinguishable from one
+ * that did. Everything used to be written as 'sent' immediately, by a
+ * function that sent nothing.
+ */
+export type RecipientStatus = 'pending' | 'sent' | 'opened' | 'clicked' | 'bounced'
 
 export interface CampaignRecipient {
   id: string
@@ -51,6 +60,7 @@ export const STATUS_COLORS: Record<CampaignStatus, string> = {
 }
 
 export const RECIPIENT_STATUS_COLORS: Record<RecipientStatus, string> = {
+  pending: 'bg-gray-500/20 text-gray-200',
   sent:    'bg-blue-500/15 text-blue-300',
   opened:  'bg-teal-500/15 text-teal-300',
   clicked: 'bg-violet-500/15 text-violet-300',
@@ -78,8 +88,16 @@ export function interpolateCampaign(body: string, c: CustomerItem): string {
     .replace(/{{salesman}}/g,  c.salesman)
 }
 
+/**
+ * An address the provider will accept. `if (!c.email)` passed "n/a" and
+ * "none", which the send then counted as bounced.
+ */
+export function hasSendableEmail(c: Pick<CustomerItem, 'email'>): boolean {
+  return c.email.trim().includes('@')
+}
+
 export function matchesSegment(c: CustomerItem, seg: CampaignSegment): boolean {
-  if (!c.email) return false
+  if (!hasSendableEmail(c)) return false
   if (seg.categories.length > 0 && !seg.categories.some(cat => c.category.toLowerCase() === cat.toLowerCase())) return false
   if (seg.salesmen.length > 0 && !seg.salesmen.includes(c.salesman)) return false
   return true

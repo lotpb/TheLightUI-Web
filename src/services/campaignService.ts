@@ -3,6 +3,7 @@ import {
   onSnapshot, query, where, orderBy, limit, writeBatch,
   serverTimestamp, Timestamp, type Unsubscribe,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import type { Campaign, CampaignRecipient } from '../models/campaign'
@@ -27,10 +28,11 @@ function toCampaign(id: string, d: Record<string, unknown>): Campaign {
     name:      String(d['name']      ?? ''),
     subject:   String(d['subject']   ?? ''),
     body:      String(d['body']      ?? ''),
-    segment:   (d['segment'] as Campaign['segment']) ?? { categories: [], salesmen: [], requireEmail: true },
+    segment:   (d['segment'] as Campaign['segment']) ?? { categories: [], salesmen: [] },
     status:    (d['status'] as Campaign['status'])   ?? 'draft',
     sentAt:    d['sentAt']    ? toDate(d['sentAt'])    : null,
     sentCount: Number(d['sentCount']  ?? 0),
+    failedCount: Number(d['failedCount'] ?? 0),
     openCount: Number(d['openCount']  ?? 0),
     clickCount:Number(d['clickCount'] ?? 0),
     createdAt: toDate(d['createdAt']),
@@ -90,6 +92,7 @@ export async function createCampaign(
     status:     'draft',
     sentAt:     null,
     sentCount:  0,
+    failedCount: 0,
     openCount:  0,
     clickCount: 0,
     createdAt:  serverTimestamp(),
@@ -109,48 +112,64 @@ export async function deleteCampaign(id: string): Promise<void> {
   await deleteDoc(doc(db, CAMP_COL, id))
 }
 
-export async function sendCampaign(
+/**
+ * Queues the audience, then asks the server to send it.
+ *
+ * This used to write every recipient row as `status: 'sent'`, stamp the
+ * campaign sent with a sentCount, and return — with no mail provider call
+ * anywhere in the client, and no Cloud Function or trigger behind it. The
+ * page reported a successful send and nothing left the system.
+ *
+ * Rows are written 'pending' here (batched, because a large audience exceeds
+ * Firestore's 500-write limit), and sendCampaignEmails moves each to sent or
+ * bounced as the provider answers. The campaign's own status and sentCount
+ * are set by that function, from what was actually accepted.
+ */
+export async function queueCampaignRecipients(
   campaignId: string,
   recipients: CustomerItem[],
 ): Promise<number> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
 
-  const now = Timestamp.now()
-  const CHUNK = 400   // stay well under Firestore batch limit of 500
-
-  // Write recipients in chunks
+  const CHUNK = 400
   let written = 0
   for (let i = 0; i < recipients.length; i += CHUNK) {
-    const chunk = recipients.slice(i, i + CHUNK)
     const batch = writeBatch(db)
-    for (const c of chunk) {
-      const ref = doc(collection(db, RCPT_COL))
-      batch.set(ref, {
+    for (const c of recipients.slice(i, i + CHUNK)) {
+      batch.set(doc(collection(db, RCPT_COL)), {
         campaignId,
         companyId,
-        customerId:    c.id,
-        customerName:  `${c.first} ${c.lastname}`.trim(),
-        customerEmail: c.email,
-        status:        'sent',
-        sentAt:        now,
-        openedAt:      null,
-        clickedAt:     null,
+        customerId:       c.id,
+        customerName:     `${c.first} ${c.lastname}`.trim(),
+        customerEmail:    c.email.trim(),
+        // The merge fields the server substitutes, denormalised onto the row
+        // so the send doesn't re-read every customer document.
+        customerFirst:    c.first,
+        customerLast:     c.lastname,
+        customerPhone:    c.phone,
+        customerCity:     c.city,
+        customerSalesman: c.salesman,
+        status:           'pending',
+        sentAt:           null,
+        openedAt:         null,
+        clickedAt:        null,
       })
       written++
     }
     await batch.commit()
   }
-
-  // Update campaign status
-  await updateDoc(doc(db, CAMP_COL, campaignId), {
-    status:    'sent',
-    sentAt:    now,
-    sentCount: written,
-    updatedAt: serverTimestamp(),
-  })
-
   return written
+}
+
+export interface CampaignSendResult { sent: number; failed: number }
+
+/** Calls sendCampaignEmails. Throws if the function isn't deployed. */
+export async function sendCampaign(campaignId: string): Promise<CampaignSendResult> {
+  const fns = getFunctions()
+  const call = httpsCallable<{ campaignId: string }, CampaignSendResult>(fns, 'sendCampaignEmails')
+  const res = await call({ campaignId })
+  return res.data
 }
 
 export function subscribeToRecipients(

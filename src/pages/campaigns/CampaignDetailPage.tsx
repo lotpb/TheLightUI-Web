@@ -18,6 +18,7 @@ function pct(num: number, den: number): string {
 }
 
 const RCPT_STATUS_LABELS: Record<CampaignRecipient['status'], string> = {
+  pending: 'Queued',
   sent:    'Sent',
   opened:  'Opened',
   clicked: 'Clicked',

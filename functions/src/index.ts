@@ -96,3 +96,9 @@ export {
   facebookLeadWebhook,
 } from './facebook'
 
+export {
+  sendCampaignEmails,
+  campaignOpen,
+  campaignClick,
+} from './campaigns'
+
