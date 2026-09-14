@@ -4,8 +4,9 @@ import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { subscribeToInvoices, deleteInvoice, updateInvoice, INVOICE_REALTIME_LIMIT } from '../../services/invoiceService'
 import {
-  effectiveStatus, fmtCurrency, invoiceTotal, statusClasses, statusLabel,
-  type Invoice, type InvoiceStatus,
+  effectiveStatus, fmtCurrency, invoiceKpis, invoiceTotal, sortInvoices,
+  statusClasses, statusLabel, DEFAULT_INVOICE_SORT, INVOICE_SORTS,
+  type Invoice, type InvoiceSortKey, type InvoiceStatus,
 } from '../../models/invoice'
 import { useAuthStore } from '../../stores/authStore'
 import { usePermissions } from '../../hooks/usePermissions'
@@ -30,6 +31,7 @@ export default function InvoiceListPage() {
   const [loading, setLoading]   = useState(true)
   const [tab,     setTab]       = useState<InvoiceStatus | 'all'>('all')
   const [search,  setSearch]    = useState('')
+  const [sort,    setSort]      = useState<InvoiceSortKey>(DEFAULT_INVOICE_SORT)
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkWorking, setBulkWorking] = useState(false)
@@ -59,8 +61,8 @@ export default function InvoiceListPage() {
         inv.invoiceNumber.toLowerCase().includes(q),
       )
     }
-    return items
-  }, [enriched, tab, search])
+    return sortInvoices(items, sort)
+  }, [enriched, tab, search, sort])
 
   // Drop selections that scrolled out of the current filter so the bulk bar
   // count never silently includes hidden rows.
@@ -72,14 +74,8 @@ export default function InvoiceListPage() {
     })
   }, [filtered])
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const total   = invoices.reduce((s, i) => s + invoiceTotal(i), 0)
-    const paid    = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + invoiceTotal(i), 0)
-    const overdue = enriched.filter(i => i._status === 'overdue').reduce((s, i) => s + invoiceTotal(i), 0)
-    const outstanding = total - paid
-    return { total, paid, outstanding, overdue }
-  }, [invoices, enriched])
+  // KPIs. Drafts are held out of all four figures — see invoiceKpis.
+  const kpis = useMemo(() => invoiceKpis(invoices), [invoices])
 
   // Counts per tab
   const counts = useMemo(() => {
@@ -179,7 +175,7 @@ export default function InvoiceListPage() {
       {!loading && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Total Billed',  value: kpis.total,       color: 'text-white' },
+            { label: 'Total Billed',  value: kpis.billed,       color: 'text-white' },
             { label: 'Paid',          value: kpis.paid,         color: 'text-green-400' },
             { label: 'Outstanding',   value: kpis.outstanding,  color: 'text-blue-400' },
             { label: 'Overdue',       value: kpis.overdue,      color: 'text-red-400' },
@@ -192,14 +188,35 @@ export default function InvoiceListPage() {
         </div>
       )}
 
-      {/* Search */}
-      <input
-        type="search"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        placeholder="Search by customer or invoice number…"
-        className="input-field w-full text-sm py-2"
-      />
+      {/* Says where the money held out of those four figures went, so a
+          draft-heavy month doesn't read as a drop in billing. */}
+      {!loading && kpis.draftCount > 0 && (
+        <p className="text-xs text-gray-400 -mt-2">
+          Excludes {fmtCurrency(kpis.draft)} across {kpis.draftCount} draft{kpis.draftCount === 1 ? '' : 's'} —
+          not billed, and not owed.
+        </p>
+      )}
+
+      {/* Search and sort */}
+      <div className="flex gap-2">
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by customer or invoice number…"
+          className="input-field flex-1 min-w-0 text-sm py-2"
+        />
+        <select
+          value={sort}
+          onChange={e => setSort(e.target.value as InvoiceSortKey)}
+          aria-label="Sort invoices"
+          className="input-field text-sm py-2 shrink-0 w-44 sm:w-52 cursor-pointer"
+        >
+          {INVOICE_SORTS.map(s => (
+            <option key={s.key} value={s.key}>{s.label}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Status tabs */}
       <div className="flex gap-1.5 flex-wrap">

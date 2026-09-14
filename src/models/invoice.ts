@@ -73,10 +73,12 @@ export function invoiceTotal(inv: Pick<Invoice, 'lineItems' | 'taxRate'>): numbe
   return invoiceSubtotal(inv) + invoiceTaxAmount(inv)
 }
 
-export function effectiveStatus(inv: Invoice): InvoiceStatus {
+export function effectiveStatus(inv: Invoice, now: Date = new Date()): InvoiceStatus {
   if (inv.status === 'paid' || inv.status === 'draft') return inv.status
-  const now = new Date(); now.setHours(0, 0, 0, 0)
-  if (inv.dueDate < now) return 'overdue'
+  // Copied, not mutated — a caller passing its own clock (the KPI roll-up, the
+  // tests) must not have its Date silently reset to midnight.
+  const today = new Date(now); today.setHours(0, 0, 0, 0)
+  if (inv.dueDate < today) return 'overdue'
   return inv.status
 }
 
@@ -103,6 +105,102 @@ export function generateInvoiceNumber(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0')
   const r = Math.floor(Math.random() * 9000 + 1000)
   return `INV-${y}${m}-${r}`
+}
+
+// ── List roll-up ──────────────────────────────────────────────────────────────
+
+export interface InvoiceKpis {
+  /** Money actually asked for: everything except drafts. */
+  billed: number
+  paid: number
+  /** What customers owe — billed less paid. */
+  outstanding: number
+  overdue: number
+  /** Drafts, held apart from every figure above. */
+  draft: number
+  draftCount: number
+}
+
+/**
+ * The four figures at the top of /invoices, with drafts excluded.
+ *
+ * The page summed *every* invoice into "Total Billed" and then derived
+ * `outstanding = total - paid`, so an unsent draft counted as money billed and
+ * as money a customer owed. On a realistic mix — two drafts worth $6,500, three
+ * sent, one paid $6,000 — Outstanding read $13,000 against a real $6,500: a
+ * receivables number overstated by 100%, in the flattering direction.
+ *
+ * A draft is a document nobody has been asked to pay. It is reported on its
+ * own rather than dropped, so the money doesn't just vanish from the page.
+ */
+export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): InvoiceKpis {
+  let billed = 0, paid = 0, overdue = 0, draft = 0, draftCount = 0
+  for (const inv of invoices) {
+    const total = invoiceTotal(inv)
+    switch (effectiveStatus(inv, now)) {
+      case 'draft':
+        draft += total
+        draftCount++
+        break
+      case 'paid':
+        billed += total
+        paid += total
+        break
+      case 'overdue':
+        billed += total
+        overdue += total
+        break
+      default:
+        billed += total
+    }
+  }
+  return { billed, paid, outstanding: billed - paid, overdue, draft, draftCount }
+}
+
+export type InvoiceSortKey =
+  | 'dueAsc' | 'dueDesc' | 'amountDesc' | 'amountAsc'
+  | 'issuedDesc' | 'issuedAsc' | 'customer'
+
+/**
+ * Sort options for the list.
+ *
+ * The page had none: invoiceService sorts newest-created-first and that was
+ * the only order available, which answers "what did I just make" and not the
+ * question a receivables list exists for — what is most overdue. Due date
+ * ascending is the default for that reason: the longest-unpaid invoice lands
+ * at the top and upcoming ones fall below it.
+ */
+export const INVOICE_SORTS: { key: InvoiceSortKey; label: string }[] = [
+  { key: 'dueAsc',     label: 'Due date — oldest first' },
+  { key: 'dueDesc',    label: 'Due date — latest first' },
+  { key: 'amountDesc', label: 'Amount — high to low' },
+  { key: 'amountAsc',  label: 'Amount — low to high' },
+  { key: 'issuedDesc', label: 'Issued — newest first' },
+  { key: 'issuedAsc',  label: 'Issued — oldest first' },
+  { key: 'customer',   label: 'Customer A–Z' },
+]
+
+export const DEFAULT_INVOICE_SORT: InvoiceSortKey = 'dueAsc'
+
+/**
+ * Returns a new array; the caller's input is never reordered in place.
+ *
+ * Every comparison falls through to the invoice number, so two invoices due
+ * the same day hold a stable position instead of swapping on re-render.
+ */
+export function sortInvoices<T extends Invoice>(items: T[], key: InvoiceSortKey): T[] {
+  const byNumber = (a: T, b: T) => a.invoiceNumber.localeCompare(b.invoiceNumber)
+  const cmp: Record<InvoiceSortKey, (a: T, b: T) => number> = {
+    dueAsc:     (a, b) => a.dueDate.getTime()   - b.dueDate.getTime(),
+    dueDesc:    (a, b) => b.dueDate.getTime()   - a.dueDate.getTime(),
+    amountDesc: (a, b) => invoiceTotal(b)       - invoiceTotal(a),
+    amountAsc:  (a, b) => invoiceTotal(a)       - invoiceTotal(b),
+    issuedDesc: (a, b) => b.issueDate.getTime() - a.issueDate.getTime(),
+    issuedAsc:  (a, b) => a.issueDate.getTime() - b.issueDate.getTime(),
+    customer:   (a, b) => a.customerName.localeCompare(b.customerName),
+  }
+  const primary = cmp[key]
+  return [...items].sort((a, b) => primary(a, b) || byNumber(a, b))
 }
 
 // ── Recurring schedules ───────────────────────────────────────────────────────
