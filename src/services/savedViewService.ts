@@ -32,6 +32,18 @@ function toSavedView(id: string, d: Record<string, unknown>): SavedView {
     filterDateTo:     String(rawFilters['filterDateTo']      ?? ''),
     filterAmtMin:     String(rawFilters['filterAmtMin']      ?? ''),
     filterAmtMax:     String(rawFilters['filterAmtMax']      ?? ''),
+    // Absent on views saved before these were persisted, which parse as
+    // empty — the same behaviour those views already had.
+    filterLeadStatus:     String(rawFilters['filterLeadStatus']     ?? ''),
+    filterQuality:        String(rawFilters['filterQuality']        ?? ''),
+    filterAssignment:     String(rawFilters['filterAssignment']     ?? ''),
+    filterHealth:         String(rawFilters['filterHealth']         ?? ''),
+    filterPaymentStatus:  String(rawFilters['filterPaymentStatus']  ?? ''),
+    filterSalesmanFlag:   String(rawFilters['filterSalesmanFlag']   ?? ''),
+    filterProfession:     String(rawFilters['filterProfession']     ?? ''),
+    filterRating:         String(rawFilters['filterRating']         ?? ''),
+    filterManager:        String(rawFilters['filterManager']        ?? ''),
+    filterEmployeeStatus: String(rawFilters['filterEmployeeStatus'] ?? ''),
   }
   return {
     id,

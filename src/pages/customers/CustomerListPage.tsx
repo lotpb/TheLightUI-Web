@@ -29,6 +29,9 @@ import type { SavedView } from '../../models/savedView'
 
 const PAGE_SIZE = 50
 
+/** Active-filter chips shown before collapsing. Three fits one line at 390px. */
+const CHIP_LIMIT = 3
+
 type SortField = 'name' | 'date' | 'location' | 'active' | 'score' | 'rating'
 type SortDir   = 'asc' | 'desc'
 
@@ -207,6 +210,38 @@ function QuickFilterPanel({ open, onToggle, activeCount, children }: {
  *  sources come from the records themselves, so imported data can produce
  *  dozens. The active option is always kept visible even when collapsed,
  *  so a filter can never be hidden while it's in effect. */
+/**
+ * A band legend — reference material that never changes.
+ *
+ * Both legends were always-on rows costing 56px between them, on a page that
+ * had accumulated 493px of chrome above the first record: 1.4 records visible
+ * on a 667px phone. They stay open from lg up, where there's room, and
+ * collapse to a single line below it. The thresholds still have to be
+ * reachable on touch, because the per-chip breakdown is a `title` tooltip,
+ * which doesn't exist there.
+ */
+function BandLegend({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="lg:hidden flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-gray-200
+                   rounded px-1 py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      >
+        {title}
+        <Icon d={ICONS.chevronDown} className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <div className={`${open ? 'flex' : 'hidden'} lg:flex items-center gap-x-3 gap-y-1.5 flex-wrap text-xs text-gray-400 mt-1.5 lg:mt-0`}>
+        <span className="hidden lg:inline font-medium">{title}</span>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function QuickFilterGroup({ title, options, activeValue, onSelect, initial = 6, renderLabel }: {
   title: string
   options: string[]
@@ -298,6 +333,8 @@ export default function CustomerListPage() {
   // confirmation step. Reopening restores what was typed.
   const [emailDraft, setEmailDraft] = useState({ subject: '', body: '' })
   const [csvImportOpen, setCsvImportOpen] = useState(false)
+  /** The chip row wraps past this below sm; see CHIP_LIMIT. */
+  const [chipsExpanded, setChipsExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
   const [sortField, setSortField] = useState<SortField>('name')
@@ -420,9 +457,9 @@ export default function CustomerListPage() {
 
   function applySavedView(view: SavedView) {
     const f = view.filters
-    // Reset first: saved views don't carry the quick filters yet, so without
-    // this any that happen to be active stay applied and silently intersect
-    // with the view — meaning the view doesn't reproduce what was saved.
+    // Reset first so the view fully determines the state: anything active and
+    // not named by the view must go, or it silently intersects and the view
+    // shows something other than what was saved.
     clearAdvancedFilters()
     setSearch(f.search)
     setShowInactive(f.showInactive)
@@ -439,6 +476,18 @@ export default function CustomerListPage() {
     setFilterDateTo(f.filterDateTo)
     setFilterAmtMin(f.filterAmtMin)
     setFilterAmtMax(f.filterAmtMax)
+    // Views saved before these were persisted parse as empty, so applying an
+    // old view still clears them — exactly what it did before.
+    setFilterLeadStatus(f.filterLeadStatus)
+    setFilterQuality(f.filterQuality as '' | 'hot' | 'stale')
+    setFilterAssignment(f.filterAssignment as '' | 'mine' | 'unassigned')
+    setFilterHealth(f.filterHealth as '' | HealthLabel)
+    setFilterPaymentStatus(f.filterPaymentStatus)
+    setFilterSalesmanFlag(f.filterSalesmanFlag as '' | 'yes' | 'no')
+    setFilterProfession(f.filterProfession)
+    setFilterRating(f.filterRating)
+    setFilterManager(f.filterManager)
+    setFilterEmployeeStatus(f.filterEmployeeStatus)
     setViewsOpen(false)
   }
 
@@ -452,6 +501,12 @@ export default function CustomerListPage() {
         sortField, sortDir,
         filterSalesman, filterState, filterLeadSource, filterProduct,
         filterCallback, filterDateFrom, filterDateTo, filterAmtMin, filterAmtMax,
+        // The ten Common Filters. These were absent, so a view saved with a
+        // Health or Lead Status filter on stored only the panel half of the
+        // query and reproduced a different, larger set when applied.
+        filterLeadStatus, filterQuality, filterAssignment, filterHealth,
+        filterPaymentStatus, filterSalesmanFlag, filterProfession,
+        filterRating, filterManager, filterEmployeeStatus,
       })
       setNewViewName('')
       toast(`Saved view "${name}"`, 'success')
@@ -1243,12 +1298,13 @@ export default function CustomerListPage() {
       </div>
 
       {/* Category tabs.
-          2×2 below sm. Four flex-1 tabs with no horizontal padding left 84px
-          each on a 390px phone, and "Customers 412" / "Employees 412" need
-          about 98px — so two of the four ran past their own pill, including
-          the active one, which is a filled indigo background. Two rows give
-          each tab 173px and cost one line of height. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 mb-4 bg-gray-800/50 p-1 rounded-xl">
+          Back to one row. The 2×2 grid fixed a real overflow — "Customers 412"
+          needs ~98px and each tab had 84px at 390px — but it cost 44px of
+          height, and this page had accumulated 493px of chrome above the first
+          record: 1.4 records visible on an SE. Hiding the count below sm
+          leaves "Customers" needing ~63px, which fits one row, and the record
+          line underneath already reads "23 of 412". */}
+      <div className="grid grid-cols-4 gap-1 mb-3 bg-gray-800/50 p-1 rounded-xl">
         {CATEGORY_ORDER.map(c => (
           <Link
             key={c}
@@ -1270,7 +1326,7 @@ export default function CustomerListPage() {
                   "23 of 412". Size and weight already subordinate them to the
                   label, so the alpha was buying nothing. */}
               {!loading && categoryCounts[c] > 0 && (
-                <span className="text-xs font-bold tabular-nums">
+                <span className="hidden sm:inline text-xs font-bold tabular-nums">
                   {categoryCounts[c]}
                 </span>
               )}
@@ -1578,10 +1634,15 @@ export default function CustomerListPage() {
 
       {/* Names what is narrowing the list, and lets each one go individually.
           The record line beneath still carries the counts; this carries the
-          reasons. */}
+          reasons.
+
+          Capped below sm. With several filters on it wrapped to two or three
+          lines, and this row is part of why the page had 493px of chrome
+          above the first record. The count and "show the rest" stay visible,
+          so nothing is hidden without saying so. */}
       {activeFilters.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          {activeFilters.map(f => (
+          {(chipsExpanded ? activeFilters : activeFilters.slice(0, CHIP_LIMIT)).map(f => (
             <button
               key={f.id}
               onClick={f.clear}
@@ -1596,6 +1657,17 @@ export default function CustomerListPage() {
               <Icon d={ICONS.close} className="w-3 h-3 shrink-0 text-indigo-300 group-hover:text-white" />
             </button>
           ))}
+          {activeFilters.length > CHIP_LIMIT && (
+            <button
+              onClick={() => setChipsExpanded(v => !v)}
+              className="text-xs font-medium text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded-lg transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              {chipsExpanded
+                ? 'Show fewer'
+                : `+${activeFilters.length - CHIP_LIMIT} more`}
+            </button>
+          )}
           {activeFilters.length > 1 && (
             <button
               onClick={clearAllFilters}
@@ -1721,8 +1793,7 @@ export default function CustomerListPage() {
           reaches the reader through a `title` tooltip, which doesn't exist on
           touch. Keyed off SCORE_BANDS so the swatch is the chip it explains. */}
       {cat === 'Lead' && !listLoading && filtered.length > 0 && (
-        <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap mb-3 text-xs text-gray-400">
-          <span className="font-medium">Score bands:</span>
+        <BandLegend title="Score bands">
           {SCORE_BANDS.map((band, i) => (
             <span
               key={band.label}
@@ -1733,7 +1804,7 @@ export default function CustomerListPage() {
               <span className="tabular-nums font-bold">{scoreBandRange(i)}</span>
             </span>
           ))}
-        </div>
+        </BandLegend>
       )}
 
       {/* Health bands, keyed with the chips' own badgeClass so the swatch is
@@ -1742,8 +1813,7 @@ export default function CustomerListPage() {
           tooltip, so on touch neither the thresholds nor the reasoning behind
           a "Good 72" existed anywhere on screen. */}
       {cat === 'Customer' && !listLoading && filtered.length > 0 && (
-        <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap mb-3 text-xs text-gray-400">
-          <span className="font-medium">Health bands:</span>
+        <BandLegend title="Health bands">
           {HEALTH_BANDS.map((band, i) => (
             <span
               key={band.label}
@@ -1754,7 +1824,7 @@ export default function CustomerListPage() {
               <span className="tabular-nums font-bold">{healthBandRange(i)}</span>
             </span>
           ))}
-        </div>
+        </BandLegend>
       )}
 
       {/* Side-by-side only at the width this layout was designed for. The page
