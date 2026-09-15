@@ -1,4 +1,5 @@
 import { REALTIME_CAP } from '../services/realtimeCap'
+import { Icon, ICONS } from './Icon'
 
 /**
  * Shown when a company-wide subscription came back at its realtime cap.
@@ -24,14 +25,19 @@ export default function PartialDataBanner({
   return (
     <div
       role="status"
-      className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4"
+      className="flex items-start gap-2 bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-4"
     >
-      ⚠ Based on {REALTIME_CAP.toLocaleString()} records only — this company has more.
-      {' '}
-      {detail ?? (totals
-        ? 'Every total, ranking and percentage on this page is understated.'
-        : 'Some records are not shown.')}
-      {' '}Contact support to raise this limit.
+      {/* Was a ⚠ glyph, which renders from Apple Color Emoji and ignores the
+          yellow it sits in — see the note at the top of Icon.tsx. */}
+      <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+      <span>
+        Based on {REALTIME_CAP.toLocaleString()} records only — this company has more.
+        {' '}
+        {detail ?? (totals
+          ? 'Every total, ranking and percentage on this page is understated.'
+          : 'Some records are not shown.')}
+        {' '}Contact support to raise this limit.
+      </span>
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { subscribeToInvoices, deleteInvoice, updateInvoice, INVOICE_REALTIME_LIMIT } from '../../services/invoiceService'
+import { subscribeToInvoices, deleteInvoice, updateInvoice } from '../../services/invoiceService'
 import {
   effectiveStatus, fmtCurrency, invoiceKpis, invoiceTotal, sortInvoices,
   statusClasses, statusLabel, DEFAULT_INVOICE_SORT, INVOICE_SORTS,
@@ -12,6 +12,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { usePermissions } from '../../hooks/usePermissions'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
+import PartialDataBanner from '../../components/PartialDataBanner'
 import { Icon, ICONS } from '../../components/Icon'
 import { runBulk, bulkResultMessage } from '../../utils/bulkResult'
 
@@ -233,6 +234,25 @@ export default function InvoiceListPage() {
   const offPageSelected = selectedIds.size - paginated.filter(inv => selectedIds.has(inv.id)).length
   const allPageSelected = paginated.length > 0 && paginated.every(inv => selectedIds.has(inv.id))
 
+  /**
+   * Names which control emptied the list.
+   *
+   * "No invoices match your search." was shown whether the search, the tab or
+   * both were responsible — so filtering to Paid and searching for a draft's
+   * customer gave one message for two causes and no way out of either.
+   */
+  const tabLabel  = TABS.find(t => t.key === tab)?.label ?? ''
+  const hasSearch = search.trim() !== ''
+  const emptyReason =
+    hasSearch && tab !== 'all' ? `No ${tabLabel.toLowerCase()} invoices match “${search.trim()}”.`
+    : hasSearch               ? `No invoices match “${search.trim()}”.`
+    : tab !== 'all'           ? `No ${tabLabel.toLowerCase()} invoices.`
+    : 'No invoices to show.'
+  const emptyAction =
+    hasSearch && tab !== 'all' ? 'Clear search and show all invoices'
+    : hasSearch               ? 'Clear search'
+    : 'Show all invoices'
+
   const confirmText = !pending ? '' :
     pending.kind === 'delete'
       ? `Delete ${selectedIds.size} selected invoice${selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`
@@ -259,24 +279,42 @@ export default function InvoiceListPage() {
         </div>
       </div>
 
-      {hitCap && (
-        <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
-          ⚠ Showing the first {INVOICE_REALTIME_LIMIT.toLocaleString()} invoices only. Some records may not be visible — contact support to raise this limit.
-        </div>
-      )}
+      {/* The shared banner, not a hand-rolled box: this page totals, so it
+          needs the "every total is understated" wording the other eight
+          capped pages already use. */}
+      {hitCap && <PartialDataBanner totals />}
 
-      {/* KPI strip */}
+      {/* Label above value, matching KpiCard on /chart, /forecast and
+          /heatmap — the value was on top here, so four figures read before
+          anything said what they were. Each carries a count, and Overdue
+          carries an age: "$1,500 overdue" reads the same at a week or a year
+          late, which is the difference between a call and a write-off. */}
       {!loading && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Total Billed',  value: kpis.billed,       color: 'text-white' },
-            { label: 'Paid',          value: kpis.paid,         color: 'text-green-400' },
-            { label: 'Outstanding',   value: kpis.outstanding,  color: 'text-blue-400' },
-            { label: 'Overdue',       value: kpis.overdue,      color: 'text-red-400' },
+            {
+              label: 'Total Billed', value: kpis.billed, color: 'text-white',
+              sub: `${kpis.billedCount} ${kpis.billedCount === 1 ? 'invoice' : 'invoices'}`,
+            },
+            {
+              label: 'Paid', value: kpis.paid, color: 'text-green-400',
+              sub: `${kpis.paidCount} of ${kpis.billedCount}`,
+            },
+            {
+              label: 'Outstanding', value: kpis.outstanding, color: 'text-blue-400',
+              sub: `${kpis.outstandingCount} unpaid`,
+            },
+            {
+              label: 'Overdue', value: kpis.overdue, color: 'text-red-400',
+              sub: kpis.overdueCount === 0
+                ? 'Nothing overdue'
+                : `${kpis.overdueCount} · oldest ${kpis.oldestOverdueDays} ${kpis.oldestOverdueDays === 1 ? 'day' : 'days'}`,
+            },
           ].map(k => (
             <div key={k.label} className="card p-4">
-              <p className={`text-lg font-bold ${k.color}`}>{fmtCurrency(k.value)}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{k.label}</p>
+              <p className="card-section-title">{k.label}</p>
+              <p className={`text-lg sm:text-xl font-bold mt-1 truncate ${k.color}`}>{fmtCurrency(k.value)}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{k.sub}</p>
             </div>
           ))}
         </div>
@@ -293,13 +331,29 @@ export default function InvoiceListPage() {
 
       {/* Search and sort */}
       <div className="flex gap-2">
-        <input
-          type="search"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search by customer or invoice number…"
-          className="input-field flex-1 min-w-0 text-sm py-2"
-        />
+        {/* type="search" gives a clear affordance in WebKit and nothing in
+            Firefox, and the placeholder was the only label. */}
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by customer or invoice number…"
+            aria-label="Search invoices by customer or invoice number"
+            className="input-field w-full text-sm py-2 pr-9"
+          />
+          {search !== '' && (
+            <button
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              title="Clear search"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              <Icon d={ICONS.close} className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
         <select
           value={sort}
           onChange={e => setSort(e.target.value as InvoiceSortKey)}
@@ -325,8 +379,11 @@ export default function InvoiceListPage() {
             }`}
           >
             {t.label}
+            {/* opacity-60 put these at 3.02:1 — the count is half the reason
+                to look at the tab. The parentheses already mark it as
+                secondary; it doesn't need to be faded as well. */}
             {counts[t.key] !== undefined && (
-              <span className="ml-1 opacity-60">({counts[t.key]})</span>
+              <span className="ml-1 font-normal tabular-nums">({counts[t.key]})</span>
             )}
           </button>
         ))}
@@ -379,16 +436,26 @@ export default function InvoiceListPage() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="card p-12 text-center space-y-2">
-          <p className="text-3xl">🧾</p>
+          {/* Was a 🧾 glyph, which paints its own colour. */}
+          <Icon d={ICONS.receipt} className="w-10 h-10 mx-auto text-gray-400" />
+          {/* "No invoices match your search" was a dead end with two possible
+              causes — the search box and the tab — and named neither. */}
           <p className="text-gray-400 text-sm">
             {invoices.length === 0
               ? 'No invoices yet. Create one from a customer record or click + New Invoice.'
-              : 'No invoices match your search.'}
+              : emptyReason}
           </p>
-          {invoices.length === 0 && (
+          {invoices.length === 0 ? (
             <Link to="/invoices/new" className="inline-block mt-2 text-sm text-indigo-400 hover:text-indigo-300">
               Create your first invoice →
             </Link>
+          ) : (
+            <button
+              onClick={() => { setSearch(''); setTab('all') }}
+              className="inline-block mt-2 text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              {emptyAction}
+            </button>
           )}
         </div>
       ) : (
@@ -400,7 +467,10 @@ export default function InvoiceListPage() {
           {/* The strip itself isn't gated on the permission — only the
               checkbox is. A viewer who can't bulk-edit still needs to know
               which fifty of four hundred they're looking at. */}
-          <div className="flex items-center gap-3 px-4 py-2 bg-gray-800/30">
+          {/* bg-gray-900, not bg-gray-800/30: 30% of a colour over itself is
+              that colour, so this strip was 1.000:1 against the card — an
+              invisible header. */}
+          <div className="flex items-center gap-3 px-4 py-2 bg-gray-900">
             {perms.canBulkAction && (
               <>
                 <input
@@ -410,7 +480,7 @@ export default function InvoiceListPage() {
                   onChange={togglePage}
                   className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 cursor-pointer shrink-0"
                 />
-                <label htmlFor="select-page" className="text-xs text-gray-500 cursor-pointer">
+                <label htmlFor="select-page" className="text-xs text-gray-400 cursor-pointer">
                   {allPageSelected ? 'Deselect page' : 'Select page'}
                 </label>
                 {filtered.length > paginated.length && (
@@ -431,8 +501,10 @@ export default function InvoiceListPage() {
           {paginated.map(inv => {
             const total  = invoiceTotal(inv)
             const status = inv._status
+            // The hover was gray-700/20 — 1.068:1 on the card, a list of
+            // clickable rows with no usable hover state. /50 is 1.185:1.
             return (
-              <div key={inv.id} className="flex items-center gap-3 px-4 py-4 hover:bg-gray-700/20 transition-colors">
+              <div key={inv.id} className="flex items-center gap-3 px-4 py-4 hover:bg-gray-700/50 transition-colors">
                 {perms.canBulkAction && (
                   <input
                     type="checkbox"
@@ -445,16 +517,26 @@ export default function InvoiceListPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2 flex-wrap">
                       <p className="text-sm font-semibold text-gray-100 truncate">{inv.customerName}</p>
-                      <p className="text-xs text-gray-600 shrink-0">{inv.invoiceNumber}</p>
+                      {/* Was gray-600: 1.94:1, the least readable thing on the
+                          row, on the field you match against a bank line. */}
+                      <p className="text-xs text-gray-400 shrink-0">{inv.invoiceNumber}</p>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    {/* Was gray-500 at 3.04:1. */}
+                    <p className="text-xs text-gray-400 mt-0.5">
                       Issued {fmtDate(inv.issueDate)} · Due {fmtDate(inv.dueDate)}
                     </p>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <p className="text-sm font-bold text-white">{fmtCurrency(total)}</p>
+                    {/* The only marker that an invoice belongs to a schedule
+                        was a ↻ glyph with a title and no accessible text, so
+                        it didn't exist for a screen reader and couldn't take
+                        the violet it was asked for. */}
                     {inv.recurring && (
-                      <span title={`Recurring ${inv.recurring}`} className="text-violet-400 text-sm">↻</span>
+                      <span title={`Recurring ${inv.recurring}`} className="text-violet-400 shrink-0">
+                        <Icon d={ICONS.refresh} className="w-3.5 h-3.5" />
+                        <span className="sr-only">Recurring {inv.recurring}</span>
+                      </span>
                     )}
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusClasses(status)}`}>
                       {statusLabel(status)}

@@ -119,6 +119,19 @@ export interface InvoiceKpis {
   /** Drafts, held apart from every figure above. */
   draft: number
   draftCount: number
+  /** How many invoices each figure is made of. */
+  billedCount: number
+  paidCount: number
+  outstandingCount: number
+  overdueCount: number
+  /**
+   * Days past due for the worst one, or 0 when nothing is overdue.
+   *
+   * The strip gave four totals and no age, so "$1,500 overdue" read the same
+   * whether that was a week late or a year — which is the difference between
+   * a reminder and a write-off.
+   */
+  oldestOverdueDays: number
 }
 
 /**
@@ -134,7 +147,12 @@ export interface InvoiceKpis {
  * own rather than dropped, so the money doesn't just vanish from the page.
  */
 export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): InvoiceKpis {
-  let billed = 0, paid = 0, overdue = 0, draft = 0, draftCount = 0
+  let billed = 0, paid = 0, overdue = 0, draft = 0
+  let draftCount = 0, billedCount = 0, paidCount = 0, overdueCount = 0
+  let oldestOverdueDays = 0
+
+  const today = new Date(now); today.setHours(0, 0, 0, 0)
+
   for (const inv of invoices) {
     const total = invoiceTotal(inv)
     switch (effectiveStatus(inv, now)) {
@@ -144,17 +162,30 @@ export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): Invoic
         break
       case 'paid':
         billed += total
+        billedCount++
         paid += total
+        paidCount++
         break
-      case 'overdue':
+      case 'overdue': {
         billed += total
+        billedCount++
         overdue += total
+        overdueCount++
+        const days = Math.floor((today.getTime() - inv.dueDate.getTime()) / 86_400_000)
+        if (days > oldestOverdueDays) oldestOverdueDays = days
         break
+      }
       default:
         billed += total
+        billedCount++
     }
   }
-  return { billed, paid, outstanding: billed - paid, overdue, draft, draftCount }
+
+  return {
+    billed, paid, outstanding: billed - paid, overdue, draft, draftCount,
+    billedCount, paidCount, outstandingCount: billedCount - paidCount,
+    overdueCount, oldestOverdueDays,
+  }
 }
 
 export type InvoiceSortKey =

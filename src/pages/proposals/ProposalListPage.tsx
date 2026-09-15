@@ -11,6 +11,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { usePermissions } from '../../hooks/usePermissions'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
+import { runBulk, bulkResultMessage } from '../../utils/bulkResult'
 
 const TABS: { key: ProposalStatus | 'all'; label: string }[] = [
   { key: 'all',      label: 'All' },
@@ -106,31 +107,39 @@ export default function ProposalListPage() {
     setSelectedIds(new Set())
   }
 
+  /**
+   * These used Promise.all, which rejects on the first failure and discards
+   * the other results — so 39 of 40 updates landing reported an unqualified
+   * "Bulk status update failed", and the selection was left whole so the
+   * retry re-ran all forty. Same fix as /invoices.
+   */
   async function handleBulkStatus(status: ProposalStatus) {
+    const ids = [...selectedIds]
     setBulkWorking(true)
-    try {
-      await Promise.all([...selectedIds].map(id => updateProposal(id, { status })))
-      toast(`Marked ${selectedIds.size} proposal${selectedIds.size === 1 ? '' : 's'} as ${statusLabel(status)}`, 'success')
-      clearSelection()
-    } catch {
-      toast('Bulk status update failed', 'error')
-    } finally {
-      setBulkWorking(false)
-    }
+    const out = await runBulk(ids, id => updateProposal(id, { status }))
+    if (out.firstError) console.error('[proposals] bulk status update:', out.firstError)
+    const { text, variant } = bulkResultMessage({
+      done: out.succeeded.length, total: ids.length,
+      noun: 'proposal', action: `marked as ${statusLabel(status)}`,
+    })
+    toast(text, variant)
+    setSelectedIds(new Set(out.failed))
+    setBulkWorking(false)
   }
 
   async function handleBulkDelete() {
+    const ids = [...selectedIds]
     setConfirmDelete(false)
     setBulkWorking(true)
-    try {
-      await Promise.all([...selectedIds].map(id => deleteProposal(id)))
-      toast(`Deleted ${selectedIds.size} proposal${selectedIds.size === 1 ? '' : 's'}`, 'success')
-      clearSelection()
-    } catch {
-      toast('Bulk delete failed', 'error')
-    } finally {
-      setBulkWorking(false)
-    }
+    const out = await runBulk(ids, id => deleteProposal(id))
+    if (out.firstError) console.error('[proposals] bulk delete:', out.firstError)
+    const { text, variant } = bulkResultMessage({
+      done: out.succeeded.length, total: ids.length, noun: 'proposal', action: 'deleted',
+    })
+    toast(text, variant)
+    // Only what's still there — a retry must not re-delete what's gone.
+    setSelectedIds(new Set(out.failed))
+    setBulkWorking(false)
   }
 
   async function handleBulkRemind() {

@@ -181,7 +181,52 @@ describe('invoiceKpis', () => {
   it('is all zeroes for an empty list', () => {
     expect(invoiceKpis([], NOW)).toEqual({
       billed: 0, paid: 0, outstanding: 0, overdue: 0, draft: 0, draftCount: 0,
+      billedCount: 0, paidCount: 0, outstandingCount: 0, overdueCount: 0,
+      oldestOverdueDays: 0,
     })
+  })
+
+  it('counts how many invoices each figure is made of', () => {
+    const k = invoiceKpis(MIX, NOW)
+    expect(k.billedCount).toBe(4)       // the two drafts excluded
+    expect(k.paidCount).toBe(1)
+    expect(k.overdueCount).toBe(1)
+    expect(k.outstandingCount).toBe(3)  // billed less paid
+  })
+
+  it('reports the age of the worst overdue invoice', () => {
+    // INV-5 was due 2026-05-01; the clock is 2026-06-15.
+    expect(invoiceKpis(MIX, NOW).oldestOverdueDays).toBe(45)
+  })
+
+  it('takes the oldest, not the first or the last', () => {
+    const many = [
+      at(100, { status: 'sent', dueDate: new Date('2026-06-10'), invoiceNumber: 'A' }),
+      at(100, { status: 'sent', dueDate: new Date('2026-01-15'), invoiceNumber: 'B' }),
+      at(100, { status: 'sent', dueDate: new Date('2026-06-01'), invoiceNumber: 'C' }),
+    ]
+    expect(invoiceKpis(many, NOW).oldestOverdueDays).toBe(151)
+  })
+
+  it('reports no overdue age when nothing is overdue', () => {
+    const k = invoiceKpis([at(100, { status: 'sent', dueDate: new Date('2026-12-01') })], NOW)
+    expect(k.overdueCount).toBe(0)
+    expect(k.oldestOverdueDays).toBe(0)
+  })
+
+  it('does not age a draft that is past due', () => {
+    const k = invoiceKpis([at(100, { status: 'draft', dueDate: new Date('2019-01-01') })], NOW)
+    expect(k.oldestOverdueDays).toBe(0)
+    expect(k.billedCount).toBe(0)
+    expect(k.draftCount).toBe(1)
+  })
+
+  it('measures age from midnight, so an invoice due yesterday is one day late', () => {
+    const k = invoiceKpis(
+      [at(100, { status: 'sent', dueDate: new Date('2026-06-14') })],
+      new Date('2026-06-15T23:30:00'),
+    )
+    expect(k.oldestOverdueDays).toBe(1)
   })
 
   it('includes tax in every figure', () => {
