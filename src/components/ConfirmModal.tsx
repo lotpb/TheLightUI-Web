@@ -4,11 +4,25 @@ interface Props {
   isOpen: boolean
   message: string
   confirmLabel?: string
+  /**
+   * Red is for actions that destroy data or leave the building. 'primary'
+   * exists for the ones that only change state — marking invoices paid is
+   * worth confirming, but colouring it like a delete teaches people to stop
+   * reading red.
+   */
+  tone?: 'danger' | 'primary'
   onConfirm: () => void
   onCancel: () => void
 }
 
-export default function ConfirmModal({ isOpen, message, confirmLabel = 'Delete', onConfirm, onCancel }: Props) {
+const CONFIRM_TONE: Record<'danger' | 'primary', string> = {
+  danger:  'bg-red-600 hover:bg-red-500',
+  primary: 'bg-indigo-600 hover:bg-indigo-500',
+}
+
+export default function ConfirmModal({
+  isOpen, message, confirmLabel = 'Delete', tone = 'danger', onConfirm, onCancel,
+}: Props) {
   useEffect(() => {
     if (!isOpen) return
     function onKey(e: KeyboardEvent) {
@@ -35,7 +49,7 @@ export default function ConfirmModal({ isOpen, message, confirmLabel = 'Delete',
           <button
             autoFocus
             onClick={onConfirm}
-            className="flex-1 py-2 text-sm font-medium rounded-xl bg-red-600 text-white hover:bg-red-500 transition-colors"
+            className={`flex-1 py-2 text-sm font-medium rounded-xl text-white transition-colors ${CONFIRM_TONE[tone]}`}
           >
             {confirmLabel}
           </button>
