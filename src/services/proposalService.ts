@@ -119,7 +119,30 @@ export async function updateProposal(
   id: string,
   fields: Partial<Omit<Proposal, 'id' | 'companyId' | 'createdAt'>>,
 ): Promise<void> {
+  /**
+   * A status of accepted/declined has to carry the date it happened.
+   *
+   * Only onProposalResponse — the trigger behind the customer-facing portal —
+   * ever wrote respondedAt, so a proposal closed over the phone from this app
+   * kept `respondedAt: null` forever. ProposalDetailPage guards on that field,
+   * so the "on Mar 3" beside the badge silently never appeared for those, and
+   * nothing could scope a win rate to a period.
+   *
+   * An existing date is preserved: re-saving a proposal the customer accepted
+   * online last week must not restamp it as today.
+   */
+  const closing = fields.status === 'accepted' || fields.status === 'declined'
+  const before = closing ? await getDoc(doc(db, COL, id)) : null
+  const alreadyResponded = before?.exists() ? Boolean(before.data().respondedAt) : false
+
   const updates: Record<string, unknown> = { updatedAt: serverTimestamp(), lastEditedByName: getCurrentUserLabel().name }
+  if (fields.status !== undefined) {
+    // Reopening (back to draft or sent) clears it — an open proposal has no
+    // response date.
+    updates.respondedAt = closing
+      ? (alreadyResponded ? before?.data()?.respondedAt : serverTimestamp())
+      : null
+  }
   if (fields.customerId      !== undefined) updates.customerId      = fields.customerId
   if (fields.customerName    !== undefined) updates.customerName    = fields.customerName
   if (fields.customerPhone   !== undefined) updates.customerPhone   = fields.customerPhone

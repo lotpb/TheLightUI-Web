@@ -48,10 +48,12 @@ export function proposalTotal(p: Pick<Proposal, 'lineItems' | 'taxRate'>): numbe
 
 // A 'sent' proposal past its expiry date is treated as expired everywhere in
 // the UI without needing a scheduled function to flip the stored status.
-export function effectiveStatus(p: Proposal): ProposalStatus {
+export function effectiveStatus(p: Proposal, now: Date = new Date()): ProposalStatus {
   if (p.status !== 'sent') return p.status
-  const now = new Date(); now.setHours(0, 0, 0, 0)
-  if (p.expiresDate < now) return 'expired'
+  // Copied, not mutated: normalising the caller's clock to midnight in place
+  // would skew every later proposal in a roll-up.
+  const today = new Date(now); today.setHours(0, 0, 0, 0)
+  if (p.expiresDate < today) return 'expired'
   return p.status
 }
 
@@ -71,6 +73,194 @@ export function statusClasses(s: ProposalStatus): string {
 
 export function fmtCurrency(n: number): string {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+}
+
+// ── Expiry ────────────────────────────────────────────────────────────────────
+
+/** How far ahead counts as "about to lapse". */
+export const EXPIRING_SOON_DAYS = 7
+
+/**
+ * Whole days until a proposal lapses. Negative once it has.
+ *
+ * Measured from midnight, matching effectiveStatus: a proposal expiring today
+ * is 0 days out and still live, not expired.
+ */
+export function daysUntilExpiry(
+  p: Pick<Proposal, 'expiresDate'>,
+  now: Date = new Date(),
+): number {
+  const today = new Date(now); today.setHours(0, 0, 0, 0)
+  const end = new Date(p.expiresDate); end.setHours(0, 0, 0, 0)
+  return Math.round((end.getTime() - today.getTime()) / 86_400_000)
+}
+
+/**
+ * 'draft'    — no expiry meaning yet, it hasn't gone out
+ * 'expiring' — live and lapsing within EXPIRING_SOON_DAYS
+ * 'live'     — sent, with time left
+ * 'expired'  — lapsed unanswered
+ * 'closed'   — accepted or declined; the expiry date no longer applies
+ *
+ * The page showed "Expires Mar 3" on accepted rows, a date that stopped
+ * meaning anything the moment the customer answered.
+ */
+export type ExpiryState = 'draft' | 'expiring' | 'live' | 'expired' | 'closed'
+
+export function expiryState(p: Proposal, now: Date = new Date()): ExpiryState {
+  const status = effectiveStatus(p, now)
+  if (status === 'draft') return 'draft'
+  if (status === 'accepted' || status === 'declined') return 'closed'
+  if (status === 'expired') return 'expired'
+  return daysUntilExpiry(p, now) <= EXPIRING_SOON_DAYS ? 'expiring' : 'live'
+}
+
+/** "Expires today" / "Expires in 3 days" / "Expired 12 days ago". */
+export function expiryLabel(p: Proposal, now: Date = new Date()): string {
+  const d = daysUntilExpiry(p, now)
+  if (d === 0) return 'Expires today'
+  if (d === 1) return 'Expires tomorrow'
+  if (d > 0) return `Expires in ${d} days`
+  if (d === -1) return 'Expired yesterday'
+  return `Expired ${Math.abs(d)} days ago`
+}
+
+// ── List roll-up ──────────────────────────────────────────────────────────────
+
+export interface ProposalKpis {
+  /** Live and unanswered: sent, not yet lapsed. */
+  pendingValue: number
+  pendingCount: number
+  /** The subset of those lapsing within EXPIRING_SOON_DAYS. */
+  expiringValue: number
+  expiringCount: number
+  acceptedValue: number
+  acceptedCount: number
+  declinedCount: number
+  expiredCount: number
+  expiredValue: number
+  /** Accepted + declined + expired — every proposal whose outcome is settled. */
+  decidedCount: number
+  /**
+   * Accepted as a share of decided, or null when nothing has been decided.
+   *
+   * The page divided by answered proposals only, so a quote that lapsed
+   * unanswered counted in neither half. Two accepts, one decline and 97
+   * silent expiries reported a 67% win rate against a real 2%; one accept and
+   * 24 expiries reported 100%. An expired proposal is a proposal that did not
+   * win, so it belongs in the denominator.
+   *
+   * Null rather than 0 because "nothing sent yet" and "we lose everything"
+   * are not the same thing, and the old code rendered both as 0%.
+   */
+  winRate: number | null
+  draftCount: number
+}
+
+export function proposalKpis(proposals: Proposal[], now: Date = new Date()): ProposalKpis {
+  const k: ProposalKpis = {
+    pendingValue: 0, pendingCount: 0, expiringValue: 0, expiringCount: 0,
+    acceptedValue: 0, acceptedCount: 0, declinedCount: 0,
+    expiredCount: 0, expiredValue: 0, decidedCount: 0, winRate: null, draftCount: 0,
+  }
+
+  for (const p of proposals) {
+    const total = proposalTotal(p)
+    switch (effectiveStatus(p, now)) {
+      case 'draft':
+        k.draftCount++
+        break
+      case 'sent':
+        k.pendingValue += total
+        k.pendingCount++
+        if (daysUntilExpiry(p, now) <= EXPIRING_SOON_DAYS) {
+          k.expiringValue += total
+          k.expiringCount++
+        }
+        break
+      case 'accepted':
+        k.acceptedValue += total
+        k.acceptedCount++
+        break
+      case 'declined':
+        k.declinedCount++
+        break
+      case 'expired':
+        k.expiredValue += total
+        k.expiredCount++
+        break
+    }
+  }
+
+  k.decidedCount = k.acceptedCount + k.declinedCount + k.expiredCount
+  k.winRate = k.decidedCount > 0
+    ? Math.round((k.acceptedCount / k.decidedCount) * 100)
+    : null
+  return k
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+export type ProposalSortKey =
+  | 'urgency' | 'expiryDesc' | 'amountDesc' | 'amountAsc'
+  | 'issuedDesc' | 'issuedAsc' | 'customer'
+
+/**
+ * The page had no sort control — proposalService sorts newest-created first
+ * and that was the only order, so the one question a quote list has to answer
+ * ("what lapses next") could only be answered by reading every row's date.
+ */
+export const PROPOSAL_SORTS: { key: ProposalSortKey; label: string }[] = [
+  { key: 'urgency',    label: 'Expiring soonest' },
+  { key: 'expiryDesc', label: 'Expiry — latest first' },
+  { key: 'amountDesc', label: 'Amount — high to low' },
+  { key: 'amountAsc',  label: 'Amount — low to high' },
+  { key: 'issuedDesc', label: 'Issued — newest first' },
+  { key: 'issuedAsc',  label: 'Issued — oldest first' },
+  { key: 'customer',   label: 'Customer A–Z' },
+]
+
+export const DEFAULT_PROPOSAL_SORT: ProposalSortKey = 'urgency'
+
+/**
+ * Returns a new array; the caller's input is never reordered in place.
+ *
+ * 'urgency' is not a plain date sort. A straight ascending expiry would put
+ * proposals that lapsed two years ago above the one lapsing on Friday, which
+ * is the opposite of useful. Live proposals come first by soonest expiry;
+ * settled ones (accepted, declined, long expired) fall below, most recent
+ * first. Ties break on the proposal number so rows hold their position.
+ */
+export function sortProposals<T extends Proposal>(
+  items: T[],
+  key: ProposalSortKey,
+  now: Date = new Date(),
+): T[] {
+  const byNumber = (a: T, b: T) => a.proposalNumber.localeCompare(b.proposalNumber)
+
+  /** 0 for anything still awaiting an answer, 1 for anything settled. */
+  const settled = (p: T) => {
+    const s = expiryState(p, now)
+    return s === 'expiring' || s === 'live' || s === 'draft' ? 0 : 1
+  }
+
+  const cmp: Record<ProposalSortKey, (a: T, b: T) => number> = {
+    urgency: (a, b) => {
+      const g = settled(a) - settled(b)
+      if (g !== 0) return g
+      const ta = a.expiresDate.getTime(), tb = b.expiresDate.getTime()
+      return settled(a) === 0 ? ta - tb : tb - ta
+    },
+    expiryDesc: (a, b) => b.expiresDate.getTime() - a.expiresDate.getTime(),
+    amountDesc: (a, b) => proposalTotal(b)       - proposalTotal(a),
+    amountAsc:  (a, b) => proposalTotal(a)       - proposalTotal(b),
+    issuedDesc: (a, b) => b.issueDate.getTime()  - a.issueDate.getTime(),
+    issuedAsc:  (a, b) => a.issueDate.getTime()  - b.issueDate.getTime(),
+    customer:   (a, b) => a.customerName.localeCompare(b.customerName),
+  }
+
+  const primary = cmp[key]
+  return [...items].sort((a, b) => primary(a, b) || byNumber(a, b))
 }
 
 export function generateProposalNumber(): string {
