@@ -30,6 +30,8 @@ export {
   disconnectFinancing,
   createFinancingApplication,
   financingWebhook,
+  verifyFinancingConnection,
+  updateFinancingMode,
 } from './financing'
 
 export {

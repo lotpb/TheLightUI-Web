@@ -4,6 +4,7 @@ import * as functions from 'firebase-functions/v1'
 import { FieldValue } from 'firebase-admin/firestore'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { db, auth, assertCompanyAdmin } from './common'
+import { notifyCompany } from './webhookDispatch'
 
 // ── Consumer financing (Wisetack-style) ──────────────────────────────────────
 //
@@ -28,15 +29,24 @@ import { db, auth, assertCompanyAdmin } from './common'
 // endpoint itself rather than any one company's funds). Each company then
 // pastes their own merchant API key via connectFinancing.
 
-const FINANCING_API_BASE = 'https://api.wisetack.com/v1'
+// Separate hosts, not a path segment. This was `${FINANCING_API_BASE}/sandbox`
+// — https://api.wisetack.com/v1/sandbox — and providers in this class publish
+// test mode on its own host, so the sandbox checkbox that defaults to on
+// almost certainly pointed at a 404. Both values are part of the unverified
+// shape above: confirm them before connecting a live account.
+const FINANCING_API_BASE     = 'https://api.wisetack.com/v1'
+const FINANCING_SANDBOX_BASE = 'https://api-sandbox.wisetack.com/v1'
+
+function apiBase(sandbox: boolean): string {
+  return sandbox ? FINANCING_SANDBOX_BASE : FINANCING_API_BASE
+}
 
 interface FinancingCreateResponse { id: string; applyUrl: string }
 
 async function callFinancingApi(
   apiKey: string, sandbox: boolean, path: string, body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const base = sandbox ? `${FINANCING_API_BASE}/sandbox` : FINANCING_API_BASE
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetch(`${apiBase(sandbox)}${path}`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -47,6 +57,66 @@ async function callFinancingApi(
     throw new functions.https.HttpsError('internal', message)
   }
   return json
+}
+
+/** Last four characters, so the UI can say which key is stored. */
+function keyTail(apiKey: string): string {
+  return apiKey.length <= 4 ? apiKey : apiKey.slice(-4)
+}
+
+interface VerifyResult {
+  verified: boolean
+  /**
+   * True when the provider actively rejected the credential, false when the
+   * call itself couldn't be completed.
+   *
+   * The distinction matters because the endpoint shape above is unverified: a
+   * 404 means "this path is wrong", not "this key is bad", and treating the
+   * two the same would throw away a perfectly good key.
+   */
+  definitive: boolean
+  message: string
+}
+
+/**
+ * Asks the provider whether the key works, before anything claims it does.
+ *
+ * connectFinancing used to check only that the field was non-empty, then
+ * write `connected: true`. So a typo, a revoked key, or a live key pasted
+ * with Sandbox ticked all produced a green "Connected" — and the first thing
+ * to actually talk to the provider was createFinancingApplication, i.e. a
+ * salesperson mid-conversation with a customer.
+ */
+async function verifyFinancingKey(apiKey: string, sandbox: boolean): Promise<VerifyResult> {
+  let res: Response
+  try {
+    res = await fetch(`${apiBase(sandbox)}/merchants/me`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    })
+  } catch (err) {
+    console.error('verifyFinancingKey: request failed', err)
+    return {
+      verified: false, definitive: false,
+      message: `Could not reach ${apiBase(sandbox)} — check network access, or the API base if this integration has not been confirmed against the provider's live docs yet.`,
+    }
+  }
+
+  if (res.ok) return { verified: true, definitive: true, message: '' }
+
+  if (res.status === 401 || res.status === 403) {
+    return {
+      verified: false, definitive: true,
+      message: sandbox
+        ? 'The provider rejected this key in sandbox mode. Check that it is a test key, not a live one.'
+        : 'The provider rejected this key in live mode. Check that it is a live key, not a test one.',
+    }
+  }
+
+  return {
+    verified: false, definitive: false,
+    message: `Verification endpoint returned ${res.status}. The key was saved but not confirmed — the request shape for this provider has not been verified against live docs.`,
+  }
 }
 
 function financingCredentialsRef(companyId: string) {
@@ -66,14 +136,94 @@ export const connectFinancing = functions
     const sandbox       = (data ?? {}).sandbox === true
     if (!apiKey) throw new functions.https.HttpsError('invalid-argument', 'apiKey is required')
 
+    const check = await verifyFinancingKey(apiKey, sandbox)
+
+    // A key the provider actively rejected is not stored at all — storing it
+    // would leave the account in a state that reads as configured and can
+    // never work.
+    if (!check.verified && check.definitive) {
+      throw new functions.https.HttpsError('invalid-argument', check.message)
+    }
+
     await financingCredentialsRef(companyId).set({
       apiKey, merchantName, sandbox, updatedAt: FieldValue.serverTimestamp(),
     })
     await financingStatusRef(companyId).set({
-      connected: true, merchantName, sandbox, connectedAt: FieldValue.serverTimestamp(),
+      connected: true,
+      merchantName,
+      sandbox,
+      keyTail: keyTail(apiKey),
+      verified: check.verified,
+      verificationError: check.verified ? null : check.message,
+      verifiedAt: check.verified ? FieldValue.serverTimestamp() : null,
+      connectedAt: FieldValue.serverTimestamp(),
     }, { merge: true })
 
-    return { success: true }
+    return { success: true, verified: check.verified, message: check.message }
+  })
+
+/**
+ * Re-checks the stored key without disconnecting.
+ *
+ * There was no way to ask "does this still work?" — a key revoked at the
+ * provider went on showing a green Connected until someone tried to use it.
+ */
+export const verifyFinancingConnection = functions
+  .https.onCall(async (_data, context) => {
+    const companyId = await assertCompanyAdmin(context)
+
+    const credSnap = await financingCredentialsRef(companyId).get()
+    if (!credSnap.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'Financing is not connected')
+    }
+    const { apiKey, sandbox } = credSnap.data() as { apiKey: string; sandbox: boolean }
+
+    const check = await verifyFinancingKey(apiKey, sandbox === true)
+    await financingStatusRef(companyId).set({
+      verified: check.verified,
+      verificationError: check.verified ? null : check.message,
+      verifiedAt: check.verified ? FieldValue.serverTimestamp() : null,
+    }, { merge: true })
+
+    return { verified: check.verified, message: check.message }
+  })
+
+/**
+ * Switches between sandbox and live on the stored credential.
+ *
+ * `sandbox` was write-once: changing it meant Disconnect — which deletes the
+ * only copy of the key — then fetching it from the provider dashboard again
+ * and re-pasting. The key is usually the same in both modes for this class of
+ * provider, so the mode is re-verified rather than assumed.
+ */
+export const updateFinancingMode = functions
+  .https.onCall(async (data, context) => {
+    const companyId = await assertCompanyAdmin(context)
+    const sandbox = (data ?? {}).sandbox === true
+
+    const credSnap = await financingCredentialsRef(companyId).get()
+    if (!credSnap.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'Financing is not connected')
+    }
+    const { apiKey } = credSnap.data() as { apiKey: string }
+
+    const check = await verifyFinancingKey(apiKey, sandbox)
+    if (!check.verified && check.definitive) {
+      // The mode isn't changed, so the working configuration survives.
+      throw new functions.https.HttpsError('invalid-argument', check.message)
+    }
+
+    await financingCredentialsRef(companyId).set(
+      { sandbox, updatedAt: FieldValue.serverTimestamp() }, { merge: true },
+    )
+    await financingStatusRef(companyId).set({
+      sandbox,
+      verified: check.verified,
+      verificationError: check.verified ? null : check.message,
+      verifiedAt: check.verified ? FieldValue.serverTimestamp() : null,
+    }, { merge: true })
+
+    return { success: true, verified: check.verified, message: check.message }
   })
 
 export const disconnectFinancing = functions
@@ -81,7 +231,13 @@ export const disconnectFinancing = functions
     const companyId = await assertCompanyAdmin(context)
 
     await financingCredentialsRef(companyId).delete()
-    await financingStatusRef(companyId).set({ connected: false }, { merge: true })
+    await financingStatusRef(companyId).set({
+      connected: false,
+      keyTail: null,
+      verified: false,
+      verificationError: null,
+      verifiedAt: null,
+    }, { merge: true })
 
     return { success: true }
   })
@@ -154,6 +310,9 @@ export const createFinancingApplication = functions
     const appRef = await db.collection('financingApplications').add({
       companyId, sourceType, sourceId,
       shareToken: source.shareToken || null,
+      // Denormalised so the /financing list can name who applied without
+      // reading every Proposal and Invoice the applications point at.
+      customerName: source.customerName,
       amount: source.amount,
       providerTransactionId: created.id,
       applyUrl: created.applyUrl,
@@ -236,6 +395,26 @@ export const financingWebhook = functions
         batch.update(db.collection(publicCol).doc(shareToken), { financingStatus: status })
       }
       await batch.commit()
+
+      // An approval or a decline used to arrive in silence: the status landed
+      // on a document no page listed, so staff found out only if they happened
+      // to reopen that one proposal.
+      const previous = String(app['status'] ?? '')
+      const companyId = String(app['companyId'] ?? '')
+      if (companyId && status !== previous) {
+        const who = String(app['customerName'] ?? '').trim() || 'A customer'
+        const amount = Number(app['amount']) || 0
+        const money = amount > 0
+          ? ` for $${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : ''
+        await notifyCompany(
+          companyId,
+          'financing.statusChanged',
+          `Financing ${status}`,
+          `${who}'s payment-plan application${money} is now ${status}.`,
+          '/financing',
+        )
+      }
     } catch (err) {
       console.error('financingWebhook error:', err)
     }
