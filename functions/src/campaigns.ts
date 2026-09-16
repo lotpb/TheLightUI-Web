@@ -16,7 +16,7 @@
 import * as functions from 'firebase-functions/v1'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { db, escapeHtml, assertCompanyAdmin } from './common'
-import { replyToFor, logOutboundEmail } from './outbound'
+import { replyToFor, logOutboundEmail, FROM_ADDRESS, FROM_HEADER } from './outbound'
 
 const CAMPAIGNS = 'campaigns'
 const RECIPIENTS = 'campaignRecipients'
@@ -135,7 +135,7 @@ export const sendCampaignEmails = functions
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'TheLight CRM <onboarding@resend.dev>',
+            from: FROM_HEADER,
             reply_to: replyToFor(companyId),
             to: [email],
             subject: interpolate(subject, r),
@@ -145,7 +145,7 @@ export const sendCampaignEmails = functions
         if (res.ok) {
           await rcpt.ref.update({ status: 'sent', sentAt: Timestamp.now() })
           await logOutboundEmail(
-            companyId, String(r['customerId'] ?? ''), 'onboarding@resend.dev',
+            companyId, String(r['customerId'] ?? ''), FROM_ADDRESS,
             email, interpolate(subject, r), interpolate(body, r),
           )
           sent++

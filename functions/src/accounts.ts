@@ -3,6 +3,7 @@
 import * as functions from 'firebase-functions/v1'
 import { FieldValue } from 'firebase-admin/firestore'
 import { db, auth, escapeHtml, makeRateLimiter, isSuperAdmin, isoOrNull, SUPER_ADMIN_EMAILS } from './common'
+import { FROM_HEADER } from './outbound'
 
 /**
  * Invitations are matched on an exact string, so the casing has to be settled
@@ -512,7 +513,7 @@ async function sendInviteEmail(opts: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'TheLight CRM <onboarding@resend.dev>',
+      from: FROM_HEADER,
       to: [opts.to],
       subject: `${opts.inviterName} invited you to TheLight`,
       html,

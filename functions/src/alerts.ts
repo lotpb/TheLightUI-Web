@@ -6,7 +6,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { type MulticastMessage } from 'firebase-admin/messaging'
 import { randomUUID } from 'crypto'
 import { db, messaging, escapeHtml } from './common'
-import { replyToFor, sendAutomationEmail } from './outbound'
+import { replyToFor, sendAutomationEmail, FROM_HEADER } from './outbound'
 import { notifyCompany } from './webhookDispatch'
 
 // ── Chat push notifications ─────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ export const onCustomerAssigned = functions
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: 'TheLight CRM <onboarding@resend.dev>',
+            from: FROM_HEADER,
             reply_to: replyToFor(companyId),
             to: [salesmanEmail],
             subject: `New ${noun} assigned: ${recordName}`,

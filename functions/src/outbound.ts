@@ -4,11 +4,25 @@
 import { FieldValue } from 'firebase-admin/firestore'
 import { db, lastTenDigits } from './common'
 
+// Verified sending domain in Resend. This is the root domain, not send.* —
+// Resend verifies the root and uses the `send` subdomain itself for the
+// SPF/MX bounce path (Return-Path). Sending from noreply@send.thelightcrm.com
+// gets a 403 "domain is not verified" because send.* is not a domain in
+// Resend, only a record under this one.
+export const SENDING_DOMAIN = 'thelightcrm.com'
+
+// Single source of truth for the From line on every outbound email. The
+// address must belong to a domain verified in Resend — Resend rejects any
+// other sender, so pointing this at an unverified domain silently breaks all
+// sending.
+export const FROM_ADDRESS = `noreply@${SENDING_DOMAIN}`
+export const FROM_HEADER  = `TheLight CRM <${FROM_ADDRESS}>`
+
 // Domain used for reply-to addresses so customer replies can be routed back
 // into their thread. Requires the domain to be verified in Resend with
 // inbound routing configured (MX records + Resend inbound webhook pointed
 // at emailInboundWebhook) — until then, replies just won't be captured.
-export const INBOUND_REPLY_DOMAIN = 'mail.thelightui.com'
+export const INBOUND_REPLY_DOMAIN = 'mail.thelightcrm.com'
 
 export function replyToFor(companyId: string): string {
   return `replies+${companyId}@${INBOUND_REPLY_DOMAIN}`
@@ -65,13 +79,13 @@ export async function sendAutomationEmail(
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: 'TheLight CRM <onboarding@resend.dev>',
+        from: FROM_HEADER,
         reply_to: replyToFor(companyId),
         to: [to], subject, html,
       }),
     })
     if (res.ok) {
-      await logOutboundEmail(companyId, customerId, 'onboarding@resend.dev', to, subject, body)
+      await logOutboundEmail(companyId, customerId, FROM_ADDRESS, to, subject, body)
     } else {
       console.error(`Automation email to ${to} failed ${res.status}:`, await res.text())
     }
