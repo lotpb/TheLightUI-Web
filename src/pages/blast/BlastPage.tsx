@@ -6,6 +6,7 @@ import { fullName, CATEGORIES, type CustomerItem } from '../../models/customer'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
 import { Icon, ICONS } from '../../components/Icon'
+import TemplatePicker from '../../components/TemplatePicker'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -440,6 +441,18 @@ export default function BlastPage() {
               </button>
             ))}
           </div>
+
+          {/* Saved /templates entries, translated into this composer's
+              single-brace tags on insert. Before this the library was
+              invisible to every sending path in the app. */}
+          <TemplatePicker
+            dialect="blast"
+            channel={channel === 'sms' ? 'sms' : 'email'}
+            onInsert={({ subject: s, body: b }) => {
+              if (s && channel === 'email') setSubject(s)
+              setBody(b)
+            }}
+          />
 
           {channel === 'email' && (
             <div>

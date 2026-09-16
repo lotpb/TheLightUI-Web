@@ -17,6 +17,7 @@ import ConfirmModal from '../../components/ConfirmModal'
 import PartialDataBanner from '../../components/PartialDataBanner'
 import { Icon, ICONS } from '../../components/Icon'
 import type { CustomerItem } from '../../models/customer'
+import TemplatePicker from '../../components/TemplatePicker'
 
 type Draft = Pick<Campaign, 'name' | 'subject' | 'body' | 'segment'>
 
@@ -394,6 +395,18 @@ export default function CampaignsPage() {
                       className="input-field w-full text-sm"
                     />
                   </div>
+
+                  {/* Saved /templates entries, translated into the campaign
+                      vocabulary on insert — {{name}} becomes {{fullName}},
+                      and {{date}}/{{amount}} are flagged because the campaign
+                      sender has no equivalent. */}
+                  <TemplatePicker
+                    dialect="campaign"
+                    channel="email"
+                    onInsert={({ subject: s, body: b }) =>
+                      setDraft(d => ({ ...d, subject: s || d.subject, body: b }))
+                    }
+                  />
 
                   <div>
                     <label htmlFor="camp-subject" className="block text-xs text-gray-300 mb-1.5">Email subject *</label>

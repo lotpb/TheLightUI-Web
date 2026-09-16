@@ -17,6 +17,7 @@ import { useToast } from '../../components/Toast'
 import { usePermissions } from '../../hooks/usePermissions'
 import ConfirmModal from '../../components/ConfirmModal'
 import DraftReplyButton from '../../components/DraftReplyButton'
+import TemplatePicker from '../../components/TemplatePicker'
 import { Icon, ICONS } from '../../components/Icon'
 
 export default function EmailInboxPage() {
@@ -551,6 +552,13 @@ function MessageReader({ message: m, canEdit, onClose, onDelete }: {
                   className="input-field w-full text-sm resize-y"
                 />
               </div>
+              {/* The reply composer couldn't reach a saved template either. */}
+              <TemplatePicker
+                dialect="record"
+                channel="email"
+                onInsert={({ subject: s, body: b }) => { if (s) setSubject(s); setBody(b) }}
+                disabled={sending}
+              />
               <div className="flex items-center gap-2 flex-wrap">
                 <DraftReplyButton
                   customerId={m.customerId}

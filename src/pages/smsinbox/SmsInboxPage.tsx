@@ -17,6 +17,7 @@ import { useSharedCustomers } from '../../hooks/useSharedCustomers'
 import { displayName, type CustomerItem } from '../../models/customer'
 import { usePermissions } from '../../hooks/usePermissions'
 import ConfirmModal from '../../components/ConfirmModal'
+import TemplatePicker from '../../components/TemplatePicker'
 import CollapsibleSection from '../../components/CollapsibleSection'
 import { Icon, ICONS } from '../../components/Icon'
 
@@ -732,6 +733,12 @@ function SmsReader({ message: m, customer, canEdit, onClose, onDelete }: {
                   className="input-field w-full text-sm resize-y"
                 />
               </div>
+              <TemplatePicker
+                dialect="record"
+                channel="sms"
+                onInsert={({ body: b }) => setBody(b)}
+                disabled={sending}
+              />
               <div className="flex items-center gap-2">
                 <div className="flex-1" />
                 <button type="button" onClick={() => setReplying(false)} className="btn-secondary text-sm px-3 py-1.5">
