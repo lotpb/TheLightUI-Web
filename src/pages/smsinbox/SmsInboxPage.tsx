@@ -65,11 +65,19 @@ export default function SmsInboxPage() {
         <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Twilio setup</p>
         <p className="text-xs text-gray-500">
           Enter the Twilio phone number this company sends/receives texts from (E.164 format, e.g. +15551234567).
-          Requires <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-300">TWILIO_ACCOUNT_SID</code> and
-          <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-300">TWILIO_AUTH_TOKEN</code> configured as
-          Firebase secrets, and the Twilio number's webhooks pointed at the
-          <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-300">smsInboundWebhook</code> /
-          <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-300">smsStatusWebhook</code> Cloud Functions.
+          {/* Explicit {' '} at every text/element boundary. JSX drops the
+              newline-and-indent between prose and an adjacent element, so this
+              read "and TWILIO_AUTH_TOKEN" only because of the mx-1 margin —
+              the string itself was "andTWILIO_AUTH_TOKEN", which is what you
+              get if you copy it. Same defect as the /email-inbox banner. */}
+          Requires <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">TWILIO_ACCOUNT_SID</code>{' '}
+          and{' '}
+          <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">TWILIO_AUTH_TOKEN</code>{' '}
+          configured as Firebase secrets, and the Twilio number's webhooks pointed at the{' '}
+          <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">smsInboundWebhook</code>{' '}
+          /{' '}
+          <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300">smsStatusWebhook</code>{' '}
+          Cloud Functions.
         </p>
         <div className="flex gap-2">
           <input

@@ -105,13 +105,20 @@ export default function EmailInboxPage() {
           mode and with no light-mode rule in index.css, leaving its text at
           3.31:1. The covered bg-yellow-900/20 is what /stripe-connect uses. */}
       <div className="card p-4 mb-6 border-yellow-600/40 bg-yellow-900/20">
+        {/* The spaces around <code> are explicit {' '}, not the mx-1 margin
+            this used to lean on. JSX drops the newline-and-indent between
+            text and an adjacent element, so the sentence was really
+            "pointed at theemailInboundWebhookCloud Function" — a margin made
+            it look spaced while the text itself had no gap, which shows up
+            the moment anyone copies it. /financing and /stripe-connect both
+            use {' '} for this. */}
         <p className="text-xs text-yellow-300">
           <strong>Setup required:</strong> receiving replies here requires a custom domain verified in Resend
-          with inbound email routing configured (MX records + an inbound webhook pointed at the
+          with inbound email routing configured (MX records + an inbound webhook pointed at the{' '}
           {/* text-gray-100, not text-yellow-200: bg-gray-800 resolves to white
               in light mode, so pale yellow on it measured 1.16:1 — the one
               string a developer needs out of this banner was invisible. */}
-          <code className="mx-1 px-1 py-0.5 rounded bg-gray-800 text-gray-100">emailInboundWebhook</code>
+          <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-100">emailInboundWebhook</code>{' '}
           Cloud Function). Until that's set up, this inbox will stay empty even though outbound emails
           already carry the reply-to address needed to route replies back.
         </p>
