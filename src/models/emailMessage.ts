@@ -11,4 +11,10 @@ export interface EmailMessage {
   body: string
   createdAt: Date
   read: boolean
+  /**
+   * Filenames only — the webhook used to discard attachments entirely, so a
+   * reply saying "photos attached" looked like it had none. The files
+   * themselves aren't stored yet.
+   */
+  attachmentNames: string[]
 }

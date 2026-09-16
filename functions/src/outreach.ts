@@ -5,7 +5,8 @@ import * as functions from 'firebase-functions/v1'
 import { FieldValue } from 'firebase-admin/firestore'
 import { createHmac } from 'crypto'
 import { db, auth, escapeHtml, lastTenDigits } from './common'
-import { replyToFor, logOutboundEmail, sendTwilioSms, smsOptOutDocId } from './outbound'
+import { replyToFor, logOutboundEmail, sendTwilioSms, smsOptOutDocId, FROM_ADDRESS, FROM_HEADER } from './outbound'
+import { notifyCompany } from './webhookDispatch'
 
 // ── Bulk email send ────────────────────────────────────────────────────────────
 // Callable: sends a personalized email to each selected customer record.
@@ -94,7 +95,7 @@ export const bulkSendEmail = functions
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: 'TheLight CRM <onboarding@resend.dev>',
+            from: FROM_HEADER,
             reply_to: replyToFor(companyId),
             to: [email],
             subject: personalizedSubject,
@@ -103,7 +104,7 @@ export const bulkSendEmail = functions
         })
         if (res.ok) {
           sent++
-          await logOutboundEmail(companyId, String(cust.id), 'onboarding@resend.dev', email, personalizedSubject, personalizedBody)
+          await logOutboundEmail(companyId, String(cust.id), FROM_ADDRESS, email, personalizedSubject, personalizedBody)
         } else {
           const errText = await res.text()
           console.error(`Email to ${email} failed ${res.status}:`, errText)
@@ -391,6 +392,22 @@ export const emailInboundWebhook = functions
         .get()
       const customerId = custSnap.empty ? '' : custSnap.docs[0].id
 
+      // Attachment filenames were dropped entirely, so a reply saying "photos
+      // attached" arrived looking like it had none. Only the names are kept —
+      // the files themselves aren't stored anywhere yet, and saying so beats
+      // showing nothing.
+      const rawAttachments = payload['attachments']
+      const attachmentNames = Array.isArray(rawAttachments)
+        ? rawAttachments
+            .map(a => {
+              if (typeof a === 'string') return a
+              const o = a as Record<string, unknown>
+              return String(o['filename'] ?? o['name'] ?? '')
+            })
+            .filter(name => name !== '')
+            .slice(0, 20)
+        : []
+
       await db.collection('emailMessages').add({
         companyId,
         customerId,
@@ -399,9 +416,22 @@ export const emailInboundWebhook = functions
         toAddress,
         subject,
         body,
+        attachmentNames,
         createdAt: FieldValue.serverTimestamp(),
         read: false,
       })
+
+      // A customer reply used to land in total silence: the doc was written
+      // with read: false and nothing told anyone. Every other webhook here
+      // raises an in-app notification; this one didn't, so the inbox was only
+      // ever found by someone who navigated to it on a hunch.
+      await notifyCompany(
+        companyId,
+        'email.replyReceived',
+        customerId ? 'Customer replied' : 'Reply from an unknown address',
+        `${fromAddress}${subject ? ` — ${subject}` : ''}`,
+        '/email-inbox',
+      )
 
       res.status(200).send('ok')
     } catch (err) {

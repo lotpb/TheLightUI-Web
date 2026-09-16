@@ -23,6 +23,7 @@ export type WebhookEventName =
   | 'signingRequest.signed'
   | 'customer.assigned'
   | 'financing.statusChanged'
+  | 'email.replyReceived'
 
 // Writes a persistent in-app notification (bell icon) for the whole company.
 // Independent of webhook subscriptions — always fires for these events.
