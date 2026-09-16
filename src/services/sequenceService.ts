@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, Timestamp, serverTimestamp,
+  onSnapshot, query, where, orderBy, limit, Timestamp, serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
@@ -78,6 +78,40 @@ function docToEnrollment(id: string, d: Record<string, unknown>): SequenceEnroll
     nextRunAt:            (d['nextRunAt'] as Timestamp)?.toDate() ?? new Date(),
     createdAt:            (d['createdAt'] as Timestamp)?.toDate() ?? new Date(),
   }
+}
+
+/**
+ * Every enrollment for the company.
+ *
+ * Only the per-customer query existed, so /sequences could show templates and
+ * nothing else — how many people are enrolled, who, what fires next and
+ * whether any of it is working were all unanswerable from the app.
+ *
+ * One equality filter and a client-side sort, deliberately: an
+ * orderBy('createdAt') here would need a (companyId, createdAt) composite
+ * index that doesn't exist, and would drop any document missing the field.
+ */
+export const ENROLLMENT_LIMIT = 500
+
+export function subscribeToCompanyEnrollments(
+  onData: (enrollments: SequenceEnrollment[], hitCap: boolean) => void,
+  onError: (e: Error) => void,
+): () => void {
+  const companyId = getCompanyId()
+  if (!companyId) { onData([], false); return () => {} }
+  return onSnapshot(
+    query(
+      collection(db, 'sequenceEnrollments'),
+      where('companyId', '==', companyId),
+      limit(ENROLLMENT_LIMIT),
+    ),
+    snap => {
+      const items = snap.docs.map(d => docToEnrollment(d.id, d.data()))
+      items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      onData(items, snap.size === ENROLLMENT_LIMIT)
+    },
+    onError,
+  )
 }
 
 export function subscribeToCustomerEnrollments(

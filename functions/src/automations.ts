@@ -54,21 +54,44 @@ export const runSequences = functions.pubsub
         const customerId = enr.customerId as string
         const startedAt  = (enr.startedAt as Timestamp).toDate()
 
-        // Execute step
-        if (step.action === 'note') {
-          const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-          const noteEntry = `--- [${dateStr}] ---\n[Sequence: ${seqSnap.data()!.name}] ${step.message}`
-          const customerDoc = await db.collection('Customers').doc(customerId).get()
-          if (customerDoc.exists) {
-            const existing = (customerDoc.data()!.comments as string) ?? ''
-            const merged = existing.trim() ? `${noteEntry}\n\n${existing}` : noteEntry
-            await db.collection('Customers').doc(customerId).update({ comments: merged, lastUpdate: Timestamp.now() })
+        // Both branches record step.message on the customer's record.
+        //
+        // The followup branch used to set followUpDate and nothing else, so
+        // step.message — a *required* field in the /sequences editor, labelled
+        // "Label for the follow-up date" — was read by nobody and written
+        // nowhere. Someone would compose a reminder for every follow-up step
+        // in a sequence and none of them would exist. There's no
+        // followUpNote field on Customers, and `comments` is where the note
+        // action already puts its text and where anyone looking at the
+        // follow-up flag will be looking, so both go there.
+        const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        const seqName = seqSnap.data()!.name
+        const label = step.action === 'followup' ? 'Follow-up set' : ''
+        const noteEntry = `--- [${dateStr}] ---\n[Sequence: ${seqName}]${label ? ` ${label} —` : ''} ${step.message}`
+
+        const customerRef = db.collection('Customers').doc(customerId)
+        const customerDoc = await customerRef.get()
+        if (customerDoc.exists) {
+          const existing = (customerDoc.data()!.comments as string) ?? ''
+          const merged = existing.trim() ? `${noteEntry}\n\n${existing}` : noteEntry
+          const updates: Record<string, unknown> = { comments: merged, lastUpdate: Timestamp.now() }
+
+          // One explicit branch per action, so an action added to
+          // ACTION_LABELS without a case here is visible rather than quietly
+          // falling through to "add a note". sequence.test.ts asserts this
+          // file branches on every action the editor offers.
+          if (step.action === 'note') {
+            // The merged comment above is the whole effect.
+          } else if (step.action === 'followup') {
+            // followUpDate stays "today": the step is firing on its own day by
+            // construction, so today *is* the day to follow up. Only the lost
+            // message needed fixing.
+            updates.followUpDate = Timestamp.now()
+          } else {
+            console.warn('runSequences: unhandled step action', step.action, 'on enrollment', enrollDoc.id)
           }
-        } else if (step.action === 'followup') {
-          await db.collection('Customers').doc(customerId).update({
-            followUpDate: Timestamp.now(),
-            lastUpdate:   Timestamp.now(),
-          })
+
+          await customerRef.update(updates)
         }
 
         // Advance
