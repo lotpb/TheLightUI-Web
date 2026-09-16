@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSharedCustomers } from '../../hooks/useSharedCustomers'
-import { subscribeToPipelineStages, savePipelineStages } from '../../services/pipelineStageService'
+import { subscribeToPipelineStages, savePipelineStages, savePipelineStaleDays } from '../../services/pipelineStageService'
+import { clampStaleDays, DEFAULT_STALE_DAYS } from '../../models/pipelineBoard'
 import {
   DEFAULT_STAGES, STAGE_COLOR_PALETTE, STAGE_COLOR_CLASSES, slugifyStageId, effectiveStageId,
   type PipelineStageConfig, type StageKind, type StageColorKey,
@@ -23,11 +24,26 @@ export default function PipelineStagesPage() {
   const [saving, setSaving] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [staleDays, setStaleDays] = useState(DEFAULT_STALE_DAYS)
 
   useEffect(() => subscribeToPipelineStages(
-    s => { setStages(s); setLoading(false) },
+    (s, days) => { setStages(s); setStaleDays(days); setLoading(false) },
     () => setLoading(false),
   ), [])
+
+  /** The going-cold threshold the board flags cards against. */
+  async function persistStaleDays(raw: string) {
+    const next = clampStaleDays(raw)
+    setStaleDays(next)
+    setSaving(true)
+    try {
+      await savePipelineStaleDays(next)
+    } catch {
+      toast('Could not save the going-cold threshold', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const salesRecords = useMemo(
     () => customers.filter(c => categoryMatches(c.category, 'Lead') || categoryMatches(c.category, 'Customer')),
@@ -108,6 +124,32 @@ export default function PipelineStagesPage() {
         <Link to="/pipeline" className="text-sm text-indigo-400 hover:text-indigo-300 shrink-0">
           ← Pipeline
         </Link>
+      </div>
+
+      {/* Was a hardcoded STALE_DAYS = 7 in PipelinePage, inside a feature
+          whose stages are otherwise fully configurable. */}
+      <div className="card p-4">
+        <label htmlFor="stale-days" className="text-sm font-medium text-gray-100 block">
+          Going-cold threshold
+        </label>
+        <p className="text-xs text-gray-400 mt-0.5 mb-2">
+          The board flags an open-stage card once it has gone this long without an update.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            id="stale-days"
+            type="number"
+            min={1}
+            max={365}
+            value={staleDays}
+            onChange={e => setStaleDays(Number(e.target.value))}
+            onBlur={e => persistStaleDays(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') persistStaleDays((e.target as HTMLInputElement).value) }}
+            disabled={saving}
+            className="input-field w-20 text-sm py-1.5 text-center tabular-nums"
+          />
+          <span className="text-sm text-gray-400">days</span>
+        </div>
       </div>
 
       <div className="card divide-y divide-gray-700/30 overflow-hidden">

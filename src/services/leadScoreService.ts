@@ -36,9 +36,31 @@ export function subscribeToLeadScores(
   )
 }
 
-export async function requestLeadScoring(): Promise<{ scored: number }> {
+export interface LeadScoringResult {
+  scored: number
+  /**
+   * Leads that qualified, before the model's own cap.
+   *
+   * The callable reads the first 200 company documents and scores at most 60
+   * of them. Without these two numbers the board showed badges on an
+   * arbitrary subset and said nothing, so "not scored" and "scored but
+   * unremarkable" looked identical.
+   */
+  eligible: number
+  /** True when the 200-document read itself was capped. */
+  readCapped: boolean
+}
+
+export async function requestLeadScoring(): Promise<LeadScoringResult> {
   const fns = getFunctions()
-  const fn  = httpsCallable<Record<string, never>, { scored: number }>(fns, 'scoreLeads')
+  const fn  = httpsCallable<Record<string, never>, Partial<LeadScoringResult>>(fns, 'scoreLeads')
   const res = await fn({})
-  return res.data
+  return {
+    scored: res.data.scored ?? 0,
+    // A deployment predating these fields returns neither; falling back to the
+    // scored count keeps the caption truthful rather than claiming a sample
+    // size it can't substantiate.
+    eligible: res.data.eligible ?? res.data.scored ?? 0,
+    readCapped: res.data.readCapped === true,
+  }
 }

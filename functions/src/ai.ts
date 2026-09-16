@@ -9,6 +9,38 @@ import { db, auth } from './common'
 // Callable: fetches active leads for the company, sends them to Claude API,
 // and stores scores in LeadScores/{companyId}.
 // Set secret: printf 'sk-ant-...' | npx firebase-tools functions:secrets:set ANTHROPIC_API_KEY --data-file -
+// ── Per-company daily caps on the paid API ───────────────────────────────────
+// scoreLeads had no rate limiting at all: a one-click button, no confirmation,
+// and a stuck client retry loop calling a paid API. Both callables now share
+// the mechanism with their own counters, so exhausting one doesn't disable the
+// other.
+const AI_DRAFTS_PER_DAY = 200
+const AI_SCORE_RUNS_PER_DAY = 40
+
+async function checkAiDailyQuota(
+  companyId: string,
+  field: 'draftCount' | 'scoreCount',
+  cap: number,
+): Promise<boolean> {
+  const ref = db.collection('aiUsage').doc(companyId)
+  const dayKey = new Date().toISOString().slice(0, 10)
+  return db.runTransaction(async (tx) => {
+    const data = (await tx.get(ref)).data() ?? {}
+    const sameDay = data['dayKey'] === dayKey
+    const count = sameDay && typeof data[field] === 'number' ? data[field] : 0
+    if (count >= cap) return false
+    // A new day resets both counters, so the whole doc is rewritten rather
+    // than merged when the day key rolls over.
+    const base = sameDay ? data : {}
+    tx.set(ref, { ...base, dayKey, [field]: count + 1, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+    return true
+  })
+}
+
+/** Documents read, and leads actually sent to the model. */
+const READ_LIMIT = 200
+const SCORE_LIMIT = 60
+
 export const scoreLeads = functions
   .runWith({ secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 60, memory: '256MB' })
   .https.onCall(async (_data, context) => {
@@ -25,20 +57,43 @@ export const scoreLeads = functions
       throw new functions.https.HttpsError('unavailable', 'ANTHROPIC_API_KEY secret not configured')
     }
 
-    // Fetch all active records for the company, filter to leads in JS
+    if (!await checkAiDailyQuota(companyId, 'scoreCount', AI_SCORE_RUNS_PER_DAY)) {
+      throw new functions.https.HttpsError(
+        'resource-exhausted',
+        `Daily limit of ${AI_SCORE_RUNS_PER_DAY} scoring runs reached. Try again tomorrow.`,
+      )
+    }
+
+    // Fetch all active records for the company, filter to leads in JS.
+    // READ_LIMIT and SCORE_LIMIT are both caps the caller has to know about:
+    // the board can show thousands of leads, and the counts returned below
+    // are what let it say "scored 60 of 312" instead of implying it covered
+    // everything. Newest first, so a repeat run is at least deterministic
+    // rather than an arbitrary slice.
     const snap = await db.collection('Customers')
       .where('companyId', '==', companyId)
-      .limit(200)
+      .limit(READ_LIMIT)
       .get()
 
     const now = Date.now()
-    const leads = snap.docs
+    const eligible = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter((r: Record<string, unknown>) =>
         r['active'] !== '0' &&
         (r['category'] as string | undefined)?.toLowerCase() === 'lead'
       )
-      .slice(0, 60)  // cap at 60 to keep token usage reasonable
+      // Newest first so the slice is the freshest leads rather than whichever
+      // documents Firestore happened to return.
+      .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+        const ta = (a['creationDate'] as { toMillis?: () => number } | null)?.toMillis?.() ?? 0
+        const tb = (b['creationDate'] as { toMillis?: () => number } | null)?.toMillis?.() ?? 0
+        return tb - ta
+      })
+    const eligibleCount = eligible.length
+    const readCapped = snap.size === READ_LIMIT
+
+    const leads = eligible
+      .slice(0, SCORE_LIMIT)  // keep token usage reasonable
       .map((r: Record<string, unknown>) => {
         // Customers docs store the creation time as `creationDate` (see
         // customerToFirestore in src/models/customer.ts) — there is no
@@ -69,7 +124,7 @@ export const scoreLeads = functions
       })
 
     if (leads.length === 0) {
-      return { scored: 0, message: 'No active leads found' }
+      return { scored: 0, eligible: 0, readCapped, message: 'No active leads found' }
     }
 
     const prompt = `You are a CRM analyst for a home services company. Score each lead 1-10 for likelihood to convert to a paying customer (10 = very hot, 1 = very cold).
@@ -134,7 +189,9 @@ Respond with ONLY valid JSON, no markdown, no explanation:
       scoredCount: Object.keys(scoresMap).length,
     })
 
-    return { scored: Object.keys(scoresMap).length }
+    // eligible and readCapped are what let the board state its own scope
+    // instead of showing badges on an arbitrary subset and saying nothing.
+    return { scored: Object.keys(scoresMap).length, eligible: eligibleCount, readCapped }
   })
 
 // ── AI-drafted replies ────────────────────────────────────────────────────────
@@ -196,23 +253,6 @@ function renderTranscript(messages: DraftThreadMessage[]): string {
     .join('\n')
 }
 
-// Per-company daily cap. There's no rate limiting on scoreLeads today; a stuck
-// client retry loop calling a paid API is worth guarding against cheaply.
-const AI_DRAFTS_PER_DAY = 200
-
-async function checkAiDailyQuota(companyId: string): Promise<boolean> {
-  const ref = db.collection('aiUsage').doc(companyId)
-  const dayKey = new Date().toISOString().slice(0, 10)
-  return db.runTransaction(async (tx) => {
-    const data = (await tx.get(ref)).data() ?? {}
-    const sameDay = data['dayKey'] === dayKey
-    const count = sameDay && typeof data['draftCount'] === 'number' ? data['draftCount'] : 0
-    if (count >= AI_DRAFTS_PER_DAY) return false
-    tx.set(ref, { dayKey, draftCount: count + 1, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
-    return true
-  })
-}
-
 export const draftReply = functions
   .runWith({ secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 60, memory: '256MB' })
   .https.onCall(async (data, context) => {
@@ -238,7 +278,7 @@ export const draftReply = functions
       throw new functions.https.HttpsError('not-found', 'Customer not found')
     }
 
-    if (!await checkAiDailyQuota(companyId)) {
+    if (!await checkAiDailyQuota(companyId, 'draftCount', AI_DRAFTS_PER_DAY)) {
       throw new functions.https.HttpsError(
         'resource-exhausted',
         `Daily limit of ${AI_DRAFTS_PER_DAY} AI drafts reached for this account. Try again tomorrow.`,

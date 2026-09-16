@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { doc, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../firebase/config'
@@ -9,6 +10,10 @@ import { subscribeToPipelineStages } from '../../services/pipelineStageService'
 import {
   DEFAULT_STAGES, STAGE_COLOR_CLASSES, effectiveStageId, type PipelineStageConfig,
 } from '../../models/pipelineStage'
+import {
+  bucketByStage, daysSince, filterStale, isStale, orphanedStageId,
+  stageTotals, staleCount as countStale, DEFAULT_STALE_DAYS,
+} from '../../models/pipelineBoard'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useSharedCustomers } from '../../hooks/useSharedCustomers'
 import { useSharedLeadScores } from '../../hooks/useSharedLeadScores'
@@ -17,6 +22,7 @@ import { usePrefStore } from '../../stores/prefStore'
 import PipelineJobsTabs from '../../components/PipelineJobsTabs'
 import ConfirmModal from '../../components/ConfirmModal'
 import { Icon, ICONS } from '../../components/Icon'
+import { useDismissOnOutside } from '../../hooks/useDismissOnOutside'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -25,22 +31,10 @@ import { Icon, ICONS } from '../../components/Icon'
 // mount thousands of nodes — but it's a paging step now, not a dead end.
 const PER_COL_PAGE = 30
 const COLLECTION  = 'Customers'
-const DAY_MS = 86_400_000
-const STALE_DAYS = 7
 
 function directionsUrl(c: CustomerItem): string {
   const address = [c.street, c.city, c.state].filter(Boolean).join(', ')
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
-}
-
-// Open (non-won/lost) stages with no update in a while are going cold — flag
-// them so they don't just quietly sit in the board unnoticed.
-function isStale(c: CustomerItem, stage: PipelineStageConfig | undefined): boolean {
-  if (!stage || stage.kind !== 'open') return false
-  return Date.now() - c.lastUpdateDate.getTime() > STALE_DAYS * DAY_MS
-}
-function daysSince(d: Date): number {
-  return Math.floor((Date.now() - d.getTime()) / DAY_MS)
 }
 
 /**
@@ -109,26 +103,51 @@ async function applyStageChange(id: string, stage: PipelineStageConfig, apptDate
 // ─── Date picker modal ───────────────────────────────────────────────────────
 
 function ApptModal({ stageLabel, onConfirm, onCancel }: { stageLabel: string; onConfirm: (d: Date) => void; onCancel: () => void }) {
-  const today = new Date().toISOString().slice(0, 10)
-  const [val, setVal] = useState('')
+  const [date, setDate] = useState('')
+  // Was hardcoded to 08:00 with no way to say otherwise.
+  const [time, setTime] = useState('08:00')
+
+  // Escape and a backdrop click, the way the shared ConfirmModal behaves.
+  // This modal had neither, and it opens automatically on any drop into a
+  // date-driven stage — so a mis-drop trapped you until you found Cancel.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCancel()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-xs shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onCancel} />
+      <div className="relative bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-xs shadow-2xl">
         <h3 className="text-base font-semibold text-white mb-1">Set Date for "{stageLabel}"</h3>
-        <p className="text-xs text-gray-400 mb-4">Pick a date for this stage.</p>
+        {/* No `min`: recording an appointment that already happened is a
+            normal thing to do, and the field used to forbid it. */}
+        <p className="text-xs text-gray-400 mb-4">Past dates are allowed, for logging a visit after the fact.</p>
+        <label htmlFor="appt-date" className="text-xs text-gray-400 block mb-1">Date</label>
         <input
+          id="appt-date"
           type="date"
-          min={today}
-          value={val}
-          onChange={e => setVal(e.target.value)}
-          className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white mb-4 focus:outline-none focus:border-orange-500"
+          value={date}
+          onChange={e => setDate(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white mb-3 focus:outline-none focus:border-orange-500"
           autoFocus
+        />
+        <label htmlFor="appt-time" className="text-xs text-gray-400 block mb-1">Time</label>
+        <input
+          id="appt-time"
+          type="time"
+          value={time}
+          onChange={e => setTime(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white mb-4 focus:outline-none focus:border-orange-500"
         />
         <div className="flex gap-2 justify-end">
           <button onClick={onCancel} className="btn-secondary text-sm px-4 py-2">Cancel</button>
           <button
-            onClick={() => { if (val) onConfirm(new Date(val + 'T08:00:00')) }}
-            disabled={!val}
+            onClick={() => { if (date) onConfirm(new Date(`${date}T${time || '08:00'}:00`)) }}
+            disabled={!date}
             className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
           >
             Confirm
@@ -152,27 +171,44 @@ export default function PipelinePage() {
   )
 
   const [stages, setStages] = useState<PipelineStageConfig[]>(DEFAULT_STAGES)
-  useEffect(() => subscribeToPipelineStages(setStages, () => {}), [])
+  // The going-cold threshold is a company setting now, not a hardcoded 7.
+  const [staleDays, setStaleDays] = useState(DEFAULT_STALE_DAYS)
+  useEffect(() => subscribeToPipelineStages(
+    (s, days) => { setStages(s); setStaleDays(days) },
+    () => {},
+  ), [])
 
   const [search, setSearch] = useState('')
+  // The going-cold strip was the only filter on a board whose sibling list
+  // page has nineteen. A rep's own column view is the one people ask for.
+  const [salesmanFilter, setSalesmanFilter] = useState('')
   // The going-cold strip used to be a passive number. It's a filter now, so
   // the count and the per-card pills have distinct jobs rather than both just
   // announcing staleness.
   const [staleOnly, setStaleOnly] = useState(false)
+  const salesmen = useMemo(
+    () => [...new Set(all.map(c => c.salesman.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [all],
+  )
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return all
-    return all.filter(c =>
+    let items = all
+    if (salesmanFilter) items = items.filter(c => c.salesman === salesmanFilter)
+    if (!q) return items
+    return items.filter(c =>
       fullName(c).toLowerCase().includes(q) ||
       c.companyName.toLowerCase().includes(q) ||
       c.salesman.toLowerCase().includes(q) ||
       c.city.toLowerCase().includes(q)
     )
-  }, [all, search])
+  }, [all, search, salesmanFilter])
 
   // Lead scores
   const [scoring,  setScoring]  = useState(false)
   const [scoreErr, setScoreErr] = useState<string | null>(null)
+  const [scoreNote, setScoreNote] = useState<string | null>(null)
+  const [confirmScore, setConfirmScore] = useState(false)
   const leadScoreDoc = useSharedLeadScores()
   const scores   = leadScoreDoc?.scores ?? {}
   const scoredAt = leadScoreDoc?.scoredAt ?? null
@@ -194,11 +230,28 @@ export default function PipelinePage() {
     { id: string; stage: PipelineStageConfig; message: string } | null
   >(null)
 
+  /**
+   * Scores a sample, and now says so.
+   *
+   * The callable reads the first 200 company documents and scores at most 60,
+   * so on a 300-lead board roughly 60 cards got a badge and nothing
+   * distinguished "not scored" from "scored and unremarkable". It's also a
+   * paid API call on a one-click button, which is why it confirms first.
+   */
   async function handleScoreLeads() {
+    setConfirmScore(false)
     setScoring(true)
     setScoreErr(null)
+    setScoreNote(null)
     try {
-      await requestLeadScoring()
+      const { scored, eligible, readCapped } = await requestLeadScoring()
+      if (scored === 0) {
+        setScoreNote('No active leads to score.')
+      } else if (scored < eligible || readCapped) {
+        setScoreNote(`Scored the ${scored} newest of ${readCapped ? '200+' : eligible} leads.`)
+      } else {
+        setScoreNote(`Scored all ${scored} leads.`)
+      }
     } catch (e) {
       setScoreErr(e instanceof Error ? e.message : 'Scoring failed')
     } finally {
@@ -208,47 +261,29 @@ export default function PipelinePage() {
 
   // Bucketed by stage, before the going-cold filter. staleCount is derived from
   // this so the filter's own label doesn't change when you switch it on.
-  const columnsAll = useMemo(() => {
-    const buckets: Record<string, CustomerItem[]> = {}
-    for (const s of stages) buckets[s.id] = []
-    for (const c of filtered) {
-      const stageId = effectiveStageId(c, stages)
-      ;(buckets[stageId] ??= []).push(c)
-    }
-    for (const s of stages) {
-      if (s.requiresDate) {
-        buckets[s.id].sort((a, b) => (a.startDate?.getTime() ?? 0) - (b.startDate?.getTime() ?? 0))
-      } else {
-        buckets[s.id].sort((a, b) => b.creationDate.getTime() - a.creationDate.getTime())
-      }
-    }
-    return buckets
-  }, [filtered, stages])
+  const columnsAll = useMemo(() => bucketByStage(filtered, stages), [filtered, stages])
 
   // Staleness depends on the stage kind, so it can only be applied after
   // bucketing — not in the search-level `filtered` memo.
-  const columns = useMemo(() => {
-    if (!staleOnly) return columnsAll
-    const out: Record<string, CustomerItem[]> = {}
-    for (const s of stages) {
-      out[s.id] = (columnsAll[s.id] ?? []).filter(c => isStale(c, s))
-    }
-    return out
-  }, [columnsAll, stages, staleOnly])
-
-  const wonStage = useMemo(() => stages.find(s => s.kind === 'won'), [stages])
-  const wonAmount = useMemo(
-    () => wonStage ? (columnsAll[wonStage.id] ?? []).reduce((s, c) => s + c.amount, 0) : 0,
-    [columnsAll, wonStage],
+  const columns = useMemo(
+    () => staleOnly ? filterStale(columnsAll, stages, staleDays) : columnsAll,
+    [columnsAll, stages, staleOnly, staleDays],
   )
-  const staleCount = useMemo(() => {
-    let n = 0
-    for (const s of stages) {
-      if (s.kind !== 'open') continue
-      n += (columnsAll[s.id] ?? []).filter(c => isStale(c, s)).length
-    }
-    return n
-  }, [columnsAll, stages])
+
+  /**
+   * Count and money per stage, from the buckets actually on screen.
+   *
+   * Only the Won column had a total, and it was computed from the unfiltered
+   * buckets — so with the going-cold filter on (which empties Won entirely,
+   * since a won record can't be stale) the column read "0" and "$45,000
+   * total" at the same time. Deriving both from `columns` makes that
+   * impossible.
+   */
+  const totals = useMemo(() => stageTotals(columns, stages), [columns, stages])
+  const staleCount = useMemo(
+    () => countStale(columnsAll, stages, staleDays),
+    [columnsAll, stages, staleDays],
+  )
 
   // Drag handlers
   function onDragStart(id: string) {
@@ -341,8 +376,11 @@ export default function PipelinePage() {
           {scoreErr && (
             <span className="text-xs text-red-400">{scoreErr}</span>
           )}
+          {!scoreErr && scoreNote && (
+            <span className="text-xs text-gray-400">{scoreNote}</span>
+          )}
           <button
-            onClick={handleScoreLeads}
+            onClick={() => setConfirmScore(true)}
             disabled={scoring}
             title="Score all leads with AI to see which are most likely to convert"
             className="flex items-center gap-1.5 btn-secondary text-sm px-3 py-1.5 disabled:opacity-60"
@@ -367,14 +405,29 @@ export default function PipelinePage() {
         </div>
       </div>
 
-      {/* Search */}
-      <input
-        type="search"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        placeholder="Search by name, salesman, or city…"
-        className="input-field w-full text-sm py-2 mb-3 shrink-0"
-      />
+      {/* Search. The placeholder omitted company name, which the filter has
+          always searched — so matching a business looked like luck. */}
+      <div className="flex gap-2 mb-3 shrink-0">
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by name, company, salesman, or city…"
+          aria-label="Search the pipeline by name, company, salesman or city"
+          className="input-field flex-1 min-w-0 text-sm py-2"
+        />
+        {salesmen.length > 0 && (
+          <select
+            value={salesmanFilter}
+            onChange={e => setSalesmanFilter(e.target.value)}
+            aria-label="Filter by salesman"
+            className="input-field text-sm py-2 shrink-0 w-36 sm:w-44 cursor-pointer"
+          >
+            <option value="">All salesmen</option>
+            {salesmen.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
+      </div>
 
       {hitCap && (
         <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm mb-3 shrink-0">
@@ -404,7 +457,7 @@ export default function PipelinePage() {
           >
             <Icon d={ICONS.clock} className="w-3.5 h-3.5" />
             <span className="tabular-nums">{staleCount}</span>
-            going cold ({STALE_DAYS}d+ no update)
+            going cold ({staleDays}d+ no update)
             {staleOnly && <span className="text-amber-300/80">· showing only these</span>}
           </button>
         </div>
@@ -431,6 +484,7 @@ export default function PipelinePage() {
             const { id, label, kind } = stage
             const colors = STAGE_COLOR_CLASSES[stage.colorKey]
             const items    = columns[id] ?? []
+            const total    = totals[id] ?? { count: 0, value: 0 }
             const limit    = colLimits[id] ?? PER_COL_PAGE
             const shown    = items.slice(0, limit)
             const overflow = items.length - shown.length
@@ -443,16 +497,25 @@ export default function PipelinePage() {
                 onDragLeave={onDragLeaveCol}
                 onDrop={e => onDropCol(e, stage)}
                 className={[
-                  'shrink-0 w-64 max-h-full flex flex-col rounded-2xl border overflow-hidden transition-colors',
+                  // Fills can't carry this: the whole 950/900/800 range spans
+                  // 1.37:1, so the column read as page background with text on
+                  // it. border-gray-500 is 4.16:1 against the page and 3.67:1
+                  // against its own fill — a boundary you can actually see.
+                  // overflow-hidden is gone: it clipped the card menu, which is
+                  // the only way to move a card on touch.
+                  'shrink-0 w-64 max-h-full flex flex-col rounded-2xl border-2 transition-colors',
                   isOver
-                    ? 'border-white/20 bg-gray-800/80 ring-2 ring-white/10'
-                    : 'bg-gray-900 border-gray-800',
+                    // Was bg-gray-800/80 + ring-white/10: 1.11:1 against the
+                    // normal column, i.e. no drop feedback at all on a
+                    // drag-and-drop board. indigo-500 is 4.51:1 on the page.
+                    ? 'border-indigo-500 bg-indigo-500/10 ring-2 ring-indigo-500/60'
+                    : 'bg-gray-900 border-gray-500',
                 ].join(' ')}
               >
-                <div className={`h-1 ${colors.bar}`} />
+                <div className={`h-1 rounded-t-xl ${colors.bar}`} />
 
                 <div className="flex items-center justify-between px-3 py-3">
-                  <span className={`text-sm font-semibold ${colors.text}`}>{label}</span>
+                  <span className={`stage-label text-sm font-semibold ${colors.text}`}>{label}</span>
                   {/* Neutral, not the stage hue. White-on-badge failed AA in
                       dark mode for 5 of the 14 palette colours (amber 3.19,
                       green 3.30, orange 3.56, teal 3.74, emerald 3.77), and
@@ -463,19 +526,25 @@ export default function PipelinePage() {
                       carried by the top bar and the label, both of which pass
                       everywhere; a count doesn't need to re-encode it. */}
                   <span className="text-xs font-bold text-gray-200 bg-gray-700 px-2 py-0.5 rounded-full tabular-nums">
-                    {items.length}
+                    {total.count}
                   </span>
                 </div>
 
-                {kind === 'won' && wonAmount > 0 && id === wonStage?.id && (
-                  <p className="px-3 -mt-2 pb-2 text-xs text-green-400 font-medium">
-                    {formatCurrency(wonAmount)} total
+                {/* Every stage, not just Won. "How much is sitting in
+                    Contacted" is the question a board exists to answer, and
+                    only one column answered it. Both numbers come from the
+                    same buckets, so they can't disagree. */}
+                {total.value > 0 && (
+                  <p className={`px-3 -mt-2 pb-2 text-xs font-medium tabular-nums ${
+                    kind === 'won' ? 'text-green-400' : 'text-gray-300'
+                  }`}>
+                    {formatCurrency(total.value)}
                   </p>
                 )}
 
                 {/* Drop target hint */}
                 {isOver && draggingId && (
-                  <div className="mx-2 mb-2 border-2 border-dashed border-white/20 rounded-xl py-2 text-center text-xs text-gray-400">
+                  <div className="mx-2 mb-2 border-2 border-dashed border-indigo-400 rounded-xl py-2 text-center text-xs text-indigo-300">
                     {kind === 'won' ? 'Convert to Customer' : kind === 'lost' ? 'Mark Inactive' : `Move to ${label}`}
                   </div>
                 )}
@@ -485,6 +554,8 @@ export default function PipelinePage() {
                     search field and two conditional banners above it, so the
                     offset was already wrong whenever the record-cap or
                     going-cold strip rendered. */}
+                {/* overflow-y-auto stays here, but the card menu is portalled to
+                    the body so this container can't clip it. */}
                 <div className="flex flex-col gap-2 px-2 pb-3 overflow-y-auto flex-1 min-h-0">
                   {shown.length === 0 && !isOver ? (
                     <p className="text-xs text-gray-400 text-center py-8">No records</p>
@@ -496,6 +567,7 @@ export default function PipelinePage() {
                         coloredAvatars={coloredAvatars}
                         stage={stage}
                         allStages={stages}
+                        staleDays={staleDays}
                         score={scores[c.id] ?? null}
                         isDragging={draggingId === c.id}
                         onDragStart={() => onDragStart(c.id)}
@@ -531,6 +603,21 @@ export default function PipelinePage() {
         confirmLabel="Move card"
         onConfirm={commitPendingConfirm}
         onCancel={() => setPendingConfirm(null)}
+      />
+
+      {/* A paid API call behind a one-click button, with no rate limiting on
+          the callable until this pass. It also only covers a sample, so the
+          dialog says what it will actually do. */}
+      <ConfirmModal
+        isOpen={confirmScore}
+        message={
+          'Score leads with AI? This sends the newest leads on this board to the AI service and overwrites the existing scores. ' +
+          'It covers the 60 newest leads per run, not the whole board, and is limited to 40 runs a day.'
+        }
+        confirmLabel="Score leads"
+        tone="primary"
+        onConfirm={handleScoreLeads}
+        onCancel={() => setConfirmScore(false)}
       />
 
       {/* Date-prompt modal */}
@@ -573,6 +660,7 @@ function PipelineCard({
   coloredAvatars,
   stage,
   allStages,
+  staleDays,
   score,
   isDragging,
   onDragStart,
@@ -583,6 +671,7 @@ function PipelineCard({
   coloredAvatars: boolean
   stage: PipelineStageConfig
   allStages: PipelineStageConfig[]
+  staleDays: number
   score: LeadScore | null
   isDragging: boolean
   onDragStart: () => void
@@ -600,25 +689,54 @@ function PipelineCard({
   const apptLabel = stage.requiresDate && c.startDate
     ? c.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : null
-  const stale = isStale(c, stage)
+  const stale = isStale(c, stage, staleDays)
+  // Its stored stage no longer exists in the config, so effectiveStageId put
+  // it in the first column — where it looks like new business.
+  const orphaned = orphanedStageId(c, allStages)
 
-  // Drag-and-drop doesn't work on touch devices — this menu is how phones
-  // and tablets move a card between columns.
+  /**
+   * Drag-and-drop doesn't work on touch devices — this menu is how phones and
+   * tablets move a card between columns, which is why it can't be allowed to
+   * clip.
+   *
+   * It was absolutely positioned inside the column's own `overflow-y-auto`
+   * body, under a column with `overflow-hidden`. Both ancestors clipped it, so
+   * for any card in the lower part of a column the menu was cut off — and with
+   * four or five stages that's most of the column. Portalled to the body with
+   * a fixed position measured off the button, it can't be clipped by anything.
+   */
   const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  useDismissOnOutside(menuRef, closeMenu, menuOpen)
+
+  const MENU_W = 176
+  const openMenu = useCallback(() => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (!r) return
+    const itemCount = allStages.length - 1
+    const height = Math.max(itemCount, 1) * 38 + 8
+    // Flip above the button when there isn't room below, and keep the panel
+    // inside the viewport horizontally.
+    const below = window.innerHeight - r.bottom
+    const top = below < height + 8 ? Math.max(8, r.top - height - 4) : r.bottom + 4
+    const left = Math.min(Math.max(8, r.right - MENU_W), window.innerWidth - MENU_W - 8)
+    setMenuPos({ top, left })
+    setMenuOpen(true)
+  }, [allStages.length])
+
+  // A scroll or resize invalidates a fixed position measured from the button.
   useEffect(() => {
     if (!menuOpen) return
-    function onDown(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
+    function reposition() { setMenuOpen(false) }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
     return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
     }
   }, [menuOpen])
 
@@ -630,8 +748,13 @@ function PipelineCard({
       className={[
         'rounded-xl border transition-all cursor-grab active:cursor-grabbing flex items-start',
         isDragging
-          ? 'opacity-40 border-gray-600 bg-gray-800 scale-95'
-          : 'bg-gray-800 border-transparent hover:bg-gray-700/80 hover:border-gray-700',
+          ? 'opacity-40 border-gray-500 bg-gray-800 scale-95'
+          // border-transparent meant the card had no edge at all until hover,
+          // on a fill only 1.21:1 from the column behind it. gray-600 is
+          // 1.94:1 against the card — reinforced by the fill step and the gap,
+          // and deliberately a tier below the column's gray-500 so the
+          // hierarchy still reads.
+          : 'bg-gray-800 border-gray-600 hover:bg-gray-700/80 hover:border-gray-500',
       ].join(' ')}
     >
       <Link
@@ -662,8 +785,19 @@ function PipelineCard({
           )}
         </div>
 
-        {(c.salesman || apptLabel || stale || score) && (
+        {(c.salesman || apptLabel || stale || score || orphaned) && (
           <div className="flex flex-wrap gap-1">
+            {/* Rename or delete a stage and an arbitrary set of records
+                silently reappears at the top of the funnel. Say so. */}
+            {orphaned && (
+              <span
+                title={`This record's stage "${orphaned}" no longer exists, so it's shown in the first column. Move it to set a current stage.`}
+                className="text-xs bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded-full inline-flex items-center gap-1 cursor-help"
+              >
+                <Icon d={ICONS.warning} className="w-3 h-3" />
+                Stage removed
+              </span>
+            )}
             {score && <ScoreBadge score={score} />}
             {c.salesman && (
               <span className="text-xs bg-gray-700/80 text-gray-300 px-1.5 py-0.5 rounded-full">{c.salesman}</span>
@@ -694,22 +828,22 @@ function PipelineCard({
               title="Get directions"
               className="text-indigo-400 hover:text-indigo-300 shrink-0"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 1.447-.894L9 7m0 13l6-3m-6-10l6 3m0 0l5.447-2.724A1 1 0 0 1 21 5.618v10.764a1 1 0 0 1-.553.894L15 20m0-13v13" />
-              </svg>
+              <Icon d={ICONS.mapPin} className="w-3.5 h-3.5" />
+              <span className="sr-only">Directions to {name || 'this record'}</span>
             </a>
           </div>
         )}
       </Link>
-      <div className="relative shrink-0 pt-2 pr-1" ref={menuRef}>
+      <div className="shrink-0 pt-2 pr-1">
         {/* Drag-and-drop never fires from a touch gesture, so on phones and
             tablets this is the only way to move a card. It was a 24px "⋯"
             character at text-gray-500 (3.04:1) — the primary interaction on
             half the devices, rendered as the least visible thing on the card.
             Now a 32px SVG button at 5.78:1 with a persistent surface. */}
         <button
+          ref={btnRef}
           type="button"
-          onClick={() => setMenuOpen(v => !v)}
+          onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
           aria-label={`Move ${name || 'record'} to another stage`}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
@@ -721,8 +855,13 @@ function PipelineCard({
         >
           <Icon d={ICONS.ellipsis} className="w-4 h-4" />
         </button>
-        {menuOpen && (
-          <div role="menu" className="absolute right-0 top-full mt-1 w-44 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-30 overflow-hidden">
+        {menuOpen && menuPos && createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, width: MENU_W }}
+            className="bg-gray-900 border border-gray-600 rounded-xl shadow-2xl z-[60] overflow-hidden"
+          >
             {allStages.filter(s => s.id !== stage.id).map(s => (
               <button
                 key={s.id}
@@ -734,7 +873,8 @@ function PipelineCard({
                 Move to {s.label}
               </button>
             ))}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </div>

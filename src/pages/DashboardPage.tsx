@@ -182,7 +182,7 @@ export default function DashboardPage() {
     return unsub
   }, [user, companyId])
 
-  useEffect(() => subscribeToPipelineStages(setPipelineStages, () => {}), [companyId])
+  useEffect(() => subscribeToPipelineStages(s => setPipelineStages(s), () => {}), [companyId])
 
   useEffect(() => {
     if (!user) { setProposalsLoading(false); return }

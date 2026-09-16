@@ -491,6 +491,24 @@ html.light-mode .bg-pink-500\/20.text-pink-200,     html.light-mode .bg-pink-500
    two-class combo rules above still win where a tint is present. */
 html.light-mode .text-amber-400 { color: #78350f !important; }
 
+/* The three 400-level hues that had no light-mode rule at all.
+   STAGE_COLOR_CLASSES in models/pipelineStage.ts offers fourteen, and its own
+   comment claimed `text` "pass[es] on every palette entry" — measured on the
+   /pipeline column surface (bg-gray-900, rgb(232 238 245) in light mode) these
+   three were the exceptions: orange 1.94:1, purple 2.26:1, pink 2.27:1. Orange
+   is the default "Appointment" stage, so this hit every company that never
+   customised its board. */
+html.light-mode .text-orange-400 { color: #9a3412 !important; } /* 6.26:1 */
+html.light-mode .text-purple-400 { color: #6b21a8 !important; } /* 7.47:1 */
+html.light-mode .text-pink-400   { color: #9d174d !important; } /* 6.75:1 */
+
+/* text-green-400's global light value is green-700 (#15803d), tuned for
+   amounts on a white card where it is 5.02:1. On the darker pipeline column
+   it drops to 4.29:1 — a marginal AA failure for a 14px semibold label — so
+   the stage heading takes green-800 instead of moving the global value that
+   a dozen other pages depend on. */
+html.light-mode .stage-label.text-green-400 { color: #166534 !important; } /* 6.10:1 */
+
 /* ─────────────────────────────────────────────────────────────────────── */
 
 @layer components {
