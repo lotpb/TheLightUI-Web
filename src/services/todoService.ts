@@ -35,6 +35,9 @@ function docToTodo(id: string, data: Record<string, unknown>): Todo {
                    : 'medium'),
     dueDate:     data.dueDate ? toDate(data.dueDate) : null,
     createdAt:   toDate(data.createdAt),
+    // Mapped now. `lastUpdate` has always been written on every toggle but
+    // was dropped here, so the page couldn't read any completion time at all.
+    completedAt: data.completedAt ? toDate(data.completedAt) : null,
     userId:      String(data.userId ?? ''),
     position:    typeof data.position === 'number' ? data.position : Date.now(),
     customerId:   typeof data.customerId === 'string' ? data.customerId : null,
@@ -68,6 +71,22 @@ export function subscribeToTodos(
     },
     onError,
   )
+}
+
+/**
+ * Deletes a set of tasks in one batch.
+ *
+ * The Completed tab could only grow — removing a finished task meant opening
+ * the editor, confirming, and navigating back, one at a time.
+ */
+export async function deleteTodos(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  // Firestore caps a batch at 500 writes.
+  for (let i = 0; i < ids.length; i += 450) {
+    const batch = writeBatch(db)
+    for (const id of ids.slice(i, i + 450)) batch.delete(doc(db, COL, id))
+    await batch.commit()
+  }
 }
 
 export async function addTodo(
@@ -142,7 +161,12 @@ export async function getTodo(id: string): Promise<Todo | null> {
 }
 
 export async function toggleTodo(id: string, isCompleted: boolean): Promise<void> {
-  await updateDoc(doc(db, COL, id), { isCompleted, lastUpdate: serverTimestamp() })
+  await updateDoc(doc(db, COL, id), {
+    isCompleted,
+    // Cleared on un-completing: an open task has no completion date.
+    completedAt: isCompleted ? serverTimestamp() : null,
+    lastUpdate: serverTimestamp(),
+  })
 }
 
 export async function updateTodo(
