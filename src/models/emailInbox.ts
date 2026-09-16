@@ -1,4 +1,9 @@
 import type { EmailMessage } from './emailMessage'
+// Both inboxes need these; /sms-inbox showed the same absolute timestamp on
+// every row for the same reason.
+import { relativeTime, fullTimestamp } from '../utils/relativeTime'
+
+export { relativeTime, fullTimestamp }
 
 /**
  * Filtering, counting and relative time for /email-inbox.
@@ -67,33 +72,6 @@ export function inboxCounts(messages: EmailMessage[]): InboxCounts {
     if (isUnmatched(m)) counts.unmatched++
   }
   return counts
-}
-
-/**
- * "9m ago" for recent mail, an absolute date once it's old.
- *
- * Every row showed "Sep 14 · 3:42 PM" even for something that arrived nine
- * minutes ago — an inbox wants to know how fresh a reply is, not its calendar
- * coordinates.
- */
-export function relativeTime(d: Date, now: Date = new Date()): string {
-  const secs = Math.floor((now.getTime() - d.getTime()) / 1000)
-  if (secs < 0) return 'just now'
-  if (secs < 60) return 'just now'
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-/** Full timestamp, for the reader where the exact time matters. */
-export function fullTimestamp(d: Date): string {
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
-    + ' · '
-    + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
 /**

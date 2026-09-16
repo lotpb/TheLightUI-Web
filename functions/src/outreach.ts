@@ -289,6 +289,23 @@ export const smsInboundWebhook = functions
         }
       }
 
+      // An inbound text raised no notification at all — the doc was written
+      // with read: false and nothing told anyone, so the inbox was only found
+      // by someone who went looking. An opt-out is worth saying out loud in
+      // particular: the consequence is that this number must not be texted
+      // again, and nothing in the UI announced it.
+      const isStop  = SMS_STOP_KEYWORDS.includes(normalizedBody)
+      const isStart = SMS_START_KEYWORDS.includes(normalizedBody)
+      await notifyCompany(
+        companyId,
+        'sms.replyReceived',
+        isStop  ? 'Customer opted out of texts'
+          : isStart ? 'Customer opted back in to texts'
+            : customerId ? 'Customer replied by text' : 'Text from an unknown number',
+        `${fromNumber}${body.trim() ? ` — ${body.trim().slice(0, 120)}` : ''}`,
+        '/sms-inbox',
+      )
+
       res.set('Content-Type', 'text/xml')
       res.status(200).send('<Response></Response>')
     } catch (err) {

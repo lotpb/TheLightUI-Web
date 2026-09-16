@@ -10,6 +10,7 @@ export type WebhookEvent =
   | 'signingRequest.signed'
   | 'financing.statusChanged'
   | 'email.replyReceived'
+  | 'sms.replyReceived'
 
 export const WEBHOOK_EVENTS: WebhookEvent[] = [
   'customer.created',
@@ -23,6 +24,7 @@ export const WEBHOOK_EVENTS: WebhookEvent[] = [
   'signingRequest.signed',
   'financing.statusChanged',
   'email.replyReceived',
+  'sms.replyReceived',
 ]
 
 export const WEBHOOK_EVENT_LABELS: Record<WebhookEvent, string> = {
@@ -37,6 +39,7 @@ export const WEBHOOK_EVENT_LABELS: Record<WebhookEvent, string> = {
   'signingRequest.signed':  'E-Signature document signed',
   'financing.statusChanged': 'Financing application status changed',
   'email.replyReceived':     'Customer replied to an email',
+  'sms.replyReceived':       'Customer replied by text',
 }
 
 export type WebhookStatus = 'success' | 'failure' | null
