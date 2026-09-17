@@ -567,13 +567,82 @@ service cloud.firestore {
       allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == formCompanyId;
     }
 
+    // ── Lead submission validation ────────────────────────────────────────────
+    //
+    // A public form is the one place a stranger writes to this database, so
+    // the shape is pinned here rather than trusted from the client.
+
+    // Exactly these keys, no others — so nothing can smuggle extra fields
+    // (or a status of its own choosing) into the document.
+    function submissionKeys() {
+      return ['companyId', 'first', 'lastname', 'phone', 'email',
+              'street', 'city', 'state', 'zip', 'message',
+              'status', 'submittedAt'];
+    }
+
+    function isValidSubmission() {
+      return request.resource.data.keys().hasOnly(submissionKeys())
+          && request.resource.data.keys().hasAll(['companyId', 'first', 'lastname', 'email', 'status', 'submittedAt'])
+          && request.resource.data.companyId is string
+          && request.resource.data.companyId.size() > 0
+          && request.resource.data.companyId.size() < 200
+          // The client cannot choose its own status; the page and the trigger
+          // own that field from here.
+          && request.resource.data.status == 'new'
+          && request.resource.data.submittedAt == request.time;
+    }
+
+    // The form has to exist and be switched on. This is what makes the
+    // "Form Active" toggle a real gate instead of a rendering hint.
+    function submissionFormIsOpen() {
+      return exists(/databases/$(database)/documents/leadForms/$(request.resource.data.companyId))
+          && get(/databases/$(database)/documents/leadForms/$(request.resource.data.companyId))
+               .data.get('enabled', true) == true;
+    }
+
+    // Every string bounded, so a single submission cannot be megabytes of
+    // padding and the inbox cannot be filled with unreadable rows.
+    function submissionFieldsInRange() {
+      return request.resource.data.first is string
+          && request.resource.data.first.size() > 0
+          && request.resource.data.first.size() <= 100
+          && request.resource.data.lastname is string
+          && request.resource.data.lastname.size() <= 100
+          && request.resource.data.email is string
+          && request.resource.data.email.size() <= 320
+          && request.resource.data.get('phone', '') is string
+          && request.resource.data.get('phone', '').size() <= 40
+          && request.resource.data.get('street', '') is string
+          && request.resource.data.get('street', '').size() <= 200
+          && request.resource.data.get('city', '') is string
+          && request.resource.data.get('city', '').size() <= 100
+          && request.resource.data.get('state', '') is string
+          && request.resource.data.get('state', '').size() <= 60
+          && request.resource.data.get('zip', '') is string
+          && request.resource.data.get('zip', '').size() <= 20
+          && request.resource.data.get('message', '') is string
+          && request.resource.data.get('message', '').size() <= 4000;
+    }
+
     // ── Lead Submissions ──────────────────────────────────────────────────────
     //
     //   Anyone can submit (public contact form). Only the owning company can
     //   read, update status, or delete submissions.
     //
+    //   `create: if true` was the entire write rule on the app's only
+    //   anonymous-write collection: no field validation, no length limits, no
+    //   check that companyId named a real company, and no check of the form's
+    //   own `enabled` flag — so the Form Active toggle changed what a browser
+    //   drew and not what the database accepted. Anyone could also inject
+    //   submissions into any company's inbox by editing the URL.
+    //
+    //   These four functions are what a submission has to satisfy now. They
+    //   cost one get() on the leadForms doc per submission, which is the price
+    //   of the form's own on/off switch meaning something.
     match /leadSubmissions/{subId} {
-      allow create: if true;
+      allow create: if isValidSubmission()
+                    && submissionFormIsOpen()
+                    && submissionFieldsInRange();
       allow read: if hasCompanyId()
                   && resource.data.get('companyId', '') == claimedCompanyId();
       // update and delete are split so the update branch can also pin the

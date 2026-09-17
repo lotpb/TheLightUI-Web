@@ -300,3 +300,61 @@ export const warrantyExpirationReminders = functions
 
     return null
   })
+
+// ── Web form submissions ──────────────────────────────────────────────────────
+//
+// leadSubmissions had no trigger at all: the document was written with
+// status 'new' and nothing else happened. No notification, no email, no
+// badge — so the only way to learn a web lead had arrived was for somebody
+// to open /lead-forms and notice the count on the tab. For the one lead
+// source where the customer is actively waiting for a reply, that is the
+// feature failing at its only job.
+//
+// The burst check is the other half. The security rule now validates the
+// shape of a submission but rules cannot rate-limit, so a script can still
+// write at volume. Anything past the threshold is flagged rather than
+// notified, which keeps real leads findable and stops a flood of bells.
+// It cannot prevent the write itself — that needs App Check or a Cloud
+// Function endpoint in front of the collection.
+const LEAD_BURST_PER_HOUR = 20
+
+export const onLeadSubmission = functions.firestore
+  .document('leadSubmissions/{subId}')
+  .onCreate(async (snap) => {
+    const sub = snap.data()
+    const companyId = String(sub['companyId'] ?? '')
+    if (!companyId) return null
+
+    const name = [String(sub['first'] ?? ''), String(sub['lastname'] ?? '')]
+      .filter(Boolean).join(' ').trim() || 'Someone'
+
+    const hourAgo = Timestamp.fromMillis(Date.now() - 3_600_000)
+    const recent = await db.collection('leadSubmissions')
+      .where('companyId', '==', companyId)
+      .where('submittedAt', '>=', hourAgo)
+      .count()
+      .get()
+
+    if (recent.data().count > LEAD_BURST_PER_HOUR) {
+      await snap.ref.update({ status: 'spam' })
+      console.warn(
+        `onLeadSubmission: ${recent.data().count} submissions in the last hour for ${companyId} — flagging`,
+      )
+      return null
+    }
+
+    const detail = [
+      String(sub['email'] ?? ''),
+      String(sub['phone'] ?? ''),
+      [String(sub['city'] ?? ''), String(sub['state'] ?? '')].filter(Boolean).join(', '),
+    ].filter(Boolean).join(' · ')
+
+    await notifyCompany(
+      companyId,
+      'leadForm.submitted',
+      'New web form lead',
+      `${name}${detail ? ` — ${detail}` : ''}`,
+      '/lead-forms',
+    )
+    return null
+  })

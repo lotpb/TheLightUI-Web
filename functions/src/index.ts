@@ -57,6 +57,7 @@ export {
   onLeadCreated,
   onCustomerAssigned,
   warrantyExpirationReminders,
+  onLeadSubmission,
 } from './alerts'
 
 export {

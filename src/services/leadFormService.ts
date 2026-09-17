@@ -13,7 +13,7 @@ const SUBS_COL  = 'leadSubmissions'
 // this form accepts anonymous public submissions — nothing stops it from
 // growing unbounded the way an internal-only collection's growth is at
 // least gated by how many employees are entering records.
-const SUBMISSION_REALTIME_LIMIT = 5_000
+export const SUBMISSION_REALTIME_LIMIT = 5_000
 
 function toSettings(companyId: string, d: Record<string, unknown>): LeadFormSettings {
   return {
@@ -57,18 +57,21 @@ export async function getLeadFormSettings(companyId: string): Promise<LeadFormSe
 export async function saveLeadFormSettings(
   settings: Omit<LeadFormSettings, 'updatedAt'>,
 ): Promise<void> {
+  // merge: true — a full overwrite silently deletes any field this type
+  // doesn't know about, so the moment a Cloud Function or a later setting
+  // adds one, pressing Save here would wipe it.
   await setDoc(doc(db, FORMS_COL, settings.companyId), {
     ...settings,
     updatedAt: serverTimestamp(),
-  })
+  }, { merge: true })
 }
 
 export function subscribeToLeadSubmissions(
-  onData:  (subs: LeadSubmission[]) => void,
+  onData:  (subs: LeadSubmission[], hitCap: boolean) => void,
   onError: (e: Error) => void,
 ): () => void {
   const companyId = getCompanyId()
-  if (!companyId) { onData([]); return () => {} }
+  if (!companyId) { onData([], false); return () => {} }
 
   const q = query(
     collection(db, SUBS_COL),
@@ -80,10 +83,13 @@ export function subscribeToLeadSubmissions(
   return onSnapshot(
     q,
     snap => {
-      if (snap.size === SUBMISSION_REALTIME_LIMIT) {
+      const hitCap = snap.size === SUBMISSION_REALTIME_LIMIT
+      if (hitCap) {
         console.warn(`[subscribeToLeadSubmissions] hit ${SUBMISSION_REALTIME_LIMIT}-document cap for company ${companyId}.`)
       }
-      onData(snap.docs.map(d => toSubmission(d.id, d.data())))
+      // Reported, not just logged: past the cap real leads stop appearing on
+      // the page with nothing on screen to say so.
+      onData(snap.docs.map(d => toSubmission(d.id, d.data())), hitCap)
     },
     onError,
   )

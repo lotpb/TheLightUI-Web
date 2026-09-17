@@ -11,6 +11,7 @@ export type WebhookEvent =
   | 'financing.statusChanged'
   | 'email.replyReceived'
   | 'sms.replyReceived'
+  | 'leadForm.submitted'
 
 export const WEBHOOK_EVENTS: WebhookEvent[] = [
   'customer.created',
@@ -25,6 +26,7 @@ export const WEBHOOK_EVENTS: WebhookEvent[] = [
   'financing.statusChanged',
   'email.replyReceived',
   'sms.replyReceived',
+  'leadForm.submitted',
 ]
 
 export const WEBHOOK_EVENT_LABELS: Record<WebhookEvent, string> = {
@@ -40,6 +42,7 @@ export const WEBHOOK_EVENT_LABELS: Record<WebhookEvent, string> = {
   'financing.statusChanged': 'Financing application status changed',
   'email.replyReceived':     'Customer replied to an email',
   'sms.replyReceived':       'Customer replied by text',
+  'leadForm.submitted':      'Web form submission received',
 }
 
 export type WebhookStatus = 'success' | 'failure' | null
