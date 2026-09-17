@@ -65,6 +65,11 @@ export interface CustomerItem {
   // in models/pipelineStage.ts falls back to the legacy derived stage for those.
   pipelineStage: string
   smsOptOut: boolean
+  // Set by the campaignUnsubscribe endpoint when this contact clicks the
+  // unsubscribe link in a campaign email. Like smsOptOut, it is deliberately
+  // NOT written by customerToFirestore, so an ordinary edit from the customer
+  // form can never silently re-subscribe someone who opted out.
+  emailOptOut: boolean
   // uid of the users/ doc for the assigned salesman (Lead/Customer only). Empty
   // when unassigned or when `salesman` was set to a legacy free-text name that
   // doesn't correspond to a real team-member account.
@@ -132,6 +137,7 @@ export const emptyCustomer = (): CustomerItem => ({
   customFields: {},
   pipelineStage: '',
   smsOptOut: false,
+  emailOptOut: false,
   assignedToUid: '',
   createdByUid: '',
   portalToken: '',
@@ -235,6 +241,7 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     customFields: parseCustomFields(d['customFields']),
     pipelineStage: str(d, 'pipelineStage'),
     smsOptOut: d['smsOptOut'] === true,
+    emailOptOut: d['emailOptOut'] === true,
     assignedToUid: str(d, 'assignedToUid'),
     createdByUid: str(d, 'createdByUid'),
     portalToken: str(d, 'portalToken'),

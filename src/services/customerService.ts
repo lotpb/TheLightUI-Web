@@ -520,6 +520,7 @@ export async function importCustomersFromJSON(
         customFields: {},
         pipelineStage: '',
         smsOptOut: false,
+        emailOptOut: false,
         assignedToUid: '',
         // Left blank on bulk import: a CSV of thousands of records isn't "mine"
         // in the sense the My Leads filter means, even though I ran the import.

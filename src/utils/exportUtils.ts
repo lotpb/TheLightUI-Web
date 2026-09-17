@@ -224,6 +224,7 @@ export async function importCustomersJSON(
     customFields:    {},
     pipelineStage:   '',
     smsOptOut:       false,
+    emailOptOut:     false,
     assignedToUid:   '',
     createdByUid:    '',
     portalToken:     '',
