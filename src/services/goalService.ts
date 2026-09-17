@@ -1,20 +1,9 @@
-import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore'
+import { doc, getDoc, onSnapshot, setDoc, Timestamp, type Unsubscribe } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
-import { type GoalDoc, type GoalValues, emptyGoalValues } from '../models/goal'
+import { resolveGoalTargets, type GoalDoc, type GoalValues } from '../models/goal'
 
 const COLLECTION = 'Goals'
-
-function valuesFromDoc(d: Record<string, unknown>, key: string): GoalValues {
-  const v = d[key]
-  if (typeof v !== 'object' || v === null) return emptyGoalValues()
-  const obj = v as Record<string, unknown>
-  return {
-    revenue:   typeof obj['revenue']   === 'number' ? obj['revenue']   : 0,
-    leads:     typeof obj['leads']     === 'number' ? obj['leads']     : 0,
-    customers: typeof obj['customers'] === 'number' ? obj['customers'] : 0,
-  }
-}
 
 function tsToDate(ts: unknown): Date {
   if (ts instanceof Timestamp) return ts.toDate()
@@ -22,36 +11,69 @@ function tsToDate(ts: unknown): Date {
   return new Date()
 }
 
-export async function getGoals(): Promise<GoalDoc | null> {
-  const companyId = getCompanyId()
-  if (!companyId) return null
-
-  const ref  = doc(db, COLLECTION, companyId)
-  const snap = await getDoc(ref)
-  if (!snap.exists()) return null
-
-  const d = snap.data() as Record<string, unknown>
+/**
+ * Reads a stored document. The instance-vs-legacy resolution lives in
+ * models/goal.ts (resolveGoalTargets), where it's under test.
+ */
+function parseGoalDoc(companyId: string, d: Record<string, unknown>): GoalDoc {
   return {
     companyId,
-    month:   valuesFromDoc(d, 'month'),
-    quarter: valuesFromDoc(d, 'quarter'),
-    year:    valuesFromDoc(d, 'year'),
+    ...resolveGoalTargets(d),
     updatedAt: tsToDate(d['updatedAt']),
   }
 }
 
-export async function saveGoals(
-  goals: Pick<GoalDoc, 'month' | 'quarter' | 'year'>
-): Promise<void> {
+export async function getGoals(): Promise<GoalDoc | null> {
+  const companyId = getCompanyId()
+  if (!companyId) return null
+
+  const snap = await getDoc(doc(db, COLLECTION, companyId))
+  if (!snap.exists()) return null
+  return parseGoalDoc(companyId, snap.data() as Record<string, unknown>)
+}
+
+/**
+ * Live targets.
+ *
+ * The page read them once with getDoc, so it never saw a colleague's change —
+ * and then wrote the whole document back, destroying it. The listener makes
+ * the page notice; the per-period write below is what stops it clobbering.
+ */
+export function subscribeToGoals(
+  onData: (goals: GoalDoc | null) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const companyId = getCompanyId()
+  if (!companyId) { onData(null); return () => {} }
+
+  return onSnapshot(
+    doc(db, COLLECTION, companyId),
+    snap => onData(
+      snap.exists() ? parseGoalDoc(companyId, snap.data() as Record<string, unknown>) : null,
+    ),
+    onError,
+  )
+}
+
+/**
+ * Writes the targets for one period instance.
+ *
+ * saveGoals used to `setDoc` the whole document — all three periods out of
+ * local state, no merge — so two managers editing different periods silently
+ * clobbered one another and the last save always won with no indication. A
+ * merge write against a single `periods.{key}` field touches nothing else.
+ */
+export async function saveGoalsForPeriod(periodKey: string, values: GoalValues): Promise<void> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
 
-  const ref = doc(db, COLLECTION, companyId)
-  await setDoc(ref, {
-    companyId,
-    month:   goals.month,
-    quarter: goals.quarter,
-    year:    goals.year,
-    updatedAt: Timestamp.now(),
-  })
+  await setDoc(
+    doc(db, COLLECTION, companyId),
+    {
+      companyId,
+      periods: { [periodKey]: values },
+      updatedAt: Timestamp.now(),
+    },
+    { merge: true },
+  )
 }
