@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:rules": "npx --yes firebase-tools@15 emulators:exec --only firestore --project thelightui-rules-test \"vitest run --config vitest.rules.config.ts\""
+    "test:rules": "firebase emulators:exec --only firestore \"node rules-tests/serviceRequests.mjs\""
   },
   "dependencies": {
     "@react-google-maps/api": "^2.20.3",

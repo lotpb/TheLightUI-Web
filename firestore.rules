@@ -256,10 +256,82 @@ service cloud.firestore {
     }
 
     // ── Service Requests (public submissions from customer portal) ────────────
-    //   Anyone can create; only company members can read/delete.
     //
+    //   `allow create: if true` accepted any document, of any shape, at any
+    //   size, from anyone — the same hole leadSubmissions had. The portal's
+    //   real authorization is the bearer token in its URL, and the rule
+    //   ignored it entirely.
+    //
+    //   A create must now carry a token that resolves to an existing
+    //   customerPortals document, and the companyId/customerId it claims have
+    //   to be the ones recorded on that portal — so a token issued for one
+    //   customer cannot file a request against another, and a token that was
+    //   never issued cannot file at all. That costs one get() per submission
+    //   (identical reads within a single evaluation are cached), which is the
+    //   price of the token meaning something.
+    //
+    //   Only `description` is required non-empty, which is what the form
+    //   itself enforces. `name` is prefilled and HTML-required but can be
+    //   blank when the customer record has no name, and phone, email and
+    //   preferredDate are all legitimately empty. Being stricter than the
+    //   form would reject real submissions silently — on a public form,
+    //   nobody on this side would ever see it happen.
+    //
+    function serviceRequestKeys() {
+      return ['token', 'companyId', 'customerId', 'name', 'phone', 'email',
+              'description', 'preferredDate', 'status', 'createdAt'];
+    }
+
+    function isValidServiceRequest() {
+      // The portal always sends all ten, so this is an exact shape match
+      // rather than a minimum.
+      return request.resource.data.keys().hasOnly(serviceRequestKeys())
+          && request.resource.data.keys().hasAll(serviceRequestKeys())
+          // The submitter cannot choose its own status; the dispatch board and
+          // the automation triggers own that field from here.
+          && request.resource.data.status == 'new'
+          && request.resource.data.createdAt == request.time;
+    }
+
+    function serviceRequestPortal() {
+      return get(/databases/$(database)/documents/customerPortals/$(request.resource.data.token)).data;
+    }
+
+    // Token bounds are checked before the token reaches a document path, so a
+    // megabyte of padding can't be used to build one.
+    function serviceRequestTokenMatches() {
+      return request.resource.data.token is string
+          && request.resource.data.token.size() > 0
+          && request.resource.data.token.size() <= 200
+          && exists(/databases/$(database)/documents/customerPortals/$(request.resource.data.token))
+          && serviceRequestPortal().get('companyId', '')  == request.resource.data.companyId
+          && serviceRequestPortal().get('customerId', '') == request.resource.data.customerId;
+    }
+
+    function serviceRequestFieldsInRange() {
+      return request.resource.data.companyId is string
+          && request.resource.data.companyId.size() > 0
+          && request.resource.data.companyId.size() < 200
+          && request.resource.data.customerId is string
+          && request.resource.data.customerId.size() > 0
+          && request.resource.data.customerId.size() < 200
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 200
+          && request.resource.data.phone is string
+          && request.resource.data.phone.size() <= 40
+          && request.resource.data.email is string
+          && request.resource.data.email.size() <= 320
+          && request.resource.data.description is string
+          && request.resource.data.description.size() > 0
+          && request.resource.data.description.size() <= 4000
+          && request.resource.data.preferredDate is string
+          && request.resource.data.preferredDate.size() <= 40;
+    }
+
     match /serviceRequests/{requestId} {
-      allow create: if true;
+      allow create: if isValidServiceRequest()
+                    && serviceRequestTokenMatches()
+                    && serviceRequestFieldsInRange();
       allow read: if hasCompanyId()
                   && resource.data.get('companyId', '') == claimedCompanyId();
       allow delete: if hasCompanyId() && !isViewer()
