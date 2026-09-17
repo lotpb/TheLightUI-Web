@@ -282,7 +282,12 @@ export const warrantyExpirationReminders = functions
         if (!email || !email.includes('@')) continue
 
         const title   = String(w['title'] ?? 'Your warranty')
-        const expDate = expirationDate.toDate().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+        // Warranty dates are day-granular and stored at UTC midnight, so this
+        // has to read them back in UTC. Without the timeZone it renders in the
+        // function's runtime zone while /warranties renders in the viewer's,
+        // and the two disagree by a day about the same warranty — in a message
+        // the customer reads. See models/warranty.ts.
+        const expDate = expirationDate.toDate().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
         const subject = `${title} is expiring soon`
         const body = [
           `Hi ${w['customerName'] ?? ''},`,

@@ -43,7 +43,10 @@ import { subscribeToCustomerProposals } from '../../services/proposalService'
 import { subscribeToCustomerServicePlans } from '../../services/servicePlanService'
 import { generatePortalLink } from '../../services/customerPortalService'
 import { subscribeToCustomerWarranties } from '../../services/warrantyService'
-import { isExpired as warrantyIsExpired, isExpiringSoon as warrantyIsExpiringSoon, type Warranty } from '../../models/warranty'
+import {
+  fmtWarrantyDate, warrantyStatusOf, WARRANTY_STATUS_COLORS, WARRANTY_STATUS_LABELS,
+  type Warranty,
+} from '../../models/warranty'
 import { effectiveStatus, statusClasses, statusLabel, invoiceTotal, fmtCurrency } from '../../models/invoice'
 import type { Invoice } from '../../models/invoice'
 import {
@@ -2102,11 +2105,12 @@ function RelatedRecordsSection({
     mySigningRequests.length + myPurchaseOrders.length + referredByMe.length + referredToMe.length
   useEffect(() => { onCount?.(totalCount) }, [totalCount]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Was a local copy of this with the same four branches and the same class
+  // strings. Two surfaces deciding a warranty's status two ways is how one
+  // screen ends up disagreeing with the next; models/warranty.ts owns it now.
   function warrantyStatus(w: Warranty): { label: string; cls: string } {
-    if (!w.isActive) return { label: 'Inactive', cls: 'bg-gray-700/60 text-gray-400 border-gray-600/40' }
-    if (warrantyIsExpired(w))      return { label: 'Expired',       cls: 'bg-red-500/20    text-red-400    border-red-600/40' }
-    if (warrantyIsExpiringSoon(w)) return { label: 'Expiring Soon', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-600/40' }
-    return { label: 'Active', cls: 'bg-green-500/20 text-green-400 border-green-600/40' }
+    const status = warrantyStatusOf(w)
+    return { label: WARRANTY_STATUS_LABELS[status], cls: WARRANTY_STATUS_COLORS[status] }
   }
 
   function fmtDuration(mins: number | null): string {
@@ -2209,7 +2213,10 @@ function RelatedRecordsSection({
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
                   {status.label}
                 </span>
-                <span className="text-xs text-gray-400">{formatDate(w.expirationDate)}</span>
+                {/* Not formatDate: a warranty expiry is a day-granular date
+                    stored at UTC midnight, and the shared formatter reads it
+                    back locally, printing the day before. */}
+                <span className="text-xs text-gray-400">{fmtWarrantyDate(w.expirationDate)}</span>
               </span>
             </Link>
           )

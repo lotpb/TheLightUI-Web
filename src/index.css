@@ -425,9 +425,15 @@ html.light-mode .bg-indigo-600\/20.text-indigo-200,
 html.light-mode .bg-indigo-500\/15.text-indigo-200 { color: #312e81 !important; }
 
 /* Todo priority pills (bg-X-500/20 + text-X-400 + border-X-600/40): plain black
-   reads better than a tinted shade against these very pale pastel backgrounds. */
+   reads better than a tinted shade against these very pale pastel backgrounds.
+   The same triple is WARRANTY_STATUS_COLORS in models/warranty.ts, which is
+   why green is here too: it was the one status of the four with no rule, so
+   the Active badge fell back to the global text-green-400 (#15803d) and
+   measured 4.22:1 on the white card while Expired and Expiring Soon beside it
+   sat at 21:1. warranty.test.ts checks all four still match a rule here. */
 html.light-mode .bg-yellow-500\/20.text-yellow-400.border-yellow-600\/40 { color: #000 !important; }
 html.light-mode .bg-red-500\/20.text-red-400.border-red-600\/40         { color: #000 !important; }
+html.light-mode .bg-green-500\/20.text-green-400.border-green-600\/40   { color: #000 !important; }
 /* REMOVED 2026-09-02: a block here forced `color: #fff` on any element combining
    a bg-gray-{500,600,700,800}/NN tint with text-gray-400. It was wrong for every
    tint it matched. The reasoning behind it was presumably that --gray-500 is a

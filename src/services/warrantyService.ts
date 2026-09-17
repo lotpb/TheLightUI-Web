@@ -64,38 +64,59 @@ export function subscribeToWarranties(
   )
 }
 
-export async function addWarranty(
-  customerId: string,
-  customerName: string,
-  title: string,
-  provider: string,
-  startDate: Date,
-  expirationDate: Date,
-  notes: string,
-): Promise<void> {
+/**
+ * The writable fields of a warranty.
+ *
+ * These were nine positional parameters, which is how `handleDeactivate` came
+ * to read `updateWarranty(w.id, w.customerId, w.customerName, w.title,
+ * w.provider, w.startDate, w.expirationDate, w.notes, false)` — a call where
+ * transposing any two of the four adjacent strings compiles cleanly and
+ * silently rewrites the record.
+ */
+export interface WarrantyFields {
+  customerId: string
+  customerName: string
+  title: string
+  provider: string
+  startDate: Date
+  expirationDate: Date
+  notes: string
+}
+
+export async function addWarranty(fields: WarrantyFields): Promise<void> {
   const companyId = getCompanyId()
   await addDoc(collection(db, COL), {
-    companyId, customerId, customerName, title, provider,
-    startDate, expirationDate, notes,
+    companyId, ...fields,
     isActive: true,
     lastReminderSentAt: null,
     createdAt: serverTimestamp(),
   })
 }
 
+/**
+ * Updates a warranty, re-arming its expiry reminder if the term moved.
+ *
+ * warrantyExpirationReminders skips any warranty that already has a
+ * `lastReminderSentAt`, so exactly one reminder was ever sent per document:
+ * extending coverage by five years left the stamp in place and guaranteed the
+ * new expiration date would never be announced to anyone. Clearing it when
+ * the date changes makes a renewal behave like the new coverage period it is,
+ * while an edit that only touches the title or notes leaves the stamp alone,
+ * so nobody receives a second copy of the same reminder.
+ */
 export async function updateWarranty(
   id: string,
-  customerId: string,
-  customerName: string,
-  title: string,
-  provider: string,
-  startDate: Date,
-  expirationDate: Date,
-  notes: string,
-  isActive: boolean,
+  fields: WarrantyFields & { isActive: boolean },
+  opts: { previousExpiration?: Date | null } = {},
 ): Promise<void> {
+  const { previousExpiration } = opts
+  const termMoved =
+    previousExpiration instanceof Date &&
+    previousExpiration.getTime() !== fields.expirationDate.getTime()
+
   await updateDoc(doc(db, COL, id), {
-    customerId, customerName, title, provider, startDate, expirationDate, notes, isActive,
+    ...fields,
+    ...(termMoved ? { lastReminderSentAt: null } : {}),
   })
 }
 
