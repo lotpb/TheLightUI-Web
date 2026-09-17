@@ -6,24 +6,19 @@ import {
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
 import { warnIfCapped } from './realtimeCap'
+// The interface and everything derived from it live in models/referral.ts,
+// where they're under test — a service can't be imported by the test suite
+// because its import chain reaches authStore, which touches `document` at
+// module load.
+import type { Referral } from '../models/referral'
+
+export type { Referral }
 
 const COL = 'referrals'
 
 // Safety cap for the real-time listener — same reasoning as customerService's
 // REALTIME_LIMIT.
 const REFERRAL_REALTIME_LIMIT = 5_000
-
-export interface Referral {
-  id: string
-  companyId: string
-  referrerId: string
-  referrerName: string
-  referredId: string
-  referredName: string
-  referredAmount: number
-  notes: string
-  createdAt: Date
-}
 
 function toDate(v: unknown): Date {
   if (v && typeof v === 'object' && 'toDate' in v) {

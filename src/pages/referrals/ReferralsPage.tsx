@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
 import CustomerScopeBanner from '../../components/CustomerScopeBanner'
-import { subscribeToReferrals, addReferral, deleteReferral, type Referral } from '../../services/referralService'
+import PartialDataBanner from '../../components/PartialDataBanner'
+import ConfirmModal from '../../components/ConfirmModal'
+import { Icon, ICONS } from '../../components/Icon'
+import { subscribeToReferrals, addReferral, deleteReferral } from '../../services/referralService'
 import { subscribeToCustomers } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
+import {
+  buildLeaderboard, customersById, findDuplicateReferrals, referralAmountDrift,
+  referralFormError, referralTotals, referredIsMissing, resolveReferralName,
+  searchReferralCandidates,
+  REFERRAL_SORTS,
+  type Referral, type ReferralSort, type ReferrerStat,
+} from '../../models/referral'
 import { useAuthStore } from '../../stores/authStore'
 import { useToast } from '../../components/Toast'
 import { avatarColor, avatarOriginal } from '../../utils/avatarColor'
@@ -12,73 +23,134 @@ import { usePrefStore } from '../../stores/prefStore'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/** createdAt is a real serverTimestamp, so local formatting is correct here. */
 function fmtDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+const SUGGESTION_LIMIT = 10
+
 // ── Customer search dropdown ──────────────────────────────────────────────────
 
 function CustomerPicker({
-  label,
-  placeholder,
-  customers,
-  selected,
-  onSelect,
-  exclude,
+  id, label, placeholder, customers, selected, onSelect, exclude,
 }: {
+  id: string
   label: string
   placeholder: string
   customers: CustomerItem[]
   selected: CustomerItem | null
-  onSelect: (c: CustomerItem) => void
+  onSelect: (c: CustomerItem | null) => void
   exclude?: string
 }) {
-  const [query, setQuery] = useState('')
-  const [open, setOpen]   = useState(false)
+  const [query, setQuery]     = useState('')
+  const [open, setOpen]       = useState(false)
+  const [activeIdx, setActive] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
+  const listId = `${id}-list`
 
-  const filtered = useMemo(() => {
-    const q = query.toLowerCase()
-    return customers
-      .filter(c => c.id !== exclude && (!q || fullName(c).toLowerCase().includes(q)))
-      .slice(0, 10)
-  }, [customers, query, exclude])
+  // Searches email, city and phone as well — it matched fullName alone, so two
+  // people with the same name were indistinguishable on a form whose whole
+  // job is picking the right two.
+  const { matches, total } = useMemo(
+    () => searchReferralCandidates(customers, query, exclude, SUGGESTION_LIMIT),
+    [customers, query, exclude],
+  )
 
   useEffect(() => {
     function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setActive(-1) }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  function choose(c: CustomerItem) {
+    onSelect(c)
+    setQuery('')
+    setOpen(false)
+    setActive(-1)
+  }
+
+  /**
+   * The dropdown was a stack of buttons with no roles and no key handling,
+   * and submit is gated on both pickers being set — so the form could not be
+   * completed without a mouse.
+   */
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) { setOpen(true); setActive(0); return }
+      const last = matches.length - 1
+      if (last < 0) return
+      setActive(i => (e.key === 'ArrowDown' ? (i >= last ? 0 : i + 1) : (i <= 0 ? last : i - 1)))
+      return
+    }
+    if (e.key === 'Enter' && open && matches[activeIdx]) {
+      e.preventDefault()   // don't submit the form on the same keystroke
+      choose(matches[activeIdx])
+      return
+    }
+    if (e.key === 'Escape' && open) {
+      e.preventDefault()
+      setOpen(false)
+      setActive(-1)
+    }
+  }
+
   return (
     <div ref={ref} className="relative">
-      <label className="text-xs text-gray-400 mb-1 block">{label} *</label>
+      <label htmlFor={id} className="text-xs text-gray-300 mb-1 block">{label} *</label>
       <input
+        id={id}
         type="text"
+        role="combobox"
+        aria-expanded={open && matches.length > 0}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={activeIdx >= 0 ? `${id}-opt-${activeIdx}` : undefined}
         value={selected ? fullName(selected) : query}
-        onChange={e => { setQuery(e.target.value); onSelect(null!); setOpen(true) }}
+        onChange={e => { setQuery(e.target.value); onSelect(null); setOpen(true); setActive(-1) }}
         onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
         className="input-field w-full text-sm py-1.5"
         autoComplete="off"
       />
-      {open && filtered.length > 0 && (
-        <div className="absolute top-full left-0 right-0 z-20 mt-1 bg-gray-800 border border-gray-700 rounded-xl shadow-xl max-h-48 overflow-y-auto">
-          {filtered.map(c => (
+      {open && matches.length > 0 && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-label={label}
+          className="absolute top-full left-0 right-0 z-20 mt-1 bg-gray-800 border border-gray-700 rounded-xl shadow-xl max-h-56 overflow-y-auto"
+        >
+          {matches.map((c, i) => (
             <button
               key={c.id}
               type="button"
-              className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
-              onClick={() => { onSelect(c); setQuery(''); setOpen(false) }}
+              id={`${id}-opt-${i}`}
+              role="option"
+              aria-selected={i === activeIdx}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => choose(c)}
+              className={`w-full text-left px-3 py-2 text-sm text-gray-100 transition-colors ${
+                i === activeIdx ? 'bg-indigo-500/30' : 'hover:bg-gray-700'
+              }`}
             >
               {fullName(c)}
               {c.amount > 0 && <span className="ml-2 text-xs text-green-400">{formatCurrency(c.amount)}</span>}
-              {c.salesman && <span className="ml-2 text-xs text-gray-500">{c.salesman}</span>}
+              {c.salesman && <span className="ml-2 text-xs text-gray-300">{c.salesman}</span>}
             </button>
           ))}
+          {total > matches.length && (
+            <p className="px-3 py-2 text-xs text-gray-300 bg-gray-700/50 border-t border-gray-700">
+              Showing {matches.length} of {total.toLocaleString()} — keep typing to narrow it down.
+            </p>
+          )}
         </div>
+      )}
+      {open && query.trim() && total === 0 && (
+        <p className="text-xs text-gray-300 mt-1">No customer matches “{query.trim()}”.</p>
       )}
     </div>
   )
@@ -87,12 +159,10 @@ function CustomerPicker({
 // ── Log-referral form ─────────────────────────────────────────────────────────
 
 function LogForm({
-  customers,
-  initialReferrer = null,
-  onSave,
-  onCancel,
+  customers, referrals, initialReferrer = null, onSave, onCancel,
 }: {
   customers: CustomerItem[]
+  referrals: Referral[]
   /**
    * Preselects who sent the referral. Opened from a customer's Related Records
    * panel that's the customer you were just looking at — "this customer
@@ -103,35 +173,54 @@ function LogForm({
   onSave: (r: { referrer: CustomerItem; referred: CustomerItem; amount: number; notes: string }) => Promise<void>
   onCancel: () => void
 }) {
-  const [referrer, setReferrer]   = useState<CustomerItem | null>(initialReferrer)
-  const [referred, setReferred]   = useState<CustomerItem | null>(null)
-  const [amount, setAmount]       = useState('')
-  const [notes, setNotes]         = useState('')
-  const [saving, setSaving]       = useState(false)
+  const [referrer, setReferrer] = useState<CustomerItem | null>(initialReferrer)
+  const [referred, setReferred] = useState<CustomerItem | null>(null)
+  const [amount, setAmount]     = useState('')
+  const [notes, setNotes]       = useState('')
+  const [saving, setSaving]     = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [dupeAcknowledged, setDupeAcknowledged] = useState(false)
 
-  // Auto-fill amount when referred customer is selected
+  // Auto-fill the amount from the referred customer's current deal value.
   useEffect(() => {
     if (referred && referred.amount > 0) setAmount(String(referred.amount))
   }, [referred])
 
+  const error = referralFormError(referrer?.id ?? '', referred?.id ?? '', amount)
+
+  /**
+   * The same pair could be logged any number of times, each one adding the
+   * full auto-filled deal value again to that referrer's leaderboard revenue,
+   * with nothing on screen to notice it.
+   */
+  const duplicates = useMemo(
+    () => findDuplicateReferrals(referrals, referrer?.id ?? '', referred?.id ?? ''),
+    [referrals, referrer?.id, referred?.id],
+  )
+  useEffect(() => { setDupeAcknowledged(false) }, [referrer?.id, referred?.id])
+
+  const blockedByDupe = duplicates.length > 0 && !dupeAcknowledged
+
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!referrer || !referred) return
+    setSubmitted(true)
+    if (error || blockedByDupe || !referrer || !referred) return
     setSaving(true)
     try {
-      await onSave({ referrer, referred, amount: parseFloat(amount) || 0, notes })
+      await onSave({ referrer, referred, amount: Number(amount) || 0, notes })
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <form onSubmit={submit} className="card p-4 space-y-3 border border-indigo-500/30">
-      <p className="text-sm font-semibold text-white">Log Referral</p>
+    <form onSubmit={submit} noValidate className="card p-4 space-y-3 border border-indigo-500/30">
+      <p className="text-sm font-semibold text-white">Log referral</p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <CustomerPicker
-          label="Referred By"
+          id="referral-referrer"
+          label="Referred by"
           placeholder="Who sent the referral…"
           customers={customers}
           selected={referrer}
@@ -139,7 +228,8 @@ function LogForm({
           exclude={referred?.id}
         />
         <CustomerPicker
-          label="Referred Customer"
+          id="referral-referred"
+          label="Referred customer"
           placeholder="Who they referred…"
           customers={customers}
           selected={referred}
@@ -147,8 +237,9 @@ function LogForm({
           exclude={referrer?.id}
         />
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Deal Amount</label>
+          <label htmlFor="referral-amount" className="text-xs text-gray-300 mb-1 block">Deal amount</label>
           <input
+            id="referral-amount"
             type="number"
             min="0"
             step="0.01"
@@ -157,10 +248,16 @@ function LogForm({
             placeholder="0.00"
             className="input-field w-full text-sm py-1.5"
           />
+          {referred && (
+            <p className="text-xs text-gray-400 mt-1">
+              Recorded against this referral — it won’t follow later changes to the deal.
+            </p>
+          )}
         </div>
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Notes</label>
+          <label htmlFor="referral-notes" className="text-xs text-gray-300 mb-1 block">Notes</label>
           <input
+            id="referral-notes"
             type="text"
             value={notes}
             onChange={e => setNotes(e.target.value)}
@@ -170,43 +267,70 @@ function LogForm({
         </div>
       </div>
 
+      {duplicates.length > 0 && (
+        <div className="flex items-start gap-2 text-sm bg-amber-900/25 border border-amber-600/40 rounded-lg px-3 py-2 text-amber-200">
+          <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p>
+              {fullName(referrer!)} already referred {fullName(referred!)}
+              {duplicates.length > 1 ? ` ${duplicates.length} times, most recently ` : ' on '}
+              {fmtDate(duplicates[0].createdAt)}. Logging it again counts twice on the leaderboard.
+            </p>
+            <label className="flex items-center gap-2 mt-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={dupeAcknowledged}
+                onChange={e => setDupeAcknowledged(e.target.checked)}
+                className="w-3.5 h-3.5 rounded accent-amber-500"
+              />
+              <span className="text-xs">This is a separate referral — log it anyway</span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      {submitted && error && (
+        <p role="alert" className="flex items-start gap-2 text-sm text-red-300 bg-red-900/25 border border-red-700/50 rounded-lg px-3 py-2">
+          <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </p>
+      )}
+
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={onCancel} className="btn-secondary text-sm px-4 py-1.5">Cancel</button>
         <button
           type="submit"
-          disabled={!referrer || !referred || saving}
-          className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors"
+          disabled={saving || blockedByDupe}
+          className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500
+                     disabled:opacity-40 disabled:cursor-not-allowed transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
         >
-          {saving ? 'Saving…' : 'Log Referral'}
+          {saving ? 'Saving…' : 'Log referral'}
         </button>
       </div>
     </form>
   )
 }
 
-// ── Stat card ─────────────────────────────────────────────────────────────────
+// ── Referrer card ─────────────────────────────────────────────────────────────
 
-interface ReferrerStat {
-  id: string
-  name: string
-  count: number
-  revenue: number
-  entries: Referral[]
-}
-
-function ReferrerCard({ stat, rank, coloredAvatars }: { stat: ReferrerStat; rank: number; coloredAvatars: boolean }) {
+function ReferrerCard({
+  stat, rank, coloredAvatars, byId, onDelete,
+}: {
+  stat: ReferrerStat
+  rank: number
+  coloredAvatars: boolean
+  byId: Map<string, CustomerItem>
+  onDelete: (r: Referral) => void
+}) {
   const [open, setOpen] = useState(false)
   const color = coloredAvatars ? avatarColor(stat.name) : avatarOriginal()
   const initials = stat.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-  const medals = ['🥇', '🥈', '🥉']
+  const stillACustomer = byId.has(stat.id)
 
   return (
     <div className="card overflow-hidden">
-      <button
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800/30 transition-colors text-left"
-        onClick={() => setOpen(o => !o)}
-      >
-        {/* Rank + Avatar */}
+      <div className="flex items-center gap-3 px-4 py-3">
         <div className="relative shrink-0">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold"
@@ -214,45 +338,144 @@ function ReferrerCard({ stat, rank, coloredAvatars }: { stat: ReferrerStat; rank
           >
             {initials || '?'}
           </div>
-          {rank <= 3 && (
-            <span className="absolute -top-1 -right-1 text-sm leading-none">{medals[rank - 1]}</span>
-          )}
+          {/* Was 🥇🥈🥉 — platform bitmaps that ignore `color` and sit off the
+              text baseline. A numeric rank for everyone, with a trophy on the
+              leader; amber-400 is the only medal-ish hue with a light-mode
+              override, so the other two are plain. */}
+          <span
+            className={`absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full text-[10px] font-bold
+                        flex items-center justify-center tabular-nums ${
+              rank === 1 ? 'bg-amber-500 text-gray-950' : 'bg-gray-700 text-gray-100'
+            }`}
+            aria-hidden="true"
+          >
+            {rank}
+          </span>
         </div>
 
-        {/* Name + stats */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-100 truncate">{stat.name}</p>
-          <p className="text-xs text-gray-400">
+          <div className="flex items-center gap-1.5">
+            {rank === 1 && <Icon d={ICONS.trophy} className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+            {/* The page had no Link and no router import at all, so there was
+                no way to reach either customer from a referral. */}
+            {stillACustomer ? (
+              <Link
+                to={`/records/${stat.id}`}
+                className="text-sm font-semibold text-gray-100 truncate hover:text-indigo-300 transition-colors
+                           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded"
+              >
+                {stat.name}
+              </Link>
+            ) : (
+              <span className="text-sm font-semibold text-gray-100 truncate" title="This customer record no longer exists">
+                {stat.name}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-300">
             {stat.count} referral{stat.count !== 1 ? 's' : ''}
             {stat.revenue > 0 && <span className="text-green-400 ml-2">{formatCurrency(stat.revenue)}</span>}
+            <span className="text-gray-400 ml-2">last {fmtDate(stat.lastAt)}</span>
           </p>
         </div>
 
-        <svg
-          className={`w-4 h-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        <button
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          aria-label={open ? `Hide ${stat.name}'s referrals` : `Show ${stat.name}'s referrals`}
+          className="shrink-0 p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-gray-700/60 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-        </svg>
-      </button>
+          {/* Was a hand-rolled inline chevron path. */}
+          <Icon d={open ? ICONS.chevronDown : ICONS.chevronRight} className="w-4 h-4" />
+        </button>
+      </div>
 
       {open && (
-        <div className="border-t border-gray-700/50 divide-y divide-gray-700/40">
+        <div className="border-t border-gray-700 divide-y divide-gray-700 bg-gray-700/40">
           {stat.entries.map(e => (
-            <div key={e.id} className="px-5 py-2.5 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-300 truncate">→ {e.referredName}</p>
-                {e.notes && <p className="text-xs text-gray-600 truncate">{e.notes}</p>}
-              </div>
-              {e.referredAmount > 0 && (
-                <span className="text-xs font-semibold text-green-400 shrink-0">{formatCurrency(e.referredAmount)}</span>
-              )}
-              <span className="text-xs text-gray-600 shrink-0">{fmtDate(e.createdAt)}</span>
-            </div>
+            <ReferralRow key={e.id} r={e} byId={byId} onDelete={onDelete} compact />
           ))}
         </div>
       )}
     </div>
+  )
+}
+
+// ── One referral row ──────────────────────────────────────────────────────────
+
+function ReferralRow({
+  r, byId, onDelete, compact = false,
+}: {
+  r: Referral
+  byId: Map<string, CustomerItem>
+  onDelete: (r: Referral) => void
+  compact?: boolean
+}) {
+  const referredName = resolveReferralName(r.referredId, r.referredName, byId)
+  const referrerName = resolveReferralName(r.referrerId, r.referrerName, byId)
+  const drift = referralAmountDrift(r, byId)
+  const gone  = referredIsMissing(r, byId)
+
+  return (
+    <div className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-700/50 transition-colors ${compact ? 'px-5 py-2.5' : ''}`}>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-gray-100">
+          {!compact && (
+            <>
+              <NameLink id={r.referrerId} name={referrerName} byId={byId} bold />
+              {/* Was text-gray-500 at 3.04:1. */}
+              <span className="text-gray-300 mx-2" aria-label="referred">→</span>
+            </>
+          )}
+          {compact && <span className="text-gray-300 mr-1" aria-hidden="true">→</span>}
+          <NameLink id={r.referredId} name={referredName} byId={byId} />
+          {gone && <span className="text-xs text-gray-400 ml-2">(record deleted)</span>}
+        </p>
+        {r.notes && <p className="text-xs text-gray-300 mt-0.5 truncate">{r.notes}</p>}
+        {/* Dates were text-gray-600 — 1.94:1 — and they're the only temporal
+            context a referral has. */}
+        <p className="text-xs text-gray-400 mt-0.5">{fmtDate(r.createdAt)}</p>
+      </div>
+
+      {r.referredAmount > 0 && (
+        <div className="shrink-0 text-right">
+          <span className="text-sm font-semibold text-green-400">{formatCurrency(r.referredAmount)}</span>
+          {/* The recorded amount is a snapshot; /customers shows the live
+              value, so the two silently disagreed once a deal changed. */}
+          {drift && (
+            <p className="text-xs text-gray-400" title="Recorded when the referral was logged">
+              now {formatCurrency(drift.current)}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Was opacity-0 group-hover:opacity-100 — invisible until hover, so
+          unreachable on touch entirely, and still in the tab order. */}
+      <button
+        onClick={() => onDelete(r)}
+        aria-label={`Remove referral: ${referrerName} referred ${referredName}`}
+        className="shrink-0 p-1.5 rounded-lg text-gray-300 hover:text-red-400 hover:bg-gray-700 transition-colors
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+      >
+        <Icon d={ICONS.trash} className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  )
+}
+
+function NameLink({ id, name, byId, bold }: {
+  id: string; name: string; byId: Map<string, CustomerItem>; bold?: boolean
+}) {
+  if (!byId.has(id)) return <span className={bold ? 'font-medium' : undefined}>{name}</span>
+  return (
+    <Link
+      to={`/records/${id}`}
+      className={`hover:text-indigo-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded ${bold ? 'font-medium' : ''}`}
+    >
+      {name}
+    </Link>
   )
 }
 
@@ -267,26 +490,33 @@ export default function ReferralsPage() {
   const [referrals, setReferrals] = useState<Referral[]>([])
   const [customers, setCustomers] = useState<CustomerItem[]>([])
   const [loading, setLoading]     = useState(true)
+  const [hitCap, setHitCap]       = useState(false)
+  const [custCap, setCustCap]     = useState(false)
   const [showForm, setShowForm]   = useState(false)
-  const [deleteId, setDeleteId]   = useState<string | null>(null)
+  const [confirmDel, setConfirmDel] = useState<Referral | null>(null)
   const [view, setView]           = useState<'leaderboard' | 'all'>('leaderboard')
-  const [sortBy, setSortBy]       = useState<'count' | 'revenue'>('revenue')
+  const [sortBy, setSortBy]       = useState<ReferralSort>('revenue')
 
+  // Both listeners report a hitCap flag and both callers dropped it, so past
+  // 5,000 records the leaderboard and all three summary figures were computed
+  // from a truncated set with nothing saying so.
   useEffect(() => {
     const unsub = subscribeToReferrals(
-      r => { setReferrals(r); setLoading(false) },
-      () => setLoading(false),
+      (r, cap) => { setReferrals(r); setHitCap(!!cap); setLoading(false) },
+      ()        => setLoading(false),
     )
     return unsub
   }, [companyId])
 
   useEffect(() => {
     const unsub = subscribeToCustomers(
-      c => setCustomers(c),
+      (c, cap) => { setCustomers(c); setCustCap(!!cap) },
       () => {},
     )
     return unsub
   }, [companyId])
+
+  const byId = useMemo(() => customersById(customers), [customers])
 
   // Arriving from a customer's Related Records panel: scope to the referrals
   // they're on either side of, and on `&new=1` open the form with them set as
@@ -317,59 +547,58 @@ export default function ReferralsPage() {
   // themselves, so a scoped view always uses the flat list.
   const effectiveView = isScoped ? 'all' : view
 
-  // Aggregate per referrer
-  const leaderboard = useMemo((): ReferrerStat[] => {
-    const map = new Map<string, ReferrerStat>()
-    for (const r of scopedReferrals) {
-      const existing = map.get(r.referrerId)
-      if (existing) {
-        existing.count++
-        existing.revenue += r.referredAmount
-        existing.entries.push(r)
-      } else {
-        map.set(r.referrerId, { id: r.referrerId, name: r.referrerName, count: 1, revenue: r.referredAmount, entries: [r] })
-      }
-    }
-    return [...map.values()].sort((a, b) =>
-      sortBy === 'revenue' ? b.revenue - a.revenue || b.count - a.count : b.count - a.count || b.revenue - a.revenue,
-    )
-  }, [scopedReferrals, sortBy])
-
-  const totalRevenue = leaderboard.reduce((s, r) => s + r.revenue, 0)
+  const leaderboard = useMemo(
+    () => buildLeaderboard(scopedReferrals, sortBy, byId),
+    [scopedReferrals, sortBy, byId],
+  )
+  const totals = useMemo(() => referralTotals(scopedReferrals), [scopedReferrals])
 
   async function handleSave({ referrer, referred, amount, notes }: {
     referrer: CustomerItem; referred: CustomerItem; amount: number; notes: string
   }) {
-    await addReferral({
-      referrerId: referrer.id, referrerName: fullName(referrer),
-      referredId: referred.id, referredName: fullName(referred),
-      referredAmount: amount, notes,
-    })
-    closeForm()
-    toast('Referral logged', 'success')
+    try {
+      await addReferral({
+        referrerId: referrer.id, referrerName: fullName(referrer),
+        referredId: referred.id, referredName: fullName(referred),
+        referredAmount: amount, notes,
+      })
+      closeForm()
+      toast('Referral logged', 'success')
+    } catch {
+      // Was uncaught: a rejected write left the form open with no message,
+      // indistinguishable from a save that simply didn't close it.
+      toast('Could not log the referral — nothing was saved. Try again.', 'error')
+    }
   }
 
-  async function handleDelete(id: string) {
-    await deleteReferral(id)
-    setDeleteId(null)
-    toast('Referral removed', 'success')
+  async function handleDelete(r: Referral) {
+    setConfirmDel(null)
+    try {
+      await deleteReferral(r.id)
+      toast('Referral removed', 'success')
+    } catch {
+      toast('Could not remove the referral. Try again.', 'error')
+    }
   }
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-white">Referrals</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Track who's sending you business</p>
+          <p className="text-sm text-gray-300 mt-0.5">Track who’s sending you business</p>
         </div>
         {!showForm && (
           <button
             onClick={() => setShowForm(true)}
-            className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 transition-colors"
+            className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500
+                       transition-colors shrink-0 inline-flex items-center gap-1.5
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
           >
-            + Log Referral
+            <Icon d={ICONS.plus} className="w-4 h-4" />
+            Log referral
           </button>
         )}
       </div>
@@ -378,10 +607,16 @@ export default function ReferralsPage() {
         <CustomerScopeBanner customerId={scopeId} customerName={scopeName} onClear={clearScope} />
       )}
 
+      {hitCap && <PartialDataBanner totals />}
+      {custCap && !hitCap && (
+        <PartialDataBanner detail="The customer list is capped, so someone past the cap won’t appear in the pickers below." />
+      )}
+
       {/* Form */}
       {showForm && (
         <LogForm
           customers={customers}
+          referrals={referrals}
           initialReferrer={logReferrer}
           onSave={handleSave}
           onCancel={closeForm}
@@ -392,16 +627,23 @@ export default function ReferralsPage() {
       {!isScoped && !loading && referrals.length > 0 && (
         <div className="grid grid-cols-3 gap-3">
           <div className="card p-4 text-center">
-            <p className="text-2xl font-bold text-white">{referrals.length}</p>
-            <p className="text-xs text-gray-400 mt-0.5">Total Referrals</p>
+            <p className="text-2xl font-bold text-white tabular-nums">{totals.referrals}</p>
+            <p className="text-xs text-gray-300 mt-0.5">Total referrals</p>
           </div>
           <div className="card p-4 text-center">
-            <p className="text-2xl font-bold text-white">{leaderboard.length}</p>
-            <p className="text-xs text-gray-400 mt-0.5">Referrers</p>
+            <p className="text-2xl font-bold text-white tabular-nums">{totals.referrers}</p>
+            <p className="text-xs text-gray-300 mt-0.5">Referrers</p>
           </div>
           <div className="card p-4 text-center">
-            <p className="text-2xl font-bold text-green-400">{totalRevenue > 0 ? formatCurrency(totalRevenue) : '—'}</p>
-            <p className="text-xs text-gray-400 mt-0.5">Referral Revenue</p>
+            <p className="text-2xl font-bold text-green-400 tabular-nums">
+              {totals.revenue > 0 ? formatCurrency(totals.revenue) : '—'}
+            </p>
+            <p className="text-xs text-gray-300 mt-0.5">
+              Referral revenue
+              {totals.withoutAmount > 0 && (
+                <span className="text-gray-400"> · {totals.withoutAmount} without an amount</span>
+              )}
+            </p>
           </div>
         </div>
       )}
@@ -409,26 +651,32 @@ export default function ReferralsPage() {
       {/* View toggle + sort */}
       {!isScoped && !loading && referrals.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex rounded-xl border border-gray-700 overflow-hidden text-xs font-medium">
+          <div className="flex rounded-xl border border-gray-600 overflow-hidden text-xs font-medium" role="group" aria-label="View">
             {(['leaderboard', 'all'] as const).map(v => (
               <button
                 key={v}
                 onClick={() => setView(v)}
-                className={`px-3 py-1.5 transition-colors capitalize ${view === v ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                aria-pressed={view === v}
+                className={`px-3 py-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400 ${
+                  view === v ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:text-white hover:bg-gray-700'
+                }`}
               >
-                {v === 'leaderboard' ? 'By Referrer' : 'All Referrals'}
+                {v === 'leaderboard' ? 'By referrer' : 'All referrals'}
               </button>
             ))}
           </div>
           {view === 'leaderboard' && (
-            <div className="flex rounded-xl border border-gray-700 overflow-hidden text-xs font-medium">
-              {(['revenue', 'count'] as const).map(s => (
+            <div className="flex rounded-xl border border-gray-600 overflow-hidden text-xs font-medium" role="group" aria-label="Sort">
+              {REFERRAL_SORTS.map(s => (
                 <button
-                  key={s}
-                  onClick={() => setSortBy(s)}
-                  className={`px-3 py-1.5 transition-colors ${sortBy === s ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                  key={s.key}
+                  onClick={() => setSortBy(s.key)}
+                  aria-pressed={sortBy === s.key}
+                  className={`px-3 py-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400 ${
+                    sortBy === s.key ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:text-white hover:bg-gray-700'
+                  }`}
                 >
-                  {s === 'revenue' ? 'By Revenue' : 'By Count'}
+                  {s.label}
                 </button>
               ))}
             </div>
@@ -438,14 +686,17 @@ export default function ReferralsPage() {
 
       {/* Content */}
       {loading ? (
-        <div className="card animate-pulse h-48" />
+        <div className="space-y-2 animate-pulse">
+          {Array.from({ length: 4 }).map((_, i) => <div key={i} className="card h-16" />)}
+        </div>
       ) : scopedReferrals.length === 0 ? (
         <div className="card p-12 text-center">
-          <p className="text-3xl mb-3">🤝</p>
-          <p className="text-gray-400 text-sm">
+          {/* Was 🤝 — an emoji that paints its own bitmap. */}
+          <Icon d={ICONS.user} className="w-9 h-9 mx-auto mb-3 text-gray-400" />
+          <p className="text-gray-200 text-sm font-medium">
             {isScoped ? 'No referrals for this customer yet.' : 'No referrals logged yet.'}
           </p>
-          <p className="text-gray-600 text-xs mt-1">Track which customers are sending you new business.</p>
+          <p className="text-gray-300 text-xs mt-1">Track which customers are sending you new business.</p>
         </div>
       ) : effectiveView === 'leaderboard' ? (
         <div className="space-y-2">
@@ -455,52 +706,36 @@ export default function ReferralsPage() {
               stat={stat}
               rank={i + 1}
               coloredAvatars={coloredAvatars}
+              byId={byId}
+              onDelete={setConfirmDel}
             />
           ))}
         </div>
       ) : (
-        <div className="card divide-y divide-gray-700/40">
+        <div className="card divide-y divide-gray-700">
           {scopedReferrals.map(r => (
-            <div key={r.id} className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-800/30 transition-colors">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-200">
-                  <span className="font-medium">{r.referrerName}</span>
-                  <span className="text-gray-500 mx-2">→</span>
-                  <span>{r.referredName}</span>
-                </p>
-                {r.notes && <p className="text-xs text-gray-500 mt-0.5">{r.notes}</p>}
-                <p className="text-xs text-gray-600 mt-0.5">{fmtDate(r.createdAt)}</p>
-              </div>
-              {r.referredAmount > 0 && (
-                <span className="text-sm font-semibold text-green-400 shrink-0">{formatCurrency(r.referredAmount)}</span>
-              )}
-              <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                {deleteId === r.id ? (
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded">Delete</button>
-                    <button onClick={() => setDeleteId(null)} className="text-xs text-gray-500 px-1 py-1">Cancel</button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setDeleteId(r.id)}
-                    className="p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-gray-700 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            </div>
+            <ReferralRow key={r.id} r={r} byId={byId} onDelete={setConfirmDel} />
           ))}
         </div>
       )}
 
       {scopedReferrals.length > 0 && (
-        <p className="text-xs text-gray-600 text-center pb-2">
-          {scopedReferrals.length} referral{scopedReferrals.length !== 1 ? 's' : ''} · {leaderboard.length} referrer{leaderboard.length !== 1 ? 's' : ''}
+        <p className="text-xs text-gray-300 text-center pb-2">
+          {totals.referrals} referral{totals.referrals !== 1 ? 's' : ''} · {totals.referrers} referrer{totals.referrers !== 1 ? 's' : ''}
         </p>
       )}
+
+      {/* Was an inline two-click that only existed on hover, so it couldn't be
+          reached on touch and was absent from the leaderboard entirely. */}
+      <ConfirmModal
+        isOpen={!!confirmDel}
+        confirmLabel="Remove referral"
+        message={confirmDel
+          ? `Remove the referral from ${resolveReferralName(confirmDel.referrerId, confirmDel.referrerName, byId)} to ${resolveReferralName(confirmDel.referredId, confirmDel.referredName, byId)}? It will stop counting toward their leaderboard total. This cannot be undone.`
+          : ''}
+        onConfirm={() => confirmDel && handleDelete(confirmDel)}
+        onCancel={() => setConfirmDel(null)}
+      />
     </div>
   )
 }
