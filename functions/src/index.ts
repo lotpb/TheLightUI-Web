@@ -105,3 +105,7 @@ export {
   campaignClick,
 } from './campaigns'
 
+export {
+  mergeCustomerRecords,
+  countCustomerRecords,
+} from './customers'

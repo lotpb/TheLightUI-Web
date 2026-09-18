@@ -127,3 +127,27 @@ export async function assertCompanyAdmin(context: functions.https.CallableContex
   }
   return companyId
 }
+
+/**
+ * Any company member who isn't a viewer.
+ *
+ * Mirrors `hasCompanyId() && !isViewer()` in firestore.rules, which is what
+ * gates writing to Customers. Used by callables that replace a client-side
+ * write the rules already allowed — narrowing those to owner/admin would take
+ * away access people currently have.
+ */
+export async function assertCompanyWriter(context: functions.https.CallableContext): Promise<string> {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in')
+  const companyId = context.auth.token.companyId as string
+  if (!companyId) throw new functions.https.HttpsError('failed-precondition', 'Account not fully set up')
+
+  let role = String(context.auth.token.role ?? '')
+  if (!role) {
+    const userSnap = await db.collection('users').doc(context.auth.uid).get()
+    role = String(userSnap.data()?.['role'] ?? '')
+  }
+  if (role === 'viewer') {
+    throw new functions.https.HttpsError('permission-denied', 'Viewers cannot change records')
+  }
+  return companyId
+}

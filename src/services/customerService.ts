@@ -4,6 +4,7 @@ import {
   startAfter, limit, Timestamp,
   type QueryDocumentSnapshot, type Unsubscribe,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
 import { customerFromDoc, customerToFirestore, type CustomerItem } from '../models/customer'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
@@ -143,20 +144,61 @@ export async function setPortalToken(id: string, portalToken: string): Promise<v
   await updateDoc(doc(db, COLLECTION, id), { portalToken })
 }
 
-// Merge two records: apply partial field updates to the primary, deactivate the secondary.
-// The caller is responsible for computing which fields to copy over.
+export interface MergeOutcome {
+  /** Documents repointed, keyed `collection.field`. */
+  moved: Record<string, number>
+  totalMoved: number
+  /**
+   * True when the server ran out of time. The secondary is deliberately left
+   * active in that case, so the pair stays on /duplicates and the merge can
+   * simply be run again.
+   */
+  incomplete: boolean
+  remaining: string[]
+}
+
+/**
+ * Merges two customer records, moving everything attached to the secondary.
+ *
+ * This used to be a two-document batch: copy the secondary's empty fields onto
+ * the primary, set the secondary's `active` to '0', done. Nothing else moved —
+ * and sixteen collection/field pairs reference a customer by id, so every
+ * invoice, proposal, warranty, service plan, task, document, signed request,
+ * email and text thread belonging to the retired record stayed pointed at it
+ * and vanished from the surviving customer.
+ *
+ * It's a Cloud Function now because it's a data migration: potentially
+ * thousands of documents, and it has to survive the tab closing and be safe to
+ * repeat. See functions/src/customers.ts.
+ */
 export async function mergeCustomers(
   primaryId: string,
   secondaryId: string,
   primaryUpdates: Record<string, unknown>,
-): Promise<void> {
-  if (!getCompanyId()) throw new Error('Not authenticated')
-  const batch = writeBatch(db)
-  if (Object.keys(primaryUpdates).length > 0) {
-    batch.update(doc(db, COLLECTION, primaryId), primaryUpdates)
-  }
-  batch.update(doc(db, COLLECTION, secondaryId), { active: '0' })
-  await batch.commit()
+): Promise<MergeOutcome> {
+  const call = httpsCallable<
+    { primaryId: string; secondaryId: string; updates: Record<string, unknown> },
+    MergeOutcome
+  >(getFunctions(), 'mergeCustomerRecords')
+  const res = await call({ primaryId, secondaryId, updates: primaryUpdates })
+  return res.data
+}
+
+/**
+ * How many documents are attached to each of up to two customers.
+ *
+ * Counted server-side with aggregation queries — sixteen `count()` calls bill
+ * one read per thousand matched documents rather than one per document, which
+ * is what makes it affordable to show before a merge instead of after.
+ */
+export async function countCustomerRelated(
+  customerIds: string[],
+): Promise<Record<string, Record<string, number>>> {
+  const call = httpsCallable<{ customerIds: string[] }, { counts: Record<string, Record<string, number>> }>(
+    getFunctions(), 'countCustomerRecords',
+  )
+  const res = await call({ customerIds })
+  return res.data.counts
 }
 
 /**
