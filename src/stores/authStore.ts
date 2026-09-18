@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { friendlyAuthError } from '../models/authErrors'
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -52,8 +53,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signInWithEmailAndPassword(auth, email, password)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sign in failed'
-      set({ error: friendlyAuthError(msg) })
+      set({ error: friendlyAuthError(err, 'Sign in failed. Try again.') })
     } finally {
       set({ loading: false })
     }
@@ -64,8 +64,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await createUserWithEmailAndPassword(auth, email, password)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Registration failed'
-      set({ error: friendlyAuthError(msg) })
+      set({ error: friendlyAuthError(err, 'Registration failed. Try again.') })
     } finally {
       set({ loading: false })
     }
@@ -91,8 +90,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await sendPasswordResetEmail(auth, email)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Reset failed'
-      set({ error: friendlyAuthError(msg) })
+      set({ error: friendlyAuthError(err, 'Couldn’t send the reset email. Try again.') })
     } finally {
       set({ loading: false })
     }
@@ -343,12 +341,6 @@ window.addEventListener('pagehide', () => {
   stopHeartbeat()
 })
 
-function friendlyAuthError(msg: string): string {
-  if (msg.includes('wrong-password') || msg.includes('invalid-credential')) return 'Incorrect email or password.'
-  if (msg.includes('user-not-found')) return 'No account found with that email.'
-  if (msg.includes('email-already-in-use')) return 'An account with this email already exists.'
-  if (msg.includes('weak-password')) return 'Password must be at least 6 characters.'
-  if (msg.includes('too-many-requests')) return 'Too many attempts. Try again later.'
-  if (msg.includes('network-request-failed')) return 'Network error. Check your connection.'
-  return msg
-}
+// friendlyAuthError moved to models/authErrors.ts so /profile can use it too.
+// Its last line used to be `return msg`, which leaked strings like
+// `Firebase: Error (auth/requires-recent-login).` for anything unmapped.
