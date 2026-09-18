@@ -1,3 +1,5 @@
+import { groupByDay as groupItemsByDay } from '../utils/dayGroups'
+
 export type AuditEntityType = 'customer' | 'invoice' | 'proposal'
 export type AuditAction = 'created' | 'updated' | 'deleted'
 
@@ -187,47 +189,23 @@ export function searchAuditEntries(entries: AuditLogEntry[], query: string): Aud
 // ── Grouping ──────────────────────────────────────────────────────────────────
 
 export interface AuditDayGroup {
-  /** `yyyy-mm-dd` in the viewer's locale, for a stable key. */
   key: string
   label: string
   entries: AuditLogEntry[]
 }
 
-function localDayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+/** Re-exported so callers don't need to know where the generic lives. */
+export { dayHeading as dayLabel } from '../utils/dayGroups'
 
 /**
- * Day heading for a timestamp: Today, Yesterday, or the date.
+ * Groups an already-sorted (newest first) feed into day buckets.
  *
- * Every row carried a full absolute datestamp, so 200 rows gave 200 of them
- * and a burst of activity read as 200 unrelated events.
+ * Delegates to utils/dayGroups, which /activity shares — that page had its own
+ * version collapsing anything older than a week into month buckets.
  */
-export function dayLabel(d: Date, now: Date = new Date()): string {
-  const today = localDayKey(now)
-  const yesterday = localDayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
-  const key = localDayKey(d)
-  if (key === today) return 'Today'
-  if (key === yesterday) return 'Yesterday'
-  return d.toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
-  })
-}
-
-/** Groups an already-sorted (newest first) feed into day buckets. */
 export function groupByDay(entries: AuditLogEntry[], now: Date = new Date()): AuditDayGroup[] {
-  const groups: AuditDayGroup[] = []
-  for (const entry of entries) {
-    const key = localDayKey(entry.createdAt)
-    const last = groups[groups.length - 1]
-    if (last && last.key === key) {
-      last.entries.push(entry)
-    } else {
-      groups.push({ key, label: dayLabel(entry.createdAt, now), entries: [entry] })
-    }
-  }
-  return groups
+  return groupItemsByDay(entries, e => e.createdAt, now)
+    .map(g => ({ key: g.key, label: g.label, entries: g.items }))
 }
 
 /** Time of day only — the day is already in the group heading. */

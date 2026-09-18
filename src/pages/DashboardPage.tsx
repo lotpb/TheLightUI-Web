@@ -197,8 +197,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) { setActivitiesLoading(false); return }
+    // Ordered by createdAt in the query now, so this preview is genuinely the
+    // newest few rather than the first few of an arbitrary 5,000-doc slice.
     const unsub = subscribeToAllActivities(
-      items => { setActivities(items.slice(0, ACTIVITY_PREVIEW)); setActivitiesLoading(false) },
+      page  => { setActivities(page.items.slice(0, ACTIVITY_PREVIEW)); setActivitiesLoading(false) },
       ()    => setActivitiesLoading(false),
     )
     return unsub

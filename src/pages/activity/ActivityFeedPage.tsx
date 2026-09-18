@@ -1,159 +1,179 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import type { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { subscribeToAllActivities } from '../../services/activityService'
+import {
+  subscribeToAllActivities, loadOlderActivities, deleteActivity, ACTIVITY_PAGE_SIZE,
+} from '../../services/activityService'
 import { subscribeToCustomers } from '../../services/customerService'
-import { fullName, type CustomerItem } from '../../models/customer'
-import { ACTIVITY_TYPES, type Activity, type ActivityType } from '../../models/activity'
-import { Icon, ACTIVITY_ICONS } from '../../components/Icon'
+import type { CustomerItem } from '../../models/customer'
+import { ACTIVITY_TYPES, type Activity } from '../../models/activity'
+import {
+  buildFeedRows, filterFeed, fmtTimeOfDay, groupFeedByDay, searchedRows, timeAgo, typeCounts,
+  type ActivityFilter, type FeedRow,
+} from '../../models/activityFeed'
+import { Icon, ICONS, ACTIVITY_ICONS } from '../../components/Icon'
+import ConfirmModal from '../../components/ConfirmModal'
+import PartialDataBanner from '../../components/PartialDataBanner'
+import { useToast } from '../../components/Toast'
 import { useAuthStore } from '../../stores/authStore'
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function timeAgo(d: Date): string {
-  const now = Date.now()
-  const diff = now - d.getTime()
-  const mins  = Math.floor(diff / 60_000)
-  if (mins < 1)   return 'Just now'
-  if (mins < 60)  return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24)   return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7)   return `${days}d ago`
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-function dayLabel(d: Date): string {
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) return 'Today'
-  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1)
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7)
-  if (d >= weekAgo) return 'This Week'
-  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-}
-
-interface EnrichedActivity extends Activity {
-  customerName: string
-  customerId: string
-}
-
-// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function ActivityFeedPage() {
   usePageTitle('Activity Feed')
   const companyId = useAuthStore(s => s.companyId)
+  const toast = useToast()
 
   const [activities, setActivities] = useState<Activity[]>([])
-  const [customers,  setCustomers]  = useState<CustomerItem[]>([])
+  const [older, setOlder]           = useState<Activity[]>([])
+  const [customers, setCustomers]   = useState<CustomerItem[]>([])
+  const [custCap, setCustCap]       = useState(false)
   const [loading, setLoading]       = useState(true)
-  const [search,  setSearch]        = useState('')
-  const [typeFilter, setTypeFilter] = useState<ActivityType | 'all'>('all')
+  const [search, setSearch]         = useState('')
+  const [typeFilter, setTypeFilter] = useState<ActivityFilter>('all')
+  const [confirmDel, setConfirmDel] = useState<FeedRow | null>(null)
+
+  const [cursor, setCursor]   = useState<QueryDocumentSnapshot<DocumentData> | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const olderCursor = useRef<QueryDocumentSnapshot<DocumentData> | null>(null)
 
   useEffect(() => {
     let actDone = false, custDone = false
     const check = () => { if (actDone && custDone) setLoading(false) }
-    const unsubAct  = subscribeToAllActivities(items => { setActivities(items); actDone = true; check() }, () => { actDone = true; check() })
-    const unsubCust = subscribeToCustomers(     items => { setCustomers(items);  custDone = true; check() }, () => { custDone = true; check() })
+    /**
+     * The feed is ordered by createdAt in the query now. It used to be
+     * `limit(5000)` with no orderBy, so Firestore returned an arbitrary 5,000
+     * documents in document-ID order that the page sorted client-side — a
+     * random slice that merely looked chronological.
+     */
+    const unsubAct = subscribeToAllActivities(
+      page => {
+        setActivities(page.items)
+        setCursor(page.cursor)
+        setHasMore(page.hasMore)
+        actDone = true; check()
+      },
+      () => { actDone = true; check() },
+    )
+    const unsubCust = subscribeToCustomers(
+      (items, cap) => { setCustomers(items); setCustCap(!!cap); custDone = true; check() },
+      () => { custDone = true; check() },
+    )
     return () => { unsubAct(); unsubCust() }
   }, [companyId])
 
-  // Build a fast lookup map for customer names
   const customerMap = useMemo(() => {
     const m = new Map<string, CustomerItem>()
     for (const c of customers) m.set(c.id, c)
     return m
   }, [customers])
 
-  const enriched = useMemo<EnrichedActivity[]>(() => {
-    return activities.map(a => {
-      const c = customerMap.get(a.customerId)
-      return { ...a, customerName: c ? fullName(c) : 'Unknown', customerId: a.customerId }
-    })
-  }, [activities, customerMap])
+  const rows = useMemo(
+    () => buildFeedRows([...activities, ...older], customerMap),
+    [activities, older, customerMap],
+  )
 
-  const filtered = useMemo(() => {
-    let items = enriched
-    if (typeFilter !== 'all') items = items.filter(a => a.type === typeFilter)
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      items = items.filter(a =>
-        a.customerName.toLowerCase().includes(q) ||
-        a.note.toLowerCase().includes(q) ||
-        a.userName.toLowerCase().includes(q),
-      )
+  // Chip counts follow the search — they used to read from the unfiltered
+  // list, so typing narrowed the feed while every chip kept its old number.
+  const searched = useMemo(() => searchedRows(rows, search), [rows, search])
+  const counts   = useMemo(() => typeCounts(searched), [searched])
+
+  const visible = useMemo(() => filterFeed(rows, typeFilter, search), [rows, typeFilter, search])
+  const groups  = useMemo(() => groupFeedByDay(visible), [visible])
+
+  async function handleLoadOlder() {
+    const from = olderCursor.current ?? cursor
+    if (!from || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const page = await loadOlderActivities(from)
+      setOlder(prev => [...prev, ...page.items])
+      olderCursor.current = page.cursor
+      setHasMore(page.hasMore)
+    } catch {
+      toast('Couldn’t load older activity. Try again.', 'error')
+    } finally {
+      setLoadingMore(false)
     }
-    return items
-  }, [enriched, typeFilter, search])
+  }
 
-  // Group by day label
-  const groups = useMemo(() => {
-    const seen = new Map<string, EnrichedActivity[]>()
-    for (const a of filtered) {
-      const label = dayLabel(a.createdAt)
-      const group = seen.get(label) ?? []
-      group.push(a)
-      seen.set(label, group)
+  async function handleDelete(row: FeedRow) {
+    setConfirmDel(null)
+    try {
+      await deleteActivity(row.id)
+      setOlder(prev => prev.filter(a => a.id !== row.id))
+      toast('Entry removed', 'success')
+    } catch {
+      toast('Couldn’t remove that entry. Try again.', 'error')
     }
-    return [...seen.entries()]
-  }, [filtered])
+  }
 
-  // Counts per type for filter chips
-  const typeCounts = useMemo(() => {
-    const m: Record<string, number> = {}
-    for (const a of enriched) m[a.type] = (m[a.type] ?? 0) + 1
-    return m
-  }, [enriched])
+  const narrowed = search.trim().length > 0 || typeFilter !== 'all'
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Activity Feed</h1>
-          <p className="text-sm text-gray-400 mt-0.5">All interactions across every customer</p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-white">Activity feed</h1>
+          <p className="text-sm text-gray-300 mt-0.5">All interactions across every customer</p>
         </div>
         {!loading && (
-          <div className="text-right">
-            <p className="text-xl font-bold text-white">{enriched.length}</p>
-            <p className="text-xs text-gray-500">total entries</p>
+          <div className="text-right shrink-0">
+            <p className="text-xl font-bold text-white tabular-nums">
+              {narrowed ? visible.length : rows.length}
+            </p>
+            {/* Was text-gray-500 on a label that says what the number means. */}
+            <p className="text-xs text-gray-300">
+              {narrowed ? `of ${rows.length} loaded` : 'entries loaded'}
+            </p>
           </div>
         )}
       </div>
 
-      {/* Search */}
-      <input
-        type="search"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        placeholder="Search by customer, note, or rep…"
-        className="input-field w-full text-sm py-2"
-      />
+      {custCap && (
+        <PartialDataBanner detail="Some customers fall outside the loaded set, so their activity shows without a name." />
+      )}
+
+      <div className="relative">
+        <Icon d={ICONS.search} className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by customer, note, or rep…"
+          aria-label="Search activity"
+          className="input-field w-full text-sm py-2 pl-9"
+        />
+      </div>
 
       {/* Type filter chips */}
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Filter by activity type">
         <button
           onClick={() => setTypeFilter('all')}
-          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+          aria-pressed={typeFilter === 'all'}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
             typeFilter === 'all'
               ? 'bg-indigo-600 text-white'
-              : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+              : 'bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700'
           }`}
         >
-          All ({enriched.length})
+          All ({searched.length})
         </button>
         {ACTIVITY_TYPES.map(t => {
-          const count = typeCounts[t.value] ?? 0
+          const count = counts[t.value] ?? 0
           if (count === 0) return null
           return (
             <button
               key={t.value}
               onClick={() => setTypeFilter(t.value)}
-              className={`flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+              aria-pressed={typeFilter === t.value}
+              className={`flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap
+                          focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
                 typeFilter === t.value
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                  : 'bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700'
               }`}
             >
               <Icon d={ACTIVITY_ICONS[t.value]} className="w-3.5 h-3.5 shrink-0" />
@@ -163,7 +183,6 @@ export default function ActivityFeedPage() {
         })}
       </div>
 
-      {/* Feed */}
       {loading ? (
         <div className="space-y-3">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -176,70 +195,139 @@ export default function ActivityFeedPage() {
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : visible.length === 0 ? (
         <div className="card p-12 text-center space-y-2">
           <Icon d={ACTIVITY_ICONS.note} className="w-8 h-8 mx-auto text-gray-400" />
-          <p className="text-gray-400 text-sm">
-            {enriched.length === 0
-              ? 'No activity logged yet. Open a customer record to add the first entry.'
-              : 'No entries match your search.'}
+          <p className="text-gray-100 text-sm font-medium">
+            {rows.length === 0 ? 'No activity logged yet' : 'Nothing matches'}
+          </p>
+          <p className="text-gray-300 text-sm">
+            {rows.length === 0
+              ? 'Open a customer record to add the first entry.'
+              : 'Try a different search or clear the type filter.'}
           </p>
         </div>
       ) : (
         <div className="space-y-6">
-          {groups.map(([day, items]) => (
-            <div key={day}>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                {day}
+          {/* Every day gets its own heading. dayLabel used to collapse
+              anything older than a week into "September 2026". */}
+          {groups.map(group => (
+            <div key={group.key}>
+              <p className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-3">
+                {group.label}
+                <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">
+                  {group.items.length} {group.items.length === 1 ? 'entry' : 'entries'}
+                </span>
               </p>
               <div className="relative">
-                {/* Vertical timeline line */}
-                <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
-
+                {/* Was bg-gray-800 on a bg-gray-950 page — 1.37:1, so the line
+                    that makes a timeline read as a timeline was invisible. */}
+                <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-700" aria-hidden="true" />
                 <div className="space-y-0">
-                  {items.map((a, idx) => {
-                    const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
-                    const isLast = idx === items.length - 1
-                    return (
-                      <div
-                        key={a.id}
-                        className={`relative flex gap-3 ${isLast ? 'pb-0' : 'pb-5'}`}
-                      >
-                        {/* Icon bubble */}
-                        <div className="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 z-10">
-                          <Icon d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note} className="w-4 h-4 text-gray-400" />
-                        </div>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0 pt-0.5">
-                          <div className="flex items-baseline gap-2 flex-wrap">
-                            <Link
-                              to={`/records/${a.customerId}`}
-                              className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors"
-                            >
-                              {a.customerName}
-                            </Link>
-                            <span className="text-xs text-gray-600">·</span>
-                            <span className="text-xs text-gray-500">{meta.label}</span>
-                            <span className="text-xs text-gray-600">·</span>
-                            <span className="text-xs text-gray-600">{a.userName}</span>
-                            <span className="text-xs text-gray-700 ml-auto shrink-0">{timeAgo(a.createdAt)}</span>
-                          </div>
-                          {a.note && (
-                            <p className="text-sm text-gray-300 mt-0.5 whitespace-pre-wrap leading-relaxed">
-                              {a.note}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {group.items.map((row, idx) => (
+                    <FeedRowView
+                      key={row.id}
+                      row={row}
+                      isLast={idx === group.items.length - 1}
+                      onDelete={setConfirmDel}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {/* The feed was capped at an arbitrary 5,000 with no way to reach past it. */}
+      {!loading && (hasMore || older.length > 0) && (
+        <div className="text-center">
+          {hasMore ? (
+            <button
+              onClick={handleLoadOlder}
+              disabled={loadingMore}
+              className="btn-secondary text-sm px-4 py-2 disabled:opacity-40
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+            >
+              {loadingMore ? 'Loading…' : `Load ${ACTIVITY_PAGE_SIZE} older entries`}
+            </button>
+          ) : (
+            <p className="text-xs text-gray-300">That’s the whole history.</p>
+          )}
+        </div>
+      )}
+
+      <ConfirmModal
+        isOpen={!!confirmDel}
+        confirmLabel="Remove entry"
+        message={confirmDel
+          ? `Remove this ${(confirmDel.typeLabel ?? 'activity').toLowerCase()} entry logged by ${confirmDel.userName || 'someone'}${confirmDel.customerName ? ` on ${confirmDel.customerName}` : ''}? This cannot be undone.`
+          : ''}
+        onConfirm={() => confirmDel && handleDelete(confirmDel)}
+        onCancel={() => setConfirmDel(null)}
+      />
+    </div>
+  )
+}
+
+// ─── One feed row ────────────────────────────────────────────────────────────
+
+function FeedRowView({ row, isLast, onDelete }: {
+  row: FeedRow
+  isLast: boolean
+  onDelete: (row: FeedRow) => void
+}) {
+  return (
+    <div className={`relative flex gap-3 group ${isLast ? 'pb-0' : 'pb-5'}`}>
+      <div className="w-8 h-8 rounded-full bg-gray-700 border border-gray-600 flex items-center justify-center shrink-0 z-10">
+        <Icon d={ACTIVITY_ICONS[row.type] ?? ACTIVITY_ICONS.note} className="w-4 h-4 text-gray-200" />
+      </div>
+
+      <div className="flex-1 min-w-0 pt-0.5">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          {/* A missing customer was rendered as the literal string "Unknown"
+              and still linked to a record that may not exist. */}
+          {row.customerMissing ? (
+            <span className="text-sm font-semibold text-gray-300 italic" title="This customer record isn’t in the loaded set">
+              Customer not found
+            </span>
+          ) : (
+            <Link
+              to={`/records/${row.customerId}`}
+              className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded"
+            >
+              {row.customerName}
+            </Link>
+          )}
+          {/* Was text-gray-500 / 600 / 700 — the type, who and when measured
+              4.16, 2.66 and 1.95:1, and gray-700 has no light-mode rule at
+              all (1.27:1 there). */}
+          <span className="text-xs text-gray-300">{row.typeLabel ?? row.type}</span>
+          <span className="text-xs text-gray-400" aria-hidden="true">·</span>
+          <span className="text-xs text-gray-300">{row.userName || 'Unknown rep'}</span>
+          <span
+            className="text-xs text-gray-400 ml-auto shrink-0"
+            title={row.createdAt.toLocaleString('en-US')}
+          >
+            {fmtTimeOfDay(row.createdAt)}
+            <span className="sr-only"> — {timeAgo(row.createdAt)}</span>
+          </span>
+          <button
+            onClick={() => onDelete(row)}
+            aria-label={`Remove this ${(row.typeLabel ?? 'activity').toLowerCase()} entry`}
+            className="shrink-0 p-1 -my-1 rounded text-gray-400 hover:text-red-400 hover:bg-gray-700
+                       transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+          >
+            <Icon d={ICONS.trash} className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        {row.note && (
+          <p className="text-sm text-gray-200 mt-0.5 whitespace-pre-wrap leading-relaxed break-words">
+            {row.note}
+          </p>
+        )}
+      </div>
     </div>
   )
 }
