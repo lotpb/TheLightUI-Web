@@ -214,11 +214,14 @@ export async function bulkDeactivate(
   extraFields: Record<string, unknown> = {},
 ): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  // Stamped so the auditLog trigger can attribute the change. Without it every
+  // bulk-changed record logged as "Unknown".
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { active: '0', ...extraFields })
+      batch.update(doc(db, COLLECTION, id), { active: '0', lastEditedByName, ...extraFields })
     }
     await batch.commit()
   }
@@ -228,11 +231,12 @@ export async function bulkDeactivate(
 // field is repurposed (Callback / "is a salesperson" flags), not a real user link.
 export async function bulkAssignSalesman(ids: string[], salesman: string): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { salesman })
+      batch.update(doc(db, COLLECTION, id), { salesman, lastEditedByName })
     }
     await batch.commit()
   }
@@ -260,11 +264,12 @@ export async function updateTags(id: string, tags: string[]): Promise<void> {
 
 export async function bulkSetCategory(ids: string[], category: string): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { category })
+      batch.update(doc(db, COLLECTION, id), { category, lastEditedByName })
     }
     await batch.commit()
   }
@@ -272,12 +277,13 @@ export async function bulkSetCategory(ids: string[], category: string): Promise<
 
 export async function bulkSetFollowUpDate(ids: string[], date: Date | null): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
   const value = date ? Timestamp.fromDate(date) : null
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { followUpDate: value })
+      batch.update(doc(db, COLLECTION, id), { followUpDate: value, lastEditedByName })
     }
     await batch.commit()
   }
@@ -285,25 +291,44 @@ export async function bulkSetFollowUpDate(ids: string[], date: Date | null): Pro
 
 export async function bulkSetCallback(ids: string[], callback: string): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = writeBatch(db)
     for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.update(doc(db, COLLECTION, id), { callback })
+      batch.update(doc(db, COLLECTION, id), { callback, lastEditedByName })
     }
     await batch.commit()
   }
 }
 
+/**
+ * Deletes records, stamping the actor first so the deletion can be attributed.
+ *
+ * deleteCustomer has always done this — the auditLog trigger's delete branch
+ * reads `before.lastEditedByName`, the only data left once the document is
+ * gone, and its comment names that contract. bulkDelete skipped it, so a bulk
+ * deletion was logged against whoever last *edited* each record: delete a
+ * record Ann edited and the audit log says Ann deleted it.
+ *
+ * The stamp is a separate commit because Firestore rejects two writes to the
+ * same document in one batch.
+ */
 export async function bulkDelete(ids: string[]): Promise<void> {
   if (!getCompanyId()) throw new Error('Not authenticated')
+  const lastEditedByName = getCurrentUserLabel().name
   const BATCH_SIZE = 500
+
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-    const batch = writeBatch(db)
-    for (const id of ids.slice(i, i + BATCH_SIZE)) {
-      batch.delete(doc(db, COLLECTION, id))
-    }
-    await batch.commit()
+    const slice = ids.slice(i, i + BATCH_SIZE)
+
+    const stamp = writeBatch(db)
+    for (const id of slice) stamp.update(doc(db, COLLECTION, id), { lastEditedByName })
+    await stamp.commit()
+
+    const remove = writeBatch(db)
+    for (const id of slice) remove.delete(doc(db, COLLECTION, id))
+    await remove.commit()
   }
 }
 

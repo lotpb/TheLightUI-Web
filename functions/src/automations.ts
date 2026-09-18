@@ -91,6 +91,10 @@ export const runSequences = functions.pubsub
             console.warn('runSequences: unhandled step action', step.action, 'on enrollment', enrollDoc.id)
           }
 
+          // Attributed, so the audit log doesn't record a sequence's work as
+          // "Unknown". runAutomationsFor already stamps `Automation: {rule}`;
+          // this path didn't.
+          updates.lastEditedByName = `Sequence: ${String(seqSnap.data()?.['name'] ?? 'unnamed')}`
           await customerRef.update(updates)
         }
 

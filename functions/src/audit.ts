@@ -20,11 +20,26 @@ const AUDIT_IGNORE_FIELDS = new Set([
   'assignedToUid',
 ])
 
+/**
+ * A short, readable rendering of a field value for the audit diff.
+ *
+ * Values are clipped so one Line Items change can't be a kilobyte of JSON in
+ * the log — but the clip used to be silent, so a truncated value rendered on
+ * /audit-log as though it were complete: a JSON fragment that simply stopped
+ * mid-structure. The marker is what lets the page say "this is only the start
+ * of the value" (see isTruncated in models/auditLog.ts).
+ */
+const TRUNCATION_MARKER = '\u2026'
+
+function clip(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + TRUNCATION_MARKER : s
+}
+
 function auditValueLabel(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (v instanceof Timestamp) return v.toDate().toLocaleDateString('en-US')
-  if (typeof v === 'object') return JSON.stringify(v).slice(0, 80)
-  return String(v).slice(0, 120)
+  if (typeof v === 'object') return clip(JSON.stringify(v), 80)
+  return clip(String(v), 120)
 }
 
 async function auditDiff(

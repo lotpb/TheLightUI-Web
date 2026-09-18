@@ -4,312 +4,582 @@
       "collectionGroup": "Activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "creationDate", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "creationDate",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "followUpDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "followUpDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "completion", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completion",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "active", "order": "ASCENDING" },
-        { "fieldPath": "category", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "category",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Customers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "category", "order": "ASCENDING" },
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "amount", "order": "ASCENDING" }
+        {
+          "fieldPath": "category",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "amount",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Invoices",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "issueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "issueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "Expenses",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "ToDoItems",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "position", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "position",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "ToDoItems",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "userId", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "invitations",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "email", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "email",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "invitations",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "leadSubmissions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "submittedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "submittedAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "docTemplates",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "signingRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "campaigns",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "campaignRecipients",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "campaignId", "order": "ASCENDING" },
-        { "fieldPath": "sentAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "campaignId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sentAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "invites",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "emailMessages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "customerId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "customerId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "emailMessages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "direction", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "direction",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "serviceRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "customFieldDefs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "order", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "order",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "automationRules",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "automationLog",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "ranAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ranAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "savedViews",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "category", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "category",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "auditLog",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "apiKeys",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "notifications",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "webhookSubscriptions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "purchaseOrders",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "auditLog",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "entityId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "entityId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "Warranties",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "isActive", "order": "ASCENDING" },
-        { "fieldPath": "expirationDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expirationDate",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "dispatchAssignments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "startAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "sequences",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "sequenceEnrollments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "customerId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "customerId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "sequenceEnrollments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "nextRunAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "nextRunAt",
+          "order": "ASCENDING"
+        }
       ]
-    }
-    ,{
+    },
+    {
       "collectionGroup": "messageTemplates",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "auditLog",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "companyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "entityType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],
