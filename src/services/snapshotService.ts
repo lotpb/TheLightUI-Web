@@ -5,6 +5,7 @@ import {
 import { db } from '../firebase/config'
 import { customerFromDoc, categoryMatches, type CustomerItem } from '../models/customer'
 import { invoiceTotal, type InvoiceLineItem } from '../models/invoice'
+import type { SnapshotPeriod } from '../models/dashboard'
 import { getCompanyId } from '../stores/authStore'
 
 const COL = 'Customers'
@@ -25,7 +26,11 @@ export interface SaleEntry {
 // Which window the per-period figures cover. 'today' is midnight-to-midnight,
 // 'month' is the 1st of the current month to the 1st of the next, and 'year'
 // is Jan 1 of the current year to Jan 1 of the next.
-export type SnapshotPeriod = 'today' | 'month' | 'year'
+//
+// Declared in models/dashboard, next to the tab labels and the range maths
+// that have to agree with it, and re-exported here so existing importers
+// don't have to move.
+export type { SnapshotPeriod } from '../models/dashboard'
 
 export interface SnapshotData {
   // The *Today fields hold whichever period was requested — they keep their

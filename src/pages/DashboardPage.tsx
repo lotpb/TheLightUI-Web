@@ -1,10 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { getDoc, doc } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { usePageTitle } from '../hooks/usePageTitle'
-import { fetchSnapshot, type SnapshotData, type SaleEntry, type SnapshotPeriod } from '../services/snapshotService'
-import { formatCurrency, fullName, displayName, categoryMatches } from '../models/customer'
+import { fetchSnapshot, type SnapshotData, type SaleEntry } from '../services/snapshotService'
+import {
+  formatCurrency, fullName, displayName, customerFromDoc, categoryMatches,
+} from '../models/customer'
 import { avatarColor, avatarOriginal } from '../utils/avatarColor'
 import { usePrefStore } from '../stores/prefStore'
 import { usePickerStore } from '../stores/pickerStore'
@@ -21,9 +23,9 @@ import { subscribeToExpensesInRange } from '../services/expenseService'
 import { subscribeToFollowUps, subscribeToCustomers, REALTIME_LIMIT } from '../services/customerService'
 import { subscribeToAllActivities } from '../services/activityService'
 import { getGoals } from '../services/goalService'
-import { ACTIVITY_TYPES, type Activity } from '../models/activity'
-import { type GoalDoc, type GoalValues, type PeriodRange, emptyGoalValues, currentPeriodRange } from '../models/goal'
-import { endOfToday } from '../models/pipeline'
+import type { Activity } from '../models/activity'
+import { buildFeedRows, timeAgo, type FeedRow } from '../models/activityFeed'
+import { type GoalDoc, type GoalValues, type PeriodRange } from '../models/goal'
 import { type JobStage, JOB_STAGE_CONFIG, getJobStage } from '../models/jobPipeline'
 import { subscribeToPipelineStages } from '../services/pipelineStageService'
 import { DEFAULT_STAGES, STAGE_COLOR_CLASSES, effectiveStageId, type PipelineStageConfig } from '../models/pipelineStage'
@@ -32,11 +34,19 @@ import {
   effectiveStatus as proposalEffectiveStatus, proposalTotal, fmtCurrency as fmtProposalCurrency,
   type Proposal,
 } from '../models/proposal'
+import { fmtMoneyCompact, fmtMoneyExact } from '../models/salesReport'
+import type { RepStats } from '../models/leaderboard'
+import {
+  ACTIVITY_TINT, MONEY_BASIS, MONEY_LABELS, PERIOD_PHRASE, PERIOD_SUFFIX, PERIOD_TABS,
+  PERIOD_TITLE, SCOPE_NOTE, SCOPE_SUFFIX, SNAPSHOT_PERIODS, UPCOMING_WINDOW_DAYS,
+  appointmentsOnDay, dashboardRange, goalsForPeriod, stageCountsOf, topPerformerIn,
+  upcomingAppointments, type BlockScope, type SnapshotPeriod,
+} from '../models/dashboard'
 import { useAuthStore } from '../stores/authStore'
 import type { Todo } from '../models/todo'
 import type { Expense } from '../models/expense'
 import type { CustomerItem } from '../models/customer'
-import { dueMeta, isOverdue } from '../utils/dueDate'
+import { dueMeta, dueMetaCompact, isOverdue } from '../utils/dueDate'
 import { Icon, ICONS, ACTIVITY_ICONS } from '../components/Icon'
 import CollapsibleSection from '../components/CollapsibleSection'
 
@@ -65,14 +75,6 @@ function nameCell(c: CustomerItem): string {
   if (!company) return person
   return person ? `${company} (${person})` : company
 }
-const UPCOMING_WINDOW_DAYS = 7
-
-function fmtCompact(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}K`
-  return `$${n.toLocaleString()}`
-}
-
 const CHART_ENTRIES = (data: SnapshotData) => [
   { label: 'Leads',    count: data.leadsToday.length,         color: '#6366f1' },
   { label: 'Appts',   count: data.appointmentsToday.length,  color: '#f97316' },
@@ -80,20 +82,66 @@ const CHART_ENTRIES = (data: SnapshotData) => [
   { label: 'Jobs',    count: data.jobsStartingToday.length,  color: '#14b8a6' },
 ]
 
-function todayLabel() {
-  return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+/**
+ * Heading for a card, with the scope it reports on.
+ *
+ * Period-scoped cards say nothing extra — the tab above already names the
+ * period. Cards the tabs don't reach say so, because ten of the fourteen
+ * blocks on this page ignore the tabs and an unchanged figure otherwise reads
+ * as stale data.
+ */
+function CardHeader({
+  title, scope = 'period', to, children,
+}: {
+  title: string
+  scope?: BlockScope
+  to?: string
+  children?: ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 mb-2">
+      <div className="flex items-center gap-2 min-w-0">
+        <p className="section-header mb-0 truncate">
+          {title}
+          {SCOPE_SUFFIX[scope] && (
+            <span className="font-normal normal-case tracking-normal text-gray-400" title={SCOPE_NOTE[scope]}>
+              {' · '}{SCOPE_SUFFIX[scope]}
+            </span>
+          )}
+        </p>
+        {children}
+      </div>
+      {to && (
+        <Link to={to} className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors shrink-0">
+          View all
+          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
+        </Link>
+      )}
+    </div>
+  )
 }
 
-const PERIODS: SnapshotPeriod[] = ['today', 'month', 'year']
-
-const PERIOD_TABS: Record<SnapshotPeriod, string> = { today: 'Today', month: 'Month', year: 'Year' }
-
-// Three phrasings of the selected period: the standalone heading ("Month"),
-// a title suffix ("Leads This Month") and an empty-state phrase ("no leads
-// this month"). The printout adds a fourth ("Monthly Snapshot").
-const PERIOD_SUFFIX: Record<SnapshotPeriod, string> = { today: 'Today', month: 'This Month', year: 'This Year' }
-const PERIOD_PHRASE: Record<SnapshotPeriod, string> = { today: 'today', month: 'this month', year: 'this year' }
-const PERIOD_TITLE:  Record<SnapshotPeriod, string> = { today: 'Daily', month: 'Monthly', year: 'Yearly' }
+/**
+ * The count beside a section heading.
+ *
+ * Was seven pills in six hues — gray, red, slate, sky, amber, green, orange —
+ * one per section, encoding nothing. StatCard's own docstring had already
+ * diagnosed and fixed this a level up ("a saturated number reads as though it
+ * means something"); the section headings never got the same pass, and the red
+ * that does mean something was diluted by five that don't. Neutral by default,
+ * `tone="alert"` only for genuinely overdue work.
+ */
+function CountPill({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'alert' }) {
+  return (
+    <span
+      className={`text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums shrink-0 ${
+        tone === 'alert' ? 'bg-red-500/15 text-red-300' : 'bg-gray-700 text-gray-200'
+      }`}
+    >
+      {children}
+    </span>
+  )
+}
 
 export default function DashboardPage() {
   usePageTitle('Dashboard')
@@ -101,7 +149,6 @@ export default function DashboardPage() {
   const [data, setData] = useState<SnapshotData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [today, setToday] = useState(todayLabel)
   const [todos, setTodos] = useState<Todo[]>([])
   const [todosLoading, setTodosLoading] = useState(true)
   const [expensesToday, setExpensesToday] = useState<Expense[]>([])
@@ -110,7 +157,10 @@ export default function DashboardPage() {
   const [followUpsLoading, setFollowUpsLoading] = useState(true)
   const [followUpsError, setFollowUpsError] = useState<string | null>(null)
   const [activities, setActivities] = useState<Activity[]>([])
-  const [activityNameMap, setActivityNameMap] = useState<Map<string, string>>(new Map())
+  // Only for activity customers that aren't in the subscribed set (deleted, or
+  // beyond REALTIME_LIMIT). A miss here is a real absence, not a pending read.
+  const [extraCustomers, setExtraCustomers] = useState<Map<string, CustomerItem>>(new Map())
+  const fetchedIds = useRef<Set<string>>(new Set())
   const [activitiesLoading, setActivitiesLoading] = useState(true)
   const [allCustomers, setAllCustomers] = useState<CustomerItem[]>([])
   const [allCustomersLoading, setAllCustomersLoading] = useState(true)
@@ -128,9 +178,13 @@ export default function DashboardPage() {
   async function load() {
     setLoading(true)
     setError(null)
-    setToday(todayLabel())
     try {
-      setData(await fetchSnapshot(period))
+      // Goals are a one-shot read, so Refresh has to re-fetch them too — it
+      // previously reloaded only the snapshot, leaving a target edited in
+      // another tab stale until a full page reload.
+      const [snap, goalDoc] = await Promise.all([fetchSnapshot(period), getGoals()])
+      setData(snap)
+      setGoals(goalDoc)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -152,10 +206,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!user) { setExpensesLoading(false); return }
     setExpensesLoading(true)
-    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0)
-    const range = period === 'today'
-      ? { start: dayStart, end: endOfToday() }
-      : currentPeriodRange(period)
+    const range = dashboardRange(period)
     const unsub = subscribeToExpensesInRange(
       range.start, range.end,
       items => { setExpensesToday(items); setExpensesLoading(false) },
@@ -193,8 +244,6 @@ export default function DashboardPage() {
     return unsub
   }, [user, companyId])
 
-  useEffect(() => { getGoals().then(setGoals) }, [])
-
   useEffect(() => {
     if (!user) { setActivitiesLoading(false); return }
     // Ordered by createdAt in the query now, so this preview is genuinely the
@@ -206,56 +255,77 @@ export default function DashboardPage() {
     return unsub
   }, [user, companyId])
 
-  // Resolve customer names for the preview entries via individual doc reads
+  const customerIndex = useMemo(() => {
+    const m = new Map<string, CustomerItem>()
+    for (const c of allCustomers) m.set(c.id, c)
+    for (const [id, c] of extraCustomers) if (!m.has(id)) m.set(id, c)
+    return m
+  }, [allCustomers, extraCustomers])
+
+  /**
+   * Fill in activity customers the subscription didn't cover.
+   *
+   * This used to read all twenty activity customers individually on every
+   * change — twenty document reads for names already sitting in `allCustomers`
+   * in memory. Now only genuine misses are fetched, and a customer that comes
+   * back missing stays missing so the row can say so instead of showing the
+   * loading ellipsis forever.
+   *
+   * `fetchedIds` records every id we've asked about, including the ones that
+   * didn't exist. Without it a deleted customer is permanently absent from
+   * `customerIndex`, so this effect would re-request it every time the live
+   * customer subscription fires.
+   */
   useEffect(() => {
-    if (activities.length === 0) return
-    const ids = [...new Set(activities.map(a => a.customerId))]
-    Promise.all(ids.map(async id => {
+    if (activities.length === 0 || allCustomersLoading) return
+    const missing = [...new Set(activities.map(a => a.customerId))]
+      .filter(id => id && !customerIndex.has(id) && !fetchedIds.current.has(id))
+    if (missing.length === 0) return
+    for (const id of missing) fetchedIds.current.add(id)
+
+    let cancelled = false
+    Promise.all(missing.map(async id => {
       try {
         const snap = await getDoc(doc(db, 'Customers', id))
-        if (!snap.exists()) return null
-        const d = snap.data() as Record<string, unknown>
-        const person  = `${d.first ?? ''} ${d.lastname ?? ''}`.trim()
-        const company = typeof d.companyName === 'string' ? d.companyName.trim() : ''
-        return [id, company || person || '—'] as [string, string]
-      } catch { return null }
+        return snap.exists() ? ([id, customerFromDoc(snap)] as [string, CustomerItem]) : null
+      } catch {
+        // A failed read isn't proof of absence, so allow a later retry.
+        fetchedIds.current.delete(id)
+        return null
+      }
     })).then(results => {
-      const map = new Map<string, string>()
-      for (const r of results) if (r) map.set(r[0], r[1])
-      setActivityNameMap(map)
+      if (cancelled) return
+      const found = results.filter((r): r is [string, CustomerItem] => r !== null)
+      if (found.length === 0) return
+      setExtraCustomers(prev => new Map([...prev, ...found]))
     })
-  }, [activities])
+    return () => { cancelled = true }
+  }, [activities, customerIndex, allCustomersLoading])
+
+  const feedRows = useMemo(
+    () => buildFeedRows(activities, customerIndex),
+    [activities, customerIndex],
+  )
 
   const salesTotal = data?.salesToday.reduce((s, c) => s + c.amount, 0) ?? 0
   const chartEntries = data ? CHART_ENTRIES(data) : null
 
-  const monthRange = useMemo(() => currentPeriodRange('month'), [])
+  // The selected period as a range, and its subtitle: today's date,
+  // "September 2026" or "2026".
+  const range = useMemo(() => dashboardRange(period), [period])
 
-  // Subtitle for the selected tab: today's date, "September 2026" or "2026".
-  const periodDateLabel = period === 'today' ? today : currentPeriodRange(period).label
+  // Targets and actuals for whichever period the tabs are on. The card was
+  // pinned to `goals.month` even on the Year tab, though resolveGoalTargets
+  // had already resolved the year target from the same document.
+  const periodGoals = useMemo(
+    () => goalsForPeriod(goals, allCustomers, period),
+    [goals, allCustomers, period],
+  )
 
-  const monthActuals = useMemo<GoalValues>(() => {
-    const inPeriod = allCustomers.filter(c =>
-      c.creationDate.getTime() >= monthRange.start.getTime() &&
-      c.creationDate.getTime() <= monthRange.end.getTime()
-    )
-    return {
-      revenue:   inPeriod.reduce((s, c) => s + (categoryMatches(c.category, 'Customer') ? c.amount : 0), 0),
-      leads:     inPeriod.filter(c => categoryMatches(c.category, 'Lead')).length,
-      customers: inPeriod.filter(c => categoryMatches(c.category, 'Customer')).length,
-    }
-  }, [allCustomers, monthRange])
-
-  const stageCounts = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const s of pipelineStages) counts[s.id] = 0
-    for (const c of allCustomers) {
-      if (!(categoryMatches(c.category, 'Lead') || categoryMatches(c.category, 'Customer'))) continue
-      const id = effectiveStageId(c, pipelineStages)
-      counts[id] = (counts[id] ?? 0) + 1
-    }
-    return counts
-  }, [allCustomers, pipelineStages])
+  const stageCounts = useMemo(
+    () => stageCountsOf(allCustomers, c => effectiveStageId(c, pipelineStages), pipelineStages.map(s => s.id)),
+    [allCustomers, pipelineStages],
+  )
 
   const proposalStats = useMemo(() => {
     const sent     = proposals.filter(p => proposalEffectiveStatus(p) === 'sent')
@@ -282,25 +352,13 @@ export default function DashboardPage() {
     return counts
   }, [allCustomers])
 
-  const topPerformer = useMemo(() => {
-    const inPeriod = allCustomers.filter(c =>
-      categoryMatches(c.category, 'Customer') &&
-      c.creationDate.getTime() >= monthRange.start.getTime() &&
-      c.creationDate.getTime() <= monthRange.end.getTime()
-    )
-    const map = new Map<string, { revenue: number; customers: number }>()
-    for (const c of inPeriod) {
-      const name = c.salesman.trim() || 'Unassigned'
-      const row  = map.get(name) ?? { revenue: 0, customers: 0 }
-      row.revenue += c.amount
-      row.customers++
-      map.set(name, row)
-    }
-    const ranked = [...map.entries()]
-      .map(([name, v]) => ({ name, ...v }))
-      .sort((a, b) => b.revenue - a.revenue)
-    return ranked[0] ?? null
-  }, [allCustomers, monthRange])
+  // Ranked by /leaderboard's own function, which holds unassigned records out
+  // of the competition — the inline version ranked them as a person, so "Top
+  // Salesman" could be a data-quality gap wearing a trophy.
+  const topPerformer = useMemo(
+    () => topPerformerIn(allCustomers, range),
+    [allCustomers, range],
+  )
 
   // Triage counts for the Needs Attention block. Deliberately independent of
   // the period tabs: "what needs me right now" is always today, whereas the
@@ -317,28 +375,17 @@ export default function DashboardPage() {
     [todos],
   )
 
-  const appointmentsTodayCount = useMemo(() => {
-    const start = new Date(); start.setHours(0, 0, 0, 0)
-    const end = new Date(start.getTime() + 86_400_000)
-    return allCustomers.filter(c => c.isActive && c.startDate && c.startDate >= start && c.startDate < end).length
-  }, [allCustomers])
+  const appointmentsTodayCount = useMemo(
+    () => appointmentsOnDay(allCustomers).length,
+    [allCustomers],
+  )
 
-  // One formatter for one metric. The mobile card used fmtCompact and the sm+
-  // card formatCurrency on the same figure, so resizing the window turned
-  // $12,480.00 into $12.5k. fmtCompact wins because it's what the Sales card
-  // beside it already uses, and it fits the 3-column mobile grid.
   const expensesTotal = useMemo(
     () => expensesToday.reduce((sum, e) => sum + e.amount, 0),
     [expensesToday],
   )
 
-  const upcomingAppointments = useMemo(() => {
-    const startBound = endOfToday()
-    const endBound = new Date(startBound.getTime() + UPCOMING_WINDOW_DAYS * 86_400_000)
-    return allCustomers
-      .filter(c => c.isActive && c.startDate && c.startDate > startBound && c.startDate <= endBound)
-      .sort((a, b) => a.startDate!.getTime() - b.startDate!.getTime())
-  }, [allCustomers])
+  const upcoming = useMemo(() => upcomingAppointments(allCustomers), [allCustomers])
 
   function handlePrint() {
     if (!data) return
@@ -370,8 +417,12 @@ export default function DashboardPage() {
 
     const expenseTotal = expensesToday.reduce((s, e) => s + e.amount, 0)
 
+    // 'Invoiced' and 'Lifetime Value' rather than 'Sales' and 'Total Sales':
+    // one is paid invoices issued in the period, the other an all-time sum of
+    // customer.amount. Printed side by side under two names that both read as
+    // "money earned", they looked like the same figure disagreeing with itself.
     const todayTable = buildTable(
-      ['', 'Leads', 'Appts', 'Customers', 'Sales', 'Jobs', 'Expenses'],
+      ['', 'Leads', 'Appts', 'Customers', 'Invoiced', 'Jobs', 'Expenses'],
       [[PERIOD_TABS[period],
         String(snap.leadsToday.length),
         String(snap.appointmentsToday.length),
@@ -383,8 +434,8 @@ export default function DashboardPage() {
     )
 
     const overallTable = buildTable(
-      ['', 'Active Leads', 'Active Customers', 'Active Tasks', 'Open Follow-ups', 'Total Sales'],
-      [['Overall',
+      ['', 'Active Leads', 'Active Customers', 'Active Tasks', 'Open Follow-ups', 'Lifetime Value'],
+      [['All time',
         String(snap.activeLeadCount),
         String(snap.activeCustomerCount),
         String(todos.length),
@@ -482,15 +533,13 @@ export default function DashboardPage() {
       )
     ) : ''
 
-    const goalTarget = goals?.month ?? emptyGoalValues()
-    const goalHasTargets = goalTarget.revenue > 0 || goalTarget.leads > 0 || goalTarget.customers > 0
     const goalRows: { label: string; actual: number; target: number; format: (n: number) => string }[] = [
-      { label: 'Revenue',   actual: monthActuals.revenue,   target: goalTarget.revenue,   format: formatCurrency },
-      { label: 'Leads',     actual: monthActuals.leads,     target: goalTarget.leads,     format: n => n.toLocaleString() },
-      { label: 'Customers', actual: monthActuals.customers, target: goalTarget.customers, format: n => n.toLocaleString() },
+      { label: 'Revenue',   actual: periodGoals.actual.revenue,   target: periodGoals.target.revenue,   format: formatCurrency },
+      { label: 'Leads',     actual: periodGoals.actual.leads,     target: periodGoals.target.leads,     format: n => n.toLocaleString() },
+      { label: 'Customers', actual: periodGoals.actual.customers, target: periodGoals.target.customers, format: n => n.toLocaleString() },
     ]
-    const goalsSect = goalHasTargets ? section(
-      `Goals — ${monthRange.short}`, '',
+    const goalsSect = periodGoals.hasTargets ? section(
+      `Goals — ${esc(periodGoals.range.label)}`, '',
       buildTable(
         ['Metric', 'Actual', 'Target', '% of Goal'],
         goalRows.map(r => [
@@ -533,37 +582,37 @@ export default function DashboardPage() {
       )
     ) : ''
 
+    // salesmanLabel comes from pickerStore, i.e. it's whatever the company
+    // typed into settings — the only user-controlled value that reaches this
+    // HTML outside buildTable, which escapes its own cells.
     const topPerformerSect = topPerformer ? section(
-      `Top ${salesmanLabel} This Month`, formatCurrency(topPerformer.revenue),
+      `Top ${esc(salesmanLabel)} — ${esc(range.label)}`, formatCurrency(topPerformer.revenue),
       buildTable(
         ['Name', 'Sales', 'Revenue'],
         [[topPerformer.name, String(topPerformer.customers), formatCurrency(topPerformer.revenue)]],
       )
     ) : ''
 
-    const upcomingSect = upcomingAppointments.length ? section(
-      'Upcoming Appointments', String(upcomingAppointments.length),
+    const upcomingSect = upcoming.length ? section(
+      `Upcoming Appointments — next ${UPCOMING_WINDOW_DAYS} days`, String(upcoming.length),
       buildTable(
         ['Name', 'Phone', 'Appt Date'],
-        upcomingAppointments.map(c => [
+        upcoming.map(c => [
           nameCell(c), c.phone, c.startDate ? fmtDate(c.startDate) : '',
         ]),
       )
     ) : ''
 
-    const activitySect = activities.length ? section(
-      'Recent Activity', String(activities.length),
+    const activitySect = feedRows.length ? section(
+      'Recent Activity', String(feedRows.length),
       buildTable(
         ['Customer', 'Type', 'User', 'When'],
-        activities.map(a => {
-          const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
-          return [
-            activityNameMap.get(a.customerId) ?? '—',
-            meta.label,
-            a.userName,
-            fmtDate(a.createdAt),
-          ]
-        }),
+        feedRows.map(r => [
+          r.customerMissing ? 'Deleted record' : (r.customerName ?? '—'),
+          r.typeLabel ?? r.type,
+          r.userName,
+          fmtDate(r.createdAt),
+        ]),
       )
     ) : ''
 
@@ -593,7 +642,7 @@ export default function DashboardPage() {
 </head>
 <body>
   <h1>${PERIOD_TITLE[period]} Snapshot</h1>
-  <p class="sub">${period === 'today' ? dateStr : periodDateLabel}</p>
+  <p class="sub">${esc(range.label)} &middot; printed ${dateStr}</p>
 
   <div class="summary-section">
     <div class="summary-label">${PERIOD_TABS[period]}</div>
@@ -601,7 +650,7 @@ export default function DashboardPage() {
   </div>
 
   <div class="summary-section" style="margin-top:14px;">
-    <div class="summary-label">Overall</div>
+    <div class="summary-label">All time &mdash; not affected by the selected period</div>
     ${overallTable}
   </div>
 
@@ -633,11 +682,14 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-      {/* Header */}
+      {/* Header. "Dashboard", matching the nav entry and the browser title —
+          the h1 said "Snapshot" while both of those said Dashboard, so the
+          page had three names. The printout keeps "Snapshot" as the report's
+          own name, which is a document title rather than the page's. */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Snapshot</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{periodDateLabel}</p>
+          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{range.label}</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -671,23 +723,6 @@ export default function DashboardPage() {
         loading={followUpsLoading || todosLoading || allCustomersLoading}
       />
 
-      {/* Period tabs — drive every "today"/"this month" figure below */}
-      <div className="flex gap-1.5" role="tablist" aria-label="Snapshot period">
-        {PERIODS.map(p => (
-          <button
-            key={p}
-            role="tab"
-            aria-selected={period === p}
-            onClick={() => setPeriod(p)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              period === p ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {PERIOD_TABS[p]}
-          </button>
-        ))}
-      </div>
-
       <OnboardingChecklist />
 
       {customersHitCap && (
@@ -705,125 +740,174 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Today / Month stat strip */}
-      <section>
-        <p className="section-header">{PERIOD_TABS[period]}</p>
-        {/* Mobile: two rows of 3; sm+: single row of 6 */}
-        <div className="sm:hidden space-y-2">
-          <div className="grid grid-cols-3 gap-2">
-            <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)} loading={loading} />
-            <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} loading={loading} />
-            <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)} loading={loading} />
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}   loading={loading} />
-            <StatCard title="Expense"  value={fmtCompact(expensesTotal)} loading={expensesLoading} to="/expenses" />
-            <StatCard title="Sales"    value={fmtCompact(salesTotal)}  loading={loading} />
-          </div>
-        </div>
-        <div className="hidden sm:grid gap-2" style={{ gridTemplateColumns: 'repeat(5, 1fr) 1.4fr' }}>
-          <StatCard title="Leads"    value={String(data?.leadsToday.length ?? 0)} loading={loading} />
-          <StatCard title="Appts"    value={String(data?.appointmentsToday.length ?? 0)} loading={loading} />
-          <StatCard title="Customer" value={String(data?.customersToday.length ?? 0)} loading={loading} />
-          <StatCard title="Jobs"     value={String(data?.jobsStartingToday.length ?? 0)}   loading={loading} />
-          <StatCard title="Expense"  value={fmtCompact(expensesTotal)} loading={expensesLoading} to="/expenses" />
-          <StatCard title="Sales"    value={fmtCompact(salesTotal)}  loading={loading} />
-        </div>
-      </section>
+      {/* ── Period-scoped zone ────────────────────────────────────────────
+          Everything between the tabs and the divider below responds to the
+          selected period. The tabs used to sit above all fourteen blocks while
+          only four of them actually moved, so picking "Year" left ten figures
+          identical — indistinguishable from stale data. Grouping them means an
+          unchanged number is explained by where it sits. */}
+      <div role="tablist" aria-label="Snapshot period" className="flex gap-1.5">
+        {SNAPSHOT_PERIODS.map(p => (
+          <button
+            key={p}
+            role="tab"
+            id={`period-tab-${p}`}
+            aria-selected={period === p}
+            aria-controls="period-panel"
+            onClick={() => setPeriod(p)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+              period === p ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:text-gray-100'
+            }`}
+          >
+            {PERIOD_TABS[p]}
+          </button>
+        ))}
+      </div>
 
-      {/* All-time totals — reference, not triage: these never change day to day. */}
-      <CollapsibleSection title="Overall totals">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)} loading={loading} />
-          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)} loading={loading} />
-          <StatCard title="Active Tasks"     value={String(todos.length)} loading={todosLoading} to="/todo" />
-          <StatCard title="Total Sales"      value={formatCurrency(data?.totalCustomerSales ?? 0)}  loading={loading} />
-          <StatCard title="Unread Chats"     value={String(unreadChats)}    loading={false} to="/chat" />
-        </div>
-      </CollapsibleSection>
+      <div
+        id="period-panel"
+        role="tabpanel"
+        aria-labelledby={`period-tab-${period}`}
+        className="space-y-6"
+      >
+        {/* Stat strip. One array, one grid: the six cards were written out
+            twice for mobile and desktop, and a previous fix to the Expense
+            formatter landed on only one copy. */}
+        <section>
+          <p className="section-header">{PERIOD_TABS[period]}</p>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            {[
+              { title: 'Leads',    value: String(data?.leadsToday.length ?? 0),        loading },
+              { title: 'Appts',    value: String(data?.appointmentsToday.length ?? 0), loading },
+              { title: 'Customer', value: String(data?.customersToday.length ?? 0),    loading },
+              { title: 'Jobs',     value: String(data?.jobsStartingToday.length ?? 0), loading },
+              { title: 'Expenses', value: fmtMoneyCompact(expensesTotal), loading: expensesLoading, to: '/expenses', basis: MONEY_BASIS.expenses, exact: fmtMoneyExact(expensesTotal) },
+              // "Invoiced", not "Sales": this is paid invoices issued in the
+              // period, whereas Goals' Revenue and Lifetime Value are both
+              // customer.amount. Three measurements under one word read as one
+              // figure contradicting itself.
+              { title: MONEY_LABELS.invoiced, value: fmtMoneyCompact(salesTotal), loading, basis: MONEY_BASIS.invoiced, exact: fmtMoneyExact(salesTotal) },
+            ].map(c => (
+              <StatCard
+                key={c.title}
+                title={c.title}
+                value={c.value}
+                loading={c.loading}
+                to={c.to}
+                titleAttr={c.basis ? `${c.exact} — ${c.basis}` : undefined}
+              />
+            ))}
+          </div>
+        </section>
 
-      {/* Goals / Pipeline / Proposals / Jobs Pipeline */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <GoalsCard goals={goals} actuals={monthActuals} range={monthRange} loading={allCustomersLoading} />
+        {/* Goals and the leading rep, both of which now follow the tabs */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <GoalsCard
+            target={periodGoals.target}
+            actual={periodGoals.actual}
+            hasTargets={periodGoals.hasTargets}
+            range={periodGoals.range}
+            period={period}
+            loading={allCustomersLoading}
+          />
+          <TopPerformerCard
+            performer={topPerformer}
+            label={salesmanLabel}
+            rangeLabel={range.short}
+            loading={allCustomersLoading}
+          />
+        </div>
+
+        {/* Bar chart — hidden when loading or all values are zero */}
+        {!loading && chartEntries && chartEntries.some(e => e.count > 0) && (
+          <section className="card p-4">
+            <button
+              onClick={() => setChartOpen(v => !v)}
+              aria-expanded={chartOpen}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <p className="text-xs font-semibold text-gray-400">{PERIOD_TABS[period]} at a Glance</p>
+              <svg
+                className={`w-4 h-4 text-gray-400 transition-transform ${chartOpen ? 'rotate-180' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+              </svg>
+            </button>
+            {chartOpen && (
+              <div className="mt-3">
+                <Suspense fallback={<div className="h-[140px] rounded-lg meter-track animate-pulse" />}>
+                  <SnapshotChart entries={chartEntries} />
+                </Suspense>
+              </div>
+            )}
+          </section>
+        )}
+
+        <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} period={period} />
+
+        {/* Browsable record lists — reference material behind one heading, so
+            they stop competing with the triage block and the period figures. */}
+        <CollapsibleSection title={`Records ${PERIOD_SUFFIX[period]}`}>
+          <ListSection
+            title={`Leads ${PERIOD_SUFFIX[period]}`}
+            items={data?.leadsToday} loading={loading} emptyMsg={`No leads ${PERIOD_PHRASE[period]}`} viewAllTo="/leads"
+          />
+          <ListSection
+            title={`Appointments ${PERIOD_SUFFIX[period]}`}
+            items={data?.appointmentsToday} loading={loading} emptyMsg={`No appointments ${PERIOD_PHRASE[period]}`} viewAllTo="/calendar"
+          />
+          <ListSection
+            title={`Customers ${PERIOD_SUFFIX[period]}`}
+            items={data?.customersToday} loading={loading} emptyMsg={`No customers ${PERIOD_PHRASE[period]}`} viewAllTo="/customers"
+          />
+          <SalesTodayCard items={data?.salesToday} loading={loading} period={period} />
+          <ListSection
+            title="Jobs in Progress"
+            items={data?.jobsStartingToday} loading={loading} emptyMsg={`No jobs starting ${PERIOD_PHRASE[period]}`} viewAllTo="/jobs"
+          />
+        </CollapsibleSection>
+      </div>
+
+      {/* ── Period-free zone ──────────────────────────────────────────────
+          Current state and all-time figures. These never moved with the tabs;
+          now they sit below a divider that says so, and each card repeats its
+          scope in its own heading. */}
+      <div className="flex items-center gap-3 pt-2">
+        <div className="h-px flex-1 bg-gray-700" />
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 shrink-0">
+          Current &amp; all-time
+        </p>
+        <div className="h-px flex-1 bg-gray-700" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <PipelineSummaryCard stages={pipelineStages} counts={stageCounts} loading={allCustomersLoading} />
         <ProposalSummaryCard stats={proposalStats} loading={proposalsLoading} />
         <JobsPipelineSummaryCard counts={jobStageCounts} loading={allCustomersLoading} />
       </div>
 
-      {/* Bar chart — hidden when loading or all values are zero */}
-      {!loading && chartEntries && chartEntries.some(e => e.count > 0) && (
-        <section className="card p-4">
-          <button
-            onClick={() => setChartOpen(v => !v)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <p className="text-xs font-semibold text-gray-400">{PERIOD_TABS[period]} at a Glance</p>
-            <svg
-              className={`w-4 h-4 text-gray-400 transition-transform ${chartOpen ? 'rotate-180' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
-            </svg>
-          </button>
-          {chartOpen && (
-            <div className="mt-3">
-              <Suspense fallback={<div className="h-[140px] rounded-lg bg-gray-800 animate-pulse" />}>
-                <SnapshotChart entries={chartEntries} />
-              </Suspense>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Tasks / Follow-ups / Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <TasksCard todos={todos} loading={todosLoading} />
         <FollowUpsCard items={followUps} loading={followUpsLoading} error={followUpsError} />
-        <ActivityTimelineCard
-          activities={activities}
-          nameMap={activityNameMap}
-          loading={activitiesLoading}
-        />
+        <ActivityTimelineCard rows={feedRows} loading={activitiesLoading} />
       </div>
 
-      {/* Top performer / Upcoming appointments */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TopPerformerCard performer={topPerformer} label={salesmanLabel} loading={allCustomersLoading} />
-        <UpcomingAppointmentsCard items={upcomingAppointments} loading={allCustomersLoading} />
-      </div>
+      <UpcomingAppointmentsCard items={upcoming} loading={allCustomersLoading} />
 
-      {/* Expenses */}
-      <ExpensesTodayCard expenses={expensesToday} loading={expensesLoading} period={period} />
-
-      {/* Browsable record lists — reference material behind one heading, so
-          they stop competing with the triage block and the period figures. */}
-      <CollapsibleSection title={`Records ${PERIOD_SUFFIX[period]}`}>
-      {/* Leads */}
-      <ListSection
-        title={`Leads ${PERIOD_SUFFIX[period]}`}
-        items={data?.leadsToday} loading={loading} emptyMsg={`No leads ${PERIOD_PHRASE[period]}`} viewAllTo="/leads"
-      />
-
-      {/* Appointments */}
-      <ListSection
-        title={`Appointments ${PERIOD_SUFFIX[period]}`}
-        items={data?.appointmentsToday} loading={loading} emptyMsg={`No appointments ${PERIOD_PHRASE[period]}`} viewAllTo="/calendar"
-      />
-
-      {/* Customers */}
-      <ListSection
-        title={`Customers ${PERIOD_SUFFIX[period]}`}
-        items={data?.customersToday} loading={loading} emptyMsg={`No customers ${PERIOD_PHRASE[period]}`} viewAllTo="/customers"
-      />
-
-      {/* Sales */}
-      <SalesTodayCard items={data?.salesToday} loading={loading} period={period} />
-
-      {/* Jobs */}
-      <ListSection
-        title="Jobs in Progress"
-        items={data?.jobsStartingToday} loading={loading} emptyMsg={`No jobs starting ${PERIOD_PHRASE[period]}`} viewAllTo="/jobs"
-      />
+      <CollapsibleSection title="All-time totals">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          <StatCard title="Active Leads"     value={String(data?.activeLeadCount ?? 0)} loading={loading} />
+          <StatCard title="Active Customers" value={String(data?.activeCustomerCount ?? 0)} loading={loading} />
+          <StatCard title="Active Tasks"     value={String(todos.length)} loading={todosLoading} to="/todo" />
+          <StatCard
+            title={MONEY_LABELS.lifetime}
+            value={fmtMoneyCompact(data?.totalCustomerSales ?? 0)}
+            loading={loading}
+            titleAttr={`${fmtMoneyExact(data?.totalCustomerSales ?? 0)} — ${MONEY_BASIS.lifetime}`}
+          />
+          <StatCard title="Unread Chats"     value={String(unreadChats)}    loading={false} to="/chat" />
+        </div>
       </CollapsibleSection>
     </div>
   )
@@ -848,11 +932,15 @@ function NeedsAttentionCard({
   unreadChats: number
   loading: boolean
 }) {
+  // Follow-ups land on /followups, the page built for them. The chip used to
+  // go to an unfiltered /customers and the card's "+N more" to /leads, so
+  // clicking "6 overdue follow-ups" dumped you in a record list with no way to
+  // see which six.
   const items = [
-    { count: overdueFollowUps, label: 'overdue follow-up',  to: '/customers', urgent: true },
-    { count: overdueTasks,     label: 'overdue task',       to: '/todo',      urgent: true },
+    { count: overdueFollowUps,  label: 'overdue follow-up', to: '/followups', urgent: true },
+    { count: overdueTasks,      label: 'overdue task',      to: '/todo',      urgent: true },
     { count: appointmentsToday, label: 'appointment today', to: '/calendar',  urgent: false },
-    { count: unreadChats,      label: 'unread message',     to: '/chat',      urgent: false },
+    { count: unreadChats,       label: 'unread message',    to: '/chat',      urgent: false },
   ].filter(i => i.count > 0)
 
   if (loading) {
@@ -867,15 +955,18 @@ function NeedsAttentionCard({
   }
 
   // An empty state that says so, rather than a card that silently vanishes —
-  // "nothing needs you" is itself the answer the page exists to give.
+  // "nothing needs you" is itself the answer the page exists to give. It is
+  // only trustworthy now that the follow-up query reaches back a year: with
+  // the old one-day window this printed "all caught up" over any backlog
+  // older than yesterday.
   if (items.length === 0) {
     return (
-      <section className="card p-4 flex items-center gap-2.5">
-        <svg className="w-5 h-5 text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-        </svg>
+      <section className="card p-4 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <Icon d={ICONS.checkCircle} className="w-5 h-5 text-green-400 shrink-0" />
         <p className="text-sm font-medium text-gray-100">You&rsquo;re all caught up</p>
-        <p className="text-sm text-gray-400">No overdue work, appointments or unread messages.</p>
+        <p className="text-sm text-gray-400">
+          No overdue work in the past year, no appointments today, no unread messages.
+        </p>
       </section>
     )
   }
@@ -887,10 +978,13 @@ function NeedsAttentionCard({
           <Link
             key={i.label}
             to={i.to}
+            // The neutral chip was bg-gray-800 on a bg-gray-800 card with a
+            // gray-700 border: a 1.000:1 fill inside a 1.42:1 outline, so it
+            // had no visible boundary at all while the red chip beside it did.
             className={`flex items-baseline gap-2 px-3 py-2 rounded-lg border transition-colors ${
               i.urgent
                 ? 'bg-red-500/10 border-red-500/40 hover:bg-red-500/20'
-                : 'bg-gray-800 border-gray-700 hover:bg-gray-700/60'
+                : 'bg-gray-700 border-gray-500 hover:bg-gray-600'
             }`}
           >
             <span className={`text-xl font-bold tabular-nums leading-none ${i.urgent ? 'text-red-300' : 'text-gray-100'}`}>
@@ -970,20 +1064,9 @@ function TasksCard({ todos, loading }: { todos: Todo[]; loading: boolean }) {
   const preview = todos.slice(0, MAX_TASKS)
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <p className="section-header mb-0">Tasks · active</p>
-          {todos.length > 0 && (
-            <span className="text-xs font-semibold text-gray-200 px-2 py-0.5 rounded-full bg-gray-700 tabular-nums">
-              {todos.length}
-            </span>
-          )}
-        </div>
-        <Link to="/todo" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title="Tasks" scope="now" to="/todo">
+        {todos.length > 0 && <CountPill>{todos.length}</CountPill>}
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50 flex-1">
         {loading ? (
           <RowsSkeleton />
@@ -1039,20 +1122,17 @@ function ExpensesTodayCard({ expenses, loading, period }: { expenses: Expense[];
   const total   = expenses.reduce((s, e) => s + e.amount, 0)
   return (
     <section>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <p className="section-header mb-0">Expenses {PERIOD_SUFFIX[period]}</p>
-          {expenses.length > 0 && (
-            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-amber-600">
-              {formatCurrency(total)}
-            </span>
-          )}
-        </div>
-        <Link to="/expenses" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title={`Expenses ${PERIOD_SUFFIX[period]}`} to="/expenses">
+        {expenses.length > 0 && (
+          // fmtMoneyCompact so this agrees with the Expenses stat tile above,
+          // which used the compact formatter while this badge used the exact
+          // one — the same total appeared as "$1.2K" and "$1,234" on one
+          // screen. The exact figure is on hover.
+          <CountPill>
+            <span title={`${fmtMoneyExact(total)} — ${MONEY_BASIS.expenses}`}>{fmtMoneyCompact(total)}</span>
+          </CountPill>
+        )}
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
           <RowsSkeleton />
@@ -1092,39 +1172,21 @@ function ExpensesTodayCard({ expenses, loading, period }: { expenses: Expense[];
 }
 
 function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loading: boolean; error: string | null }) {
-  const now = new Date(); now.setHours(0, 0, 0, 0)
-  const overdueOrToday = items.filter(c => c.followUpDate && c.followUpDate <= new Date())
-  const upcoming       = items.filter(c => c.followUpDate && c.followUpDate > new Date())
-
-  function followUpLabel(d: Date): { text: string; color: string } {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const diff = Math.round((d.getTime() - today.getTime()) / 86400000)
-    if (diff < 0)  return { text: `${Math.abs(diff)}d overdue`, color: 'text-red-400' }
-    if (diff === 0) return { text: 'Today',                     color: 'text-yellow-400' }
-    if (diff === 1) return { text: 'Tomorrow',                  color: 'text-orange-400' }
-    return {
-      text: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      color: 'text-gray-400',
-    }
-  }
-
-  const preview = items.slice(0, 5)
+  // isOverdue/dueMetaCompact from utils/dueDate rather than a local copy. The
+  // local one rendered its fallback date with a bare toLocaleDateString() on a
+  // value written at UTC midnight, so a follow-up due the 30th read "Sep 29"
+  // west of UTC — and it was a second implementation of a question /followups
+  // and /todo already answer.
+  const overdue  = items.filter(c => c.followUpDate && isOverdue(c.followUpDate))
+  const upcoming = items.filter(c => c.followUpDate && !isOverdue(c.followUpDate))
+  const preview  = items.slice(0, MAX_TASKS)
 
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0">Follow-Ups</p>
-        {overdueOrToday.length > 0 && (
-          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-red-600">
-            {overdueOrToday.length} due
-          </span>
-        )}
-        {upcoming.length > 0 && (
-          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-slate-600">
-            +{upcoming.length} upcoming
-          </span>
-        )}
-      </div>
+      <CardHeader title="Follow-Ups" scope="now" to="/followups">
+        {overdue.length > 0 && <CountPill tone="alert">{overdue.length} overdue</CountPill>}
+        {upcoming.length > 0 && <CountPill>{upcoming.length} upcoming</CountPill>}
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50 flex-1">
         {loading ? (
           <RowsSkeleton />
@@ -1135,7 +1197,7 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
         ) : (
           <>
             {preview.map(c => {
-              const label = followUpLabel(c.followUpDate!)
+              const due = dueMetaCompact(c.followUpDate!, false)
               const row = recordRow(c, c.phone)
               return (
                 <Link
@@ -1143,18 +1205,21 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
                   to={`/records/${c.id}`}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
                 >
-                  <span className="text-base shrink-0">🔔</span>
+                  {/* Icon rather than 🔔: emoji render in Apple Color Emoji and
+                      ignore currentColor, so they couldn't be tinted or dimmed
+                      alongside the SVG glyphs used everywhere else. */}
+                  <Icon d={ICONS.bell} className="w-4 h-4 shrink-0 text-gray-400" />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-gray-100 truncate">{row.title || '—'}</p>
                     {row.sub && <p className="text-xs text-gray-400 truncate">{row.sub}</p>}
                   </div>
-                  <span className={`text-xs font-semibold shrink-0 ${label.color}`}>{label.text}</span>
+                  <span className={`text-xs font-semibold shrink-0 text-right ${due.cls}`}>{due.label}</span>
                 </Link>
               )
             })}
-            {items.length > 5 && (
-              <Link to="/leads" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
-                +{items.length - 5} more
+            {items.length > MAX_TASKS && (
+              <Link to="/followups" className="block px-4 py-2.5 text-xs text-center text-indigo-400 hover:text-indigo-300 transition-colors">
+                +{items.length - MAX_TASKS} more
               </Link>
             )}
           </>
@@ -1164,43 +1229,23 @@ function FollowUpsCard({ items, loading, error }: { items: CustomerItem[]; loadi
   )
 }
 
-function timeAgo(d: Date): string {
-  const diff = Date.now() - d.getTime()
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1)   return 'Just now'
-  if (mins < 60)  return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24)   return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7)   return `${days}d ago`
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-function ActivityTimelineCard({
-  activities,
-  nameMap,
-  loading,
-}: {
-  activities: Activity[]
-  nameMap: Map<string, string>
-  loading: boolean
-}) {
+/**
+ * The newest activity, sharing /activity's row builder.
+ *
+ * Two things this used to get wrong. `ACTIVITY_TYPES.find(...) ?? ACTIVITY_TYPES[4]`
+ * labelled any unrecognised type "Note" via a magic index, so a sixth type or
+ * any reordering displayed a confidently wrong label. And a customer the name
+ * lookup missed rendered as '…' — the loading placeholder — so a deleted record
+ * looked like it was loading forever, while still linking to a record that
+ * 404s. buildFeedRows answers both with an explicit `customerMissing` and a
+ * nullable `typeLabel`.
+ */
+function ActivityTimelineCard({ rows, loading }: { rows: FeedRow[]; loading: boolean }) {
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <p className="section-header mb-0">Recent Activity</p>
-          {!loading && activities.length > 0 && (
-            <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-sky-600">
-              {activities.length}
-            </span>
-          )}
-        </div>
-        <Link to="/activity" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title="Recent Activity" scope="now" to="/activity">
+        {!loading && rows.length > 0 && <CountPill>{rows.length}</CountPill>}
+      </CardHeader>
       <div className="card px-4 py-3 flex-1">
         {loading ? (
           <div className="space-y-4">
@@ -1214,52 +1259,50 @@ function ActivityTimelineCard({
               </div>
             ))}
           </div>
-        ) : activities.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="text-sm text-gray-400 py-1">No activity logged yet</p>
         ) : (
           <div className="relative max-h-[420px] overflow-y-auto">
-            <div className="absolute left-3.5 top-0 bottom-0 w-px bg-gray-800" aria-hidden="true" />
+            {/* Was bg-gray-800 on a bg-gray-800 card, i.e. a spine at 1.000:1 */}
+            <div className="absolute left-3.5 top-0 bottom-0 w-px bg-gray-500" aria-hidden="true" />
             <div className="space-y-0">
-              {activities.map((a, idx) => {
-                const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
-                const customerName = nameMap.get(a.customerId) ?? '…'
-                const isLast = idx === activities.length - 1
+              {rows.map((r, idx) => {
+                const isLast = idx === rows.length - 1
+                const name = r.customerMissing ? 'Deleted record' : (r.customerName ?? '—')
                 return (
-                  <div key={a.id} className={`relative flex gap-3 ${isLast ? 'pb-0' : 'pb-4'}`}>
-                    <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 z-10">
-                      {a.type === 'call' ? (
-                        // Emoji glyphs can't be tinted, so calls use a currentColor SVG phone
-                        <svg
-                          className="w-3.5 h-3.5 text-green-400"
-                          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                          aria-hidden="true"
-                        >
-                          <path
-                            strokeLinecap="round" strokeLinejoin="round"
-                            d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.94 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z"
-                          />
-                        </svg>
-                      ) : (
-                        <Icon d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note} className="w-3.5 h-3.5 text-gray-400" />
-                      )}
+                  <div key={r.id} className={`relative flex gap-3 ${isLast ? 'pb-0' : 'pb-4'}`}>
+                    <div className="w-7 h-7 rounded-full bg-gray-700 border border-gray-500 flex items-center justify-center shrink-0 z-10">
+                      {/* ACTIVITY_ICONS.call is already ICONS.phone, so the
+                          hand-inlined phone SVG that used to live here existed
+                          only to carry a colour class. */}
+                      <Icon
+                        d={ACTIVITY_ICONS[r.type] ?? ACTIVITY_ICONS.note}
+                        className={`w-3.5 h-3.5 ${ACTIVITY_TINT[r.type] ?? 'text-gray-400'}`}
+                      />
                     </div>
                     <div className="flex-1 min-w-0 pt-0.5">
                       <div className="flex items-baseline gap-1.5">
-                        <Link
-                          to={`/records/${a.customerId}`}
-                          className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors truncate min-w-0"
-                        >
-                          {customerName}
-                        </Link>
-                        <span className="text-xs text-gray-700 ml-auto shrink-0">{timeAgo(a.createdAt)}</span>
+                        {r.customerMissing ? (
+                          <span className="text-sm font-semibold text-gray-400 italic truncate min-w-0">{name}</span>
+                        ) : (
+                          <Link
+                            to={`/records/${r.customerId}`}
+                            className="text-sm font-semibold text-gray-100 hover:text-indigo-300 transition-colors truncate min-w-0"
+                          >
+                            {name}
+                          </Link>
+                        )}
+                        {/* Was text-gray-700: 1.42:1 dark, 1.39:1 light — the
+                            one field a timeline exists to show. */}
+                        <span className="text-xs text-gray-400 ml-auto shrink-0">{timeAgo(r.createdAt)}</span>
                       </div>
                       <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                        <span className="text-xs text-gray-400 shrink-0">{meta.label}</span>
+                        <span className="text-xs text-gray-400 shrink-0">{r.typeLabel ?? r.type}</span>
                         <span className="text-xs text-gray-400 shrink-0">·</span>
-                        <span className="text-xs text-gray-400 truncate" title={a.userName}>{a.userName}</span>
+                        <span className="text-xs text-gray-400 truncate" title={r.userName}>{r.userName}</span>
                       </div>
-                      {a.note && (
-                        <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{a.note}</p>
+                      {r.note && (
+                        <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{r.note}</p>
                       )}
                     </div>
                   </div>
@@ -1286,14 +1329,9 @@ function ListSection({
   const preview = items ? items.slice(0, MAX_TASKS) : []
   return (
     <section>
-      <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0">{title}</p>
-        {items && items.length > 0 && (
-          <span className="text-xs font-semibold text-gray-200 px-2 py-0.5 rounded-full bg-gray-700 tabular-nums">
-            {items.length}
-          </span>
-        )}
-      </div>
+      <CardHeader title={title} to={viewAllTo}>
+        {items && items.length > 0 && <CountPill>{items.length}</CountPill>}
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
           <RowsSkeleton />
@@ -1343,19 +1381,21 @@ function SalesTodayCard({ items, loading, period }: { items?: SaleEntry[]; loadi
   const preview = items ? items.slice(0, MAX_TASKS) : []
   return (
     <section>
-      <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0">Sales {PERIOD_SUFFIX[period]}</p>
+      {/* "Paid Invoices", not "Sales" — these rows are invoices with status
+          'paid', which is a different measurement from the deal value that
+          Goals and Lifetime Value both use. */}
+      <CardHeader title={`Paid Invoices ${PERIOD_SUFFIX[period]}`} to="/invoices">
         {items && items.length > 0 && (
-          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-green-600">
-            {formatCurrency(total)}
-          </span>
+          <CountPill>
+            <span title={`${fmtMoneyExact(total)} — ${MONEY_BASIS.invoiced}`}>{fmtMoneyCompact(total)}</span>
+          </CountPill>
         )}
-      </div>
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
           <RowsSkeleton />
         ) : !items || items.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-gray-400">No sales {PERIOD_PHRASE[period]}</p>
+          <p className="px-4 py-3 text-sm text-gray-400">No paid invoices {PERIOD_PHRASE[period]}</p>
         ) : (
           <>
             {preview.map(entry => {
@@ -1393,51 +1433,65 @@ function SalesTodayCard({ items, loading, period }: { items?: SaleEntry[]; loadi
 }
 
 function GoalsCard({
-  goals, actuals, range, loading,
+  target, actual, hasTargets, range, period, loading,
 }: {
-  goals: GoalDoc | null
-  actuals: GoalValues
+  target: GoalValues
+  actual: GoalValues
+  hasTargets: boolean
   range: PeriodRange
+  period: SnapshotPeriod
   loading: boolean
 }) {
-  const target = goals?.month ?? emptyGoalValues()
-  const hasTargets = target.revenue > 0 || target.leads > 0 || target.customers > 0
-  const rows: { label: string; actual: number; target: number; barClass: string; format: (n: number) => string }[] = [
-    { label: 'Revenue',   actual: actuals.revenue,   target: target.revenue,   barClass: 'bg-green-500',  format: formatCurrency },
-    { label: 'Leads',     actual: actuals.leads,     target: target.leads,     barClass: 'bg-indigo-500', format: n => n.toLocaleString() },
-    { label: 'Customers', actual: actuals.customers, target: target.customers, barClass: 'bg-violet-500', format: n => n.toLocaleString() },
+  const rows: { label: string; actual: number; target: number; barClass: string; format: (n: number) => string; basis?: string }[] = [
+    { label: 'Revenue',   actual: actual.revenue,   target: target.revenue,   barClass: 'bg-green-500',  format: fmtMoneyExact, basis: MONEY_BASIS.dealValue },
+    { label: 'Leads',     actual: actual.leads,     target: target.leads,     barClass: 'bg-indigo-500', format: n => n.toLocaleString() },
+    { label: 'Customers', actual: actual.customers, target: target.customers, barClass: 'bg-violet-500', format: n => n.toLocaleString() },
   ]
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0">Goals · {range.short}</p>
-        <Link to="/goals" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      {/* The full period label, not just `range.short` ("Sep"). There are no
+          daily targets, so the Today tab reports the month it sits inside and
+          this heading is the only thing that says so. */}
+      <CardHeader title={`Goals · ${range.label}`} to="/goals" />
       <div className="card p-4 space-y-3 flex-1">
         {loading ? (
           <LinesSkeleton />
         ) : !hasTargets ? (
-          <p className="text-sm text-gray-400">No goals set for this month</p>
+          <p className="text-sm text-gray-400">No goals set for {range.label}</p>
         ) : (
-          rows.map(r => {
-            const pct = r.target > 0 ? Math.min(100, Math.round((r.actual / r.target) * 100)) : 0
-            return (
-              <div key={r.label}>
-                <div className="flex items-baseline justify-between mb-1">
-                  <span className="text-xs text-gray-400">{r.label}</span>
-                  <span className="text-xs text-gray-300">
-                    {r.format(r.actual)} <span className="text-gray-400">/ {r.format(r.target)}</span>
-                  </span>
+          <>
+            {period === 'today' && (
+              <p className="text-xs text-gray-400">
+                Targets are monthly — the Today tab reports progress through {range.label}.
+              </p>
+            )}
+            {rows.map(r => {
+              const pct = r.target > 0 ? Math.min(100, Math.round((r.actual / r.target) * 100)) : 0
+              return (
+                <div key={r.label}>
+                  <div className="flex items-baseline justify-between mb-1 gap-2">
+                    <span className="text-xs text-gray-400" title={r.basis}>{r.label}</span>
+                    <span className="text-xs text-gray-300 text-right">
+                      {r.format(r.actual)} <span className="text-gray-400">/ {r.format(r.target)}</span>
+                    </span>
+                  </div>
+                  {/* meter-track: was bg-gray-800 on a bg-gray-800 card, so a
+                      bar at 18% was a floating stub with no visible container
+                      and the remaining 82% wasn't expressed at all. */}
+                  <div
+                    className="h-1.5 meter-track"
+                    role="progressbar"
+                    aria-label={`${r.label} goal`}
+                    aria-valuenow={pct}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div className={`h-full ${r.barClass}`} style={{ width: `${pct}%` }} />
+                  </div>
                 </div>
-                <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
-                  <div className={`h-full ${r.barClass}`} style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            )
-          })
+              )
+            })}
+          </>
         )}
       </div>
     </section>
@@ -1448,13 +1502,9 @@ function PipelineSummaryCard({ stages, counts, loading }: { stages: PipelineStag
   const total = stages.reduce((s, cfg) => s + (counts[cfg.id] ?? 0), 0)
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0">Pipeline · current</p>
-        <Link to="/pipeline" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title="Pipeline" scope="now" to="/pipeline">
+        {total > 0 && <CountPill>{total}</CountPill>}
+      </CardHeader>
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
           <LinesSkeleton bar lines={2} />
@@ -1462,7 +1512,7 @@ function PipelineSummaryCard({ stages, counts, loading }: { stages: PipelineStag
           <p className="text-sm text-gray-400">No active leads or customers</p>
         ) : (
           <>
-            <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+            <div className="flex h-2 meter-track">
               {stages.map(cfg => {
                 const count = counts[cfg.id] ?? 0
                 if (count === 0) return null
@@ -1492,13 +1542,7 @@ function ProposalSummaryCard({ stats, loading }: {
   const hasData = stats.pendingValue > 0 || stats.acceptedValue > 0 || stats.sentCount > 0
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0">Proposals · all time</p>
-        <Link to="/proposals" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title="Proposals" scope="allTime" to="/proposals" />
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
           <LinesSkeleton lines={2} />
@@ -1515,7 +1559,9 @@ function ProposalSummaryCard({ stats, loading }: {
               <p className="text-xs text-gray-400">Accepted Value</p>
             </div>
             <div>
-              <p className="text-sm font-bold text-white">{stats.winRate}%</p>
+              {/* text-gray-100 like its three siblings — this one figure was
+                  text-white, a different shade for no reason. */}
+              <p className="text-sm font-bold text-gray-100">{stats.winRate}%</p>
               <p className="text-xs text-gray-400">Win Rate</p>
             </div>
             <div>
@@ -1533,13 +1579,9 @@ function JobsPipelineSummaryCard({ counts, loading }: { counts: Record<JobStage,
   const total = JOB_STAGE_CONFIG.reduce((s, cfg) => s + counts[cfg.id], 0)
   return (
     <section className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0">Jobs Pipeline · current</p>
-        <Link to="/jobs" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
+      <CardHeader title="Jobs Pipeline" scope="now" to="/jobs">
+        {total > 0 && <CountPill>{total}</CountPill>}
+      </CardHeader>
       <div className="card p-4 flex-1 flex flex-col justify-start">
         {loading ? (
           <LinesSkeleton bar lines={2} />
@@ -1547,7 +1589,7 @@ function JobsPipelineSummaryCard({ counts, loading }: { counts: Record<JobStage,
           <p className="text-sm text-gray-400">No customer jobs on file</p>
         ) : (
           <>
-            <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+            <div className="flex h-2 meter-track">
               {JOB_STAGE_CONFIG.map(cfg => {
                 const count = counts[cfg.id]
                 if (count === 0) return null
@@ -1571,26 +1613,23 @@ function JobsPipelineSummaryCard({ counts, loading }: { counts: Record<JobStage,
 }
 
 function TopPerformerCard({
-  performer, label, loading,
+  performer, label, rangeLabel, loading,
 }: {
-  performer: { name: string; revenue: number; customers: number } | null
+  performer: RepStats | null
   label: string
+  rangeLabel: string
   loading: boolean
 }) {
   return (
-    <section>
-      <div className="flex items-center justify-between mb-2">
-        <p className="section-header mb-0">Top {label} This Month</p>
-        <Link to="/leaderboard" className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-          View all
-          <Icon d={ICONS.arrowRight} className="w-3 h-3" />
-        </Link>
-      </div>
-      <div className="card p-4">
+    <section className="h-full flex flex-col">
+      {/* Follows the period tabs now; it was hardcoded to the current month
+          whatever the tabs said. */}
+      <CardHeader title={`Top ${label} · ${rangeLabel}`} to="/leaderboard" />
+      <div className="card p-4 flex-1">
         {loading ? (
           <LinesSkeleton lines={1} />
         ) : !performer ? (
-          <p className="text-sm text-gray-400">No sales recorded this month</p>
+          <p className="text-sm text-gray-400">No sales recorded in this period</p>
         ) : (
           <div className="flex items-center gap-3">
             <Icon d={ICONS.trophy} className="w-6 h-6 shrink-0 text-yellow-400" />
@@ -1598,7 +1637,12 @@ function TopPerformerCard({
               <p className="text-sm font-semibold text-gray-100 truncate">{performer.name}</p>
               <p className="text-xs text-gray-400">{performer.customers} sale{performer.customers === 1 ? '' : 's'}</p>
             </div>
-            <span className="text-base font-bold text-green-400 shrink-0">{formatCurrency(performer.revenue)}</span>
+            <span
+              className="text-base font-bold text-green-400 shrink-0"
+              title={`${fmtMoneyExact(performer.revenue)} — ${MONEY_BASIS.dealValue}`}
+            >
+              {fmtMoneyCompact(performer.revenue)}
+            </span>
           </div>
         )}
       </div>
@@ -1610,14 +1654,9 @@ function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; l
   const preview = items.slice(0, MAX_TASKS)
   return (
     <section>
-      <div className="flex items-center gap-2 mb-2">
-        <p className="section-header mb-0">Upcoming Appointments · next {UPCOMING_WINDOW_DAYS}d</p>
-        {items.length > 0 && (
-          <span className="text-xs font-semibold text-white px-2 py-0.5 rounded-full bg-orange-600">
-            {items.length}
-          </span>
-        )}
-      </div>
+      <CardHeader title={`Upcoming Appointments · next ${UPCOMING_WINDOW_DAYS} days`} scope="now" to="/calendar">
+        {items.length > 0 && <CountPill>{items.length}</CountPill>}
+      </CardHeader>
       <div className="card divide-y divide-gray-700/50">
         {loading ? (
           <RowsSkeleton />
@@ -1633,7 +1672,8 @@ function UpcomingAppointmentsCard({ items, loading }: { items: CustomerItem[]; l
                 to={`/records/${c.id}`}
                 className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
               >
-                <span className="text-base shrink-0">📅</span>
+                {/* Icon rather than 📅, for the same reason as the bell above */}
+                <Icon d={ICONS.calendar} className="w-4 h-4 shrink-0 text-gray-400" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-gray-100 truncate">{row.title || '—'}</p>
                   {row.sub && <p className="text-xs text-gray-400 truncate">{row.sub}</p>}

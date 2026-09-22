@@ -7,6 +7,12 @@ interface Props {
   loading?: boolean
   to?: string
   className?: string
+  /**
+   * Hover text for the tile. Money tiles use it to carry the exact figure and
+   * the basis it was measured on: /dashboard shows paid-invoice totals beside
+   * customer deal value, and a compact "$12.5K" alone can't say which it is.
+   */
+  titleAttr?: string
 }
 
 /**
@@ -17,7 +23,9 @@ interface Props {
  * is reserved for state (overdue, at risk) and for charted categories that
  * carry a legend.
  */
-export default function StatCard({ title, value, color = 'text-gray-100', loading, to, className = '' }: Props) {
+export default function StatCard({
+  title, value, color = 'text-gray-100', loading, to, className = '', titleAttr,
+}: Props) {
   const inner = (
     <>
       {loading ? (
@@ -31,14 +39,14 @@ export default function StatCard({ title, value, color = 'text-gray-100', loadin
 
   if (to) {
     return (
-      <Link to={to} className={`card flex flex-col items-center justify-center py-3 px-2 min-h-[78px] hover:bg-gray-700/50 transition-colors ${className}`}>
+      <Link to={to} title={titleAttr} className={`card flex flex-col items-center justify-center py-3 px-2 min-h-[78px] hover:bg-gray-700/50 transition-colors ${className}`}>
         {inner}
       </Link>
     )
   }
 
   return (
-    <div className={`card flex flex-col items-center justify-center py-3 px-2 min-h-[78px] ${className}`}>
+    <div title={titleAttr} className={`card flex flex-col items-center justify-center py-3 px-2 min-h-[78px] ${className}`}>
       {inner}
     </div>
   )

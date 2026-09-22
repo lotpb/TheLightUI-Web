@@ -354,30 +354,45 @@ export async function setContactAttempts(id: string, attempts: number): Promise<
   await updateDoc(doc(db, COLLECTION, id), { contactAttempts: attempts })
 }
 
+/**
+ * How far back and forward the follow-up window reaches, in days.
+ *
+ * The lower bound used to be yesterday's midnight, so a follow-up due more
+ * than one day ago was not returned at all: it vanished from /followups, from
+ * the dashboard's Follow-Ups card, and from its overdue count — which meant
+ * the dashboard would print "You're all caught up" over an arbitrarily large
+ * backlog. Anything genuinely overdue is the most important row on either
+ * page, so the window reaches back a year and the pages surface the age.
+ */
+export const FOLLOWUP_PAST_DAYS = 365
+export const FOLLOWUP_FUTURE_DAYS = 14
+
 // Requires a Firestore composite index: companyId ASC + followUpDate ASC.
 // If missing, Firestore will log a link to create it in the browser console.
 export function subscribeToFollowUps(
   onData: (items: CustomerItem[]) => void,
   onError: (err: Error) => void,
+  window: { pastDays?: number; futureDays?: number } = {},
 ): Unsubscribe {
   const companyId = getCompanyId()
   if (!companyId) {
     onError(new Error('Not authenticated'))
     return () => {}
   }
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-  yesterday.setHours(0, 0, 0, 0)
+  const from = new Date()
+  from.setDate(from.getDate() - (window.pastDays ?? FOLLOWUP_PAST_DAYS))
+  from.setHours(0, 0, 0, 0)
 
-  const twoWeeks = new Date()
-  twoWeeks.setDate(twoWeeks.getDate() + 14)
+  const to = new Date()
+  to.setDate(to.getDate() + (window.futureDays ?? FOLLOWUP_FUTURE_DAYS))
+  to.setHours(23, 59, 59, 999)
 
   return onSnapshot(
     query(
       collection(db, COLLECTION),
       where('companyId', '==', companyId),
-      where('followUpDate', '>=', Timestamp.fromDate(yesterday)),
-      where('followUpDate', '<=', Timestamp.fromDate(twoWeeks)),
+      where('followUpDate', '>=', Timestamp.fromDate(from)),
+      where('followUpDate', '<=', Timestamp.fromDate(to)),
     ),
     snap => {
       const items: CustomerItem[] = []

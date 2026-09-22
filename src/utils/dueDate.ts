@@ -66,3 +66,29 @@ export function dueMeta(due: Date, isCompleted: boolean): { status: DueStatus; l
     if (days === 1) return { status: 'tomorrow', label: 'Due tomorrow', cls: 'text-amber-400' }
     return { status: 'later', label: `Due ${fmtDue(due)}`, cls: 'text-gray-400' }
 }
+
+/**
+ * The same verdict in a narrow column: "9d overdue", "Today", "Sep 12".
+ *
+ * /dashboard's Follow-Ups card is a third of the page wide and renders this in
+ * a right-hand cell, where dueMeta's full label wraps to three lines. That
+ * card used to carry its own copy of the arithmetic to get a short string. The
+ * copy's day *count* was sound, but its fallback label was a bare
+ * toLocaleDateString() on a value written at UTC midnight, so a follow-up due
+ * the 30th displayed as "Sep 29" for anyone west of UTC. Status and classes
+ * come from dueMeta by construction; only the wording is shorter.
+ */
+export function dueMetaCompact(due: Date, isCompleted: boolean): { status: DueStatus; label: string; cls: string } {
+    const full = dueMeta(due, isCompleted)
+    switch (full.status) {
+        case 'done':     return { ...full, label: fmtDue(due) }
+        case 'overdue':  return { ...full, label: `${-daysUntilDue(due)}d overdue` }
+        case 'today':    return { ...full, label: 'Today' }
+        case 'tomorrow': return { ...full, label: 'Tomorrow' }
+        default:
+            return {
+                ...full,
+                label: due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
+            }
+    }
+}

@@ -492,6 +492,28 @@ html.light-mode .bg-rose-500\/20.text-rose-200,     html.light-mode .bg-rose-500
 html.light-mode .bg-pink-500\/20.text-pink-300,     html.light-mode .bg-pink-500\/15.text-pink-300,
 html.light-mode .bg-pink-500\/20.text-pink-200,     html.light-mode .bg-pink-500\/15.text-pink-200     { color: #831843 !important; }
 
+/* The /10 step of the same family, which every rule above missed.
+   /dashboard's Needs Attention card — the most important element on the
+   landing page — is bg-red-500/10 with text-red-300 and text-red-200, and it
+   measured 1.66:1 and 1.27:1 on a white card because these rules are keyed on
+   exact class triples and nothing covered /10. Completing the family for every
+   hue rather than patching red alone, since the next /10 tint would fall
+   through in exactly the same silent way. */
+html.light-mode .bg-indigo-500\/10.text-indigo-300,   html.light-mode .bg-indigo-500\/10.text-indigo-200   { color: #312e81 !important; }
+html.light-mode .bg-violet-500\/10.text-violet-300,   html.light-mode .bg-violet-500\/10.text-violet-200   { color: #4c1d95 !important; }
+html.light-mode .bg-purple-500\/10.text-purple-300,   html.light-mode .bg-purple-500\/10.text-purple-200   { color: #581c87 !important; }
+html.light-mode .bg-blue-500\/10.text-blue-300,       html.light-mode .bg-blue-500\/10.text-blue-200       { color: #1e3a8a !important; }
+html.light-mode .bg-cyan-500\/10.text-cyan-300,       html.light-mode .bg-cyan-500\/10.text-cyan-200       { color: #164e63 !important; }
+html.light-mode .bg-teal-500\/10.text-teal-300,       html.light-mode .bg-teal-500\/10.text-teal-200       { color: #134e4a !important; }
+html.light-mode .bg-green-500\/10.text-green-300,     html.light-mode .bg-green-500\/10.text-green-200     { color: #14532d !important; }
+html.light-mode .bg-emerald-500\/10.text-emerald-300, html.light-mode .bg-emerald-500\/10.text-emerald-200 { color: #064e3b !important; }
+html.light-mode .bg-yellow-500\/10.text-yellow-300,   html.light-mode .bg-yellow-500\/10.text-yellow-200   { color: #713f12 !important; }
+html.light-mode .bg-orange-500\/10.text-orange-300,   html.light-mode .bg-orange-500\/10.text-orange-200   { color: #7c2d12 !important; }
+html.light-mode .bg-amber-500\/10.text-amber-300,     html.light-mode .bg-amber-500\/10.text-amber-200     { color: #78350f !important; }
+html.light-mode .bg-red-500\/10.text-red-300,         html.light-mode .bg-red-500\/10.text-red-200         { color: #7f1d1d !important; }
+html.light-mode .bg-rose-500\/10.text-rose-300,       html.light-mode .bg-rose-500\/10.text-rose-200       { color: #881337 !important; }
+html.light-mode .bg-pink-500\/10.text-pink-300,       html.light-mode .bg-pink-500\/10.text-pink-200       { color: #831843 !important; }
+
 /* Bare text-amber-400 with no background — the 14-29 day deal-age pill on /leads,
    at 1.67:1 on a white card. Joins the standalone hue overrides further up; the
    two-class combo rules above still win where a tint is present. */
@@ -514,6 +536,11 @@ html.light-mode .text-pink-400   { color: #9d174d !important; } /* 6.75:1 */
    the stage heading takes green-800 instead of moving the global value that
    a dozen other pages depend on. */
 html.light-mode .stage-label.text-green-400 { color: #166534 !important; } /* 6.10:1 */
+
+/* The light-mode half of .meter-track (see @layer components below). The dark
+   value would be 1.10:1 on a white card, so the groove needs its own shade
+   rather than a var-backed token. */
+html.light-mode .meter-track { background-color: #8794a6; } /* 3.08:1 on white */
 
 /* ─────────────────────────────────────────────────────────────────────── */
 
@@ -547,6 +574,19 @@ html.light-mode .stage-label.text-green-400 { color: #166534 !important; } /* 6.
   }
   .section-header {
     @apply text-xs font-semibold uppercase tracking-wider text-gray-400 px-1 mb-2;
+  }
+  /* The groove behind a progress or proportion bar.
+     Every such track on /dashboard was `bg-gray-800` sitting on a `.card`,
+     which is itself `bg-gray-800` — exactly 1.000:1 in both themes. A Goals
+     bar at 18% rendered as a floating stub with no visible container, so the
+     remaining 82% wasn't expressed at all. A track carries the denominator, so
+     it's a meaningful graphical object under WCAG 1.4.11, not decoration:
+     these two values measure 3.04:1 on the dark card and 3.08:1 on the white
+     one. Per-theme literals rather than a gray token because no single token
+     clears 3:1 against both card colours. */
+  .meter-track {
+    @apply rounded-full overflow-hidden;
+    background-color: #6b7280;
   }
   /* The title inside a card's header strip. Same type as .section-header but
      without its px-1/mb-2, since the strip supplies its own padding.

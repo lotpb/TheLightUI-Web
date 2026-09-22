@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import {
-  currentPeriodRange, daysElapsedIn, daysInPeriod, daysLeftIn, goalActuals,
+  currentPeriodRange, daysElapsedIn, daysInPeriod, daysLeftIn, emptyGoalValues, goalActuals,
   goalProgress, goalsDirty, paceFraction, parseTarget, periodHasEnded,
   periodKey, periodRange,
   resolveGoalTargets,
   GOAL_FIELDS, GOAL_PERIODS, GOAL_STATE_STYLES,
-  type GoalPeriod, type GoalState,
+  type GoalDoc, type GoalPeriod, type GoalState,
 } from './goal'
+import { goalsForPeriod } from './dashboard'
 import { emptyCustomer, type CustomerItem } from './customer'
 
 const at = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min)
@@ -138,15 +139,31 @@ describe('goalActuals', () => {
   /**
    * The two pages are meant to agree: same range helper, same three fields,
    * same creationDate keying. Only revenue differed.
+   *
+   * This used to assert that DashboardPage contained the inline expression
+   * `categoryMatches(c.category, 'Customer') ? c.amount : 0` — i.e. it pinned
+   * a *copy* of this function and would have gone green forever if the two
+   * copies drifted in the same direction. The dashboard now calls goalActuals
+   * through models/dashboard's goalsForPeriod, so agreement is structural and
+   * the check is that the duplicate is gone.
    */
-  it('agrees with the expression /dashboard uses for the same month', () => {
-    const src = readFileSync('src/pages/DashboardPage.tsx', 'utf8')
-    expect(src).toContain("categoryMatches(c.category, 'Customer') ? c.amount : 0")
-    const dashRevenue = items
-      .filter(c => c.creationDate.getTime() >= range.start.getTime()
-                && c.creationDate.getTime() <= range.end.getTime())
-      .reduce((s, c) => s + (c.category.toLowerCase() === 'customer' ? c.amount : 0), 0)
-    expect(goalActuals(items, range).revenue).toBe(dashRevenue)
+  it('is the only implementation — /dashboard calls it rather than copying it', () => {
+    const page = readFileSync('src/pages/DashboardPage.tsx', 'utf8')
+    expect(page).not.toContain("categoryMatches(c.category, 'Customer') ? c.amount : 0")
+    expect(page).toContain('goalsForPeriod')
+
+    const model = readFileSync('src/models/dashboard.ts', 'utf8')
+    expect(model).toContain('goalActuals')
+  })
+
+  it('agrees with what /dashboard renders for the same month', () => {
+    const viaDashboard = goalsForPeriod(
+      { companyId: 'co1', month: { revenue: 1, leads: 1, customers: 1 },
+        quarter: emptyGoalValues(), year: emptyGoalValues(), periods: {} } as GoalDoc,
+      items, 'month', at(2026, 9, 17),
+    )
+    expect(viaDashboard.actual).toEqual(goalActuals(items, range))
+    expect(viaDashboard.actual.revenue).toBe(5000)
   })
 })
 
