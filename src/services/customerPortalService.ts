@@ -12,6 +12,7 @@ import { invoiceTotal } from '../models/invoice'
 import type { ServicePlan } from '../models/servicePlan'
 import { getSignedDocumentsForCustomer } from './signingRequestService'
 import { setPortalToken } from './customerService'
+import { normalizePortalRequest, type PortalRequestForm } from '../models/portalRequest'
 
 export interface PortalInvoiceSummary {
   id: string
@@ -184,29 +185,37 @@ export async function getPortalSnapshot(token: string): Promise<CustomerPortalSn
   }
 }
 
-export interface PortalServiceRequest {
-  name: string
-  phone: string
-  email?: string
-  description: string
-  preferredDate?: string
-}
+export type PortalServiceRequest = PortalRequestForm
 
+/**
+ * Writes a service request from the unauthenticated portal.
+ *
+ * The ten fields below are an exact shape match for serviceRequestKeys() in
+ * firestore.rules — that rule uses hasOnly() *and* hasAll(), so adding or
+ * dropping one here makes every submission fail. `status` must be 'new' and
+ * `createdAt` must equal request.time, which is what serverTimestamp() resolves
+ * to for this write. portalRequest.test.ts pins both against the rules file.
+ *
+ * Values are normalized (trimmed) rather than passed through raw: the rule
+ * measures length on what actually arrives, so whitespace padding used to count
+ * against a limit the customer couldn't see.
+ */
 export async function submitServiceRequest(
   token: string,
   companyId: string,
   customerId: string,
   req: PortalServiceRequest,
 ): Promise<void> {
+  const clean = normalizePortalRequest(req)
   await addDoc(collection(db, 'serviceRequests'), {
     token,
     companyId,
     customerId,
-    name:          req.name,
-    phone:         req.phone,
-    email:         req.email ?? '',
-    description:   req.description,
-    preferredDate: req.preferredDate ?? '',
+    name:          clean.name,
+    phone:         clean.phone,
+    email:         clean.email,
+    description:   clean.description,
+    preferredDate: clean.preferredDate,
     status:        'new',
     createdAt:     serverTimestamp(),
   })

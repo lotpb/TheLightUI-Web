@@ -148,6 +148,25 @@ await check('an empty description is rejected', () =>
 await check('a megabyte of description is rejected', () =>
   assertFails(create(portalPayload({ description: 'x'.repeat(1_000_000) }))))
 
+// The exact edges, because this is where the client and the rule have to agree
+// and where a <= / < slip lives. models/portalRequest.ts validates against
+// these same numbers, and portalRequest.test.ts parses them out of the rules
+// file — these two prove the real engine draws the line in the same place.
+await check('a description of exactly 4000 characters is accepted', () =>
+  assertSucceeds(create(portalPayload({ description: 'x'.repeat(4000) }))))
+
+await check('a description of 4001 characters is rejected', () =>
+  assertFails(create(portalPayload({ description: 'x'.repeat(4001) }))))
+
+await check('a name of exactly 200 characters is accepted', () =>
+  assertSucceeds(create(portalPayload({ name: 'x'.repeat(200) }))))
+
+await check('a preferredDate of exactly 40 characters is accepted', () =>
+  assertSucceeds(create(portalPayload({ preferredDate: 'x'.repeat(40) }))))
+
+await check('a preferredDate of 41 characters is rejected', () =>
+  assertFails(create(portalPayload({ preferredDate: 'x'.repeat(41) }))))
+
 await check('an over-long name is rejected', () =>
   assertFails(create(portalPayload({ name: 'x'.repeat(201) }))))
 
