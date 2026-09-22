@@ -231,7 +231,10 @@ describe('CustomerPortalPage wiring', () => {
   })
 
   it('does not silently render an unknown status as Due', () => {
-    expect(page).toContain('UNKNOWN_STATUS')
+    // publicBadge owns this now, and returns "Status unknown" rather than
+    // falling through — see publicTheme.test.ts, which checks it for all five
+    // customer-facing pages rather than just this one.
+    expect(page).toContain('publicBadge')
     expect(page).not.toContain('?? STATUS_STYLE.sent')
   })
 
@@ -257,61 +260,13 @@ describe('CustomerPortalPage wiring', () => {
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
-/**
- * This page is deliberately standalone — inline styles, its own palette, no
- * Tailwind — so none of index.css's contrast work reaches it. Every value that
- * carries text is therefore checked here.
+/*
+ * The palette contrast suite that used to live here has moved to
+ * publicTheme.test.ts.
+ *
+ * It parsed this page's local `const C = {…}` to find the values to measure.
+ * That palette is now models/publicTheme, shared with /i/:token, /p/:token,
+ * /sign/:token and /f/:companyId — which all had the same defect and the same
+ * #94a3b8 — so the checks moved with it and now cover five pages, every
+ * documented pairing, and every status badge instead of this page's four.
  */
-describe('portal palette contrast', () => {
-  const hex = (h: string): [number, number, number] =>
-    [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)) as [number, number, number]
-
-  const lum = (c: [number, number, number]) => {
-    const [r, g, b] = c.map(v => {
-      const s = v / 255
-      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
-    })
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-  }
-
-  const ratio = (fg: string, bg: string) => {
-    const [a, b] = [lum(hex(fg)), lum(hex(bg))].sort((x, y) => y - x)
-    return (a + 0.05) / (b + 0.05)
-  }
-
-  const page = readFileSync('src/pages/portal/CustomerPortalPage.tsx', 'utf8')
-  const colour = (key: string): string => {
-    const m = page.match(new RegExp(`${key}:\\s*'(#[0-9a-f]{6})'`, 'i'))
-    if (!m) throw new Error(`no palette entry for ${key}`)
-    return m[1]
-  }
-
-  it('every status badge passes AA for its 11px bold label', () => {
-    const badges = [...page.matchAll(/color: '(#[0-9a-f]{6})', bg: '(#[0-9a-f]{6})'/gi)]
-    expect(badges.length).toBeGreaterThanOrEqual(4)
-    for (const [, fg, bg] of badges) {
-      expect(ratio(fg, bg), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5)
-    }
-  })
-
-  it('muted body text passes on both surfaces it appears on', () => {
-    // Section headers sit on cardHead, the footer on the page background.
-    expect(ratio(colour('inkMuted'), colour('cardHead'))).toBeGreaterThanOrEqual(4.5)
-    expect(ratio(colour('inkMuted'), colour('page'))).toBeGreaterThanOrEqual(4.5)
-  })
-
-  it('subtle text is only ever used where it passes — on white', () => {
-    expect(ratio(colour('inkSubtle'), colour('card'))).toBeGreaterThanOrEqual(4.5)
-  })
-
-  it('the dark header keeps its contrast', () => {
-    expect(ratio(colour('onDark'), colour('ink'))).toBeGreaterThanOrEqual(4.5)
-  })
-
-  it('no longer contains the two values that failed', () => {
-    // #94a3b8 survives for onDark, where it measures 5.71:1 — but it must not
-    // be the muted or subtle role any more.
-    expect(colour('inkMuted')).not.toBe('#94a3b8')
-    expect(colour('inkSubtle')).not.toBe('#94a3b8')
-  })
-})

@@ -39,10 +39,11 @@ export default function TipPage() {
       <div className="card p-5 space-y-5">
         {/* Bill */}
         <div>
-          <label className="form-label">Bill Amount</label>
+          <label htmlFor="tip-bill" className="form-label">Bill Amount</label>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+            <span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
             <input
+              id="tip-bill"
               type="number"
               inputMode="decimal"
               min="0"
@@ -57,8 +58,12 @@ export default function TipPage() {
 
         {/* Tip % presets */}
         <div>
-          <label className="form-label">Tip Percentage</label>
-          <div className="grid grid-cols-4 gap-2 mb-2">
+          {/* These two label groups of buttons rather than inputs, so they
+              carry an id the group points at — a bare <label> with no `for`
+              names nothing, which is what all eleven labels across the four
+              Tailwind public pages were doing. */}
+          <p id="tip-pct-label" className="form-label">Tip Percentage</p>
+          <div role="group" aria-labelledby="tip-pct-label" className="grid grid-cols-4 gap-2 mb-2">
             {PRESETS.map(p => (
               <button
                 key={p.value}
@@ -103,8 +108,8 @@ export default function TipPage() {
 
         {/* People */}
         <div>
-          <label className="form-label">Split Between</label>
-          <div className="flex items-center gap-4">
+          <p id="tip-split-label" className="form-label">Split Between</p>
+          <div role="group" aria-labelledby="tip-split-label" className="flex items-center gap-4">
             <button
               onClick={() => setPeople(p => Math.max(1, p - 1))}
               className="w-9 h-9 rounded-full bg-gray-800 text-gray-300 hover:bg-gray-700 font-bold text-lg transition-colors"

@@ -82,14 +82,14 @@ export default function JoinPage() {
           </div>
         ) : error ? (
           <div className="mt-4">
-            <p className="text-red-400 text-sm mb-4">{error}</p>
+            <p role="alert" className="text-red-400 text-sm mb-4">{error}</p>
             <Link to="/dashboard" className="text-indigo-400 text-sm hover:text-indigo-300">← Back to app</Link>
           </div>
         ) : !user ? (
           <div className="mt-2">
             <p className="text-gray-400 text-sm mb-1">You've been invited to join as</p>
             <p className="text-white font-bold text-lg capitalize mb-6">{inviteRole}</p>
-            <p className="text-gray-500 text-xs mb-5">Sign in or create an account to accept this invite.</p>
+            <p className="text-gray-400 text-xs mb-5">Sign in or create an account to accept this invite.</p>
             <div className="flex flex-col gap-3">
               <button
                 onClick={() => { sessionStorage.setItem('pendingInviteCode', code); navigate('/login') }}
@@ -137,7 +137,7 @@ export default function JoinPage() {
             </button>
             <button
               onClick={() => navigate('/dashboard')}
-              className="w-full mt-2 py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+              className="w-full mt-2 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
             >
               Cancel
             </button>

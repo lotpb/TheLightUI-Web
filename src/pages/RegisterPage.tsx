@@ -228,8 +228,9 @@ export default function RegisterPage() {
             {/* Name row */}
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">First Name</label>
+                <label htmlFor="reg-first" className="block text-sm font-medium text-gray-300 mb-1.5">First Name</label>
                 <input
+                  id="reg-first"
                   type="text"
                   className={`input-field ${touched.firstName && !firstName.trim() ? 'border-red-500' : ''}`}
                   placeholder="John"
@@ -244,8 +245,9 @@ export default function RegisterPage() {
                 )}
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">Last Name</label>
+                <label htmlFor="reg-last" className="block text-sm font-medium text-gray-300 mb-1.5">Last Name</label>
                 <input
+                  id="reg-last"
                   type="text"
                   className={`input-field ${touched.lastName && !lastName.trim() ? 'border-red-500' : ''}`}
                   placeholder="Doe"
@@ -262,8 +264,9 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Phone Number</label>
+              <label htmlFor="reg-phone" className="block text-sm font-medium text-gray-300 mb-1.5">Phone Number</label>
               <input
+                  id="reg-phone"
                 type="tel"
                 className="input-field"
                 placeholder="(555) 555-5555"
@@ -274,8 +277,9 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
+              <label htmlFor="reg-email" className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
               <input
+                  id="reg-email"
                 type="email"
                 className={`input-field ${touched.email && !emailValid(email) ? 'border-red-500' : ''}`}
                 placeholder="you@example.com"
@@ -291,8 +295,9 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+              <label htmlFor="reg-password" className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
               <input
+                  id="reg-password"
                 type="password"
                 className={`input-field ${touched.password && password.length < 6 ? 'border-red-500' : ''}`}
                 placeholder="••••••••"
@@ -324,8 +329,9 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
+              <label htmlFor="reg-confirm" className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
               <input
+                  id="reg-confirm"
                 type="password"
                 className={`input-field ${touched.confirm && confirm && confirm !== password ? 'border-red-500' : ''}`}
                 placeholder="••••••••"
@@ -341,7 +347,7 @@ export default function RegisterPage() {
             </div>
 
             {displayError && (
-              <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2.5">
+              <div role="alert" className="bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2.5">
                 <p className="text-red-300 text-sm">{displayError}</p>
               </div>
             )}

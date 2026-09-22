@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { ICONS } from '../../components/Icon'
+import { PublicGlyph as Glyph, ICONS } from '../../components/PublicGlyph'
+import {
+  PUBLIC_COLORS as C, PUBLIC_FONT, PUBLIC_INPUT, PUBLIC_INPUT_ERROR, publicBadge,
+} from '../../models/publicTheme'
 import {
   getPortalSnapshot, submitServiceRequest, getDayAvailability,
   type CustomerPortalSnapshot, type PortalServiceRequest, type DayAvailability,
@@ -24,39 +27,14 @@ const AVAILABILITY_WINDOW_DAYS = 14
  * are dark-on-light. The palette is named here so those values have one home
  * and can be checked.
  */
-const C = {
-  page:        '#f1f5f9',
-  card:        '#ffffff',
-  cardHead:    '#f8fafc',
-  hairline:    '#e2e8f0',
-  rowLine:     '#f1f5f9',
-  ink:         '#1e293b',
-  /** Muted body text. Was #94a3b8 (2.34–2.45:1); this is 6.9–7.2:1. */
-  inkMuted:    '#475569',
-  /** Secondary text on white only, where it measures 4.76:1. */
-  inkSubtle:   '#64748b',
-  onDark:      '#94a3b8',
-  accent:      '#4f46e5',
-  accentSoft:  '#eef2ff',
-} as const
-
-/**
- * Status badges, all dark-on-light and all measured.
+/*
+ * The palette, the badges and the glyph all come from models/publicTheme now.
  *
- * Draft was `color:#64748b` on `bg:#1e293b` — the only one of the four with a
- * *dark* surface, which read as 3.07:1 and looked like a rendering fault beside
- * its three light-surface siblings. Draft invoices do reach this page:
- * generatePortalLink includes everything except paid.
+ * This page had its own copy of each — which was right when it was the only
+ * customer-facing page reviewed, and wrong once /i/:token, /p/:token,
+ * /sign/:token and /f/:companyId turned out to share the same problem and the
+ * same values. One measured palette, one contrast suite.
  */
-const STATUS_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-  draft:   { label: 'Draft',   color: '#334155', bg: '#f1f5f9' }, // 9.45:1
-  sent:    { label: 'Due',     color: '#1e40af', bg: '#dbeafe' }, // 7.15:1
-  overdue: { label: 'Overdue', color: '#991b1b', bg: '#fee2e2' }, // 6.80:1
-  paid:    { label: 'Paid',    color: '#166534', bg: '#dcfce7' }, // 6.49:1
-}
-
-/** An unrecognised status says so rather than silently rendering as "Due". */
-const UNKNOWN_STATUS = { label: 'Status unknown', color: '#334155', bg: '#f1f5f9' }
 
 // Local calendar-day string (not toISOString, which is UTC and can shift the
 // date near midnight) — matches how every other date picker in this app
@@ -77,41 +55,6 @@ function fmtCur(n: number) {
 }
 function fmtFreq(f: string) {
   return f.charAt(0).toUpperCase() + f.slice(1)
-}
-
-/**
- * An icon, drawn.
- *
- * The page carried 🔒 📞 ✉ 📍 ✅ 🛠 ✓ as its only iconography — and for the
- * phone, email and address rows the emoji was the field's *only* label, so a
- * screen reader announced "telephone emoji, 555-0100" or nothing at all. Emoji
- * also render from Apple Color Emoji and ignore `color`, which is why the rest
- * of the app replaced its own.
- *
- * Paths come from components/Icon's ICONS so there's one source; this wrapper
- * exists because that component takes Tailwind classes and this page is
- * deliberately inline-styled.
- */
-function Glyph({
-  d, size = 16, color = 'currentColor', title,
-}: {
-  d: string | readonly string[]
-  size?: number
-  color?: string
-  title?: string
-}) {
-  return (
-    <svg
-      width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
-      style={{ flex: '0 0 auto' }}
-      role={title ? 'img' : undefined}
-      aria-label={title}
-      aria-hidden={title ? undefined : true}
-    >
-      {(Array.isArray(d) ? d : [d as string]).map((p, i) => <path key={i} d={p} />)}
-    </svg>
-  )
 }
 
 export default function CustomerPortalPage() {
@@ -228,12 +171,12 @@ export default function CustomerPortalPage() {
     )
   }
 
-  const page = { fontFamily: 'system-ui, -apple-system, sans-serif', background: C.page, minHeight: '100vh', padding: '24px 16px 60px', color: C.ink }
+  const page = { fontFamily: PUBLIC_FONT, background: C.page, minHeight: '100vh', padding: '24px 16px 60px', color: C.ink }
   const card: React.CSSProperties = { background: C.card, borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.06)', overflow: 'hidden', marginBottom: 16 }
   const sectionHead: React.CSSProperties = { padding: '14px 24px', background: C.cardHead, borderBottom: `1px solid ${C.hairline}`, fontSize: 11, fontWeight: 700, color: C.inkMuted, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }
   const row: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '14px 24px' }
   const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: C.inkMuted, display: 'block', marginBottom: 4 }
-  const contactRow: React.CSSProperties = { fontSize: 13, color: C.onDark, margin: '3px 0 0', display: 'flex', alignItems: 'center', gap: 6 }
+  const contactRow: React.CSSProperties = { fontSize: 13, color: C.onBand, margin: '3px 0 0', display: 'flex', alignItems: 'center', gap: 6 }
 
   const hasNothing =
     portal.invoices.length === 0 &&
@@ -250,23 +193,23 @@ export default function CustomerPortalPage() {
         {/* Header. A real <h1> — the customer's name was a styled <p>, so the
             page had no heading of any level and no document outline. */}
         <div style={{ ...card, background: C.ink, color: 'white', padding: '28px 28px 24px' }}>
-          <p style={{ fontSize: 12, color: C.onDark, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Customer Portal</p>
+          <p style={{ fontSize: 12, color: C.onBand, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Customer Portal</p>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 6px' }}>{portal.customerName}</h1>
           {portal.customerPhone && (
             <p style={contactRow}>
-              <Glyph d={ICONS.phone} size={14} color={C.onDark} title="Phone" />
-              <a href={`tel:${portal.customerPhone}`} style={{ color: C.onDark, textDecoration: 'none' }}>{portal.customerPhone}</a>
+              <Glyph d={ICONS.phone} size={14} color={C.onBand} title="Phone" />
+              <a href={`tel:${portal.customerPhone}`} style={{ color: C.onBand, textDecoration: 'none' }}>{portal.customerPhone}</a>
             </p>
           )}
           {portal.customerEmail && (
             <p style={contactRow}>
-              <Glyph d={ICONS.envelope} size={14} color={C.onDark} title="Email" />
-              <a href={`mailto:${portal.customerEmail}`} style={{ color: C.onDark, textDecoration: 'none' }}>{portal.customerEmail}</a>
+              <Glyph d={ICONS.envelope} size={14} color={C.onBand} title="Email" />
+              <a href={`mailto:${portal.customerEmail}`} style={{ color: C.onBand, textDecoration: 'none' }}>{portal.customerEmail}</a>
             </p>
           )}
           {portal.customerAddress && (
             <p style={contactRow}>
-              <Glyph d={ICONS.mapPin} size={14} color={C.onDark} title="Address" />
+              <Glyph d={ICONS.mapPin} size={14} color={C.onBand} title="Address" />
               <span>{portal.customerAddress}</span>
             </p>
           )}
@@ -339,7 +282,7 @@ export default function CustomerPortalPage() {
               </div>
               <div>
                 <label htmlFor={descId} style={labelStyle}>
-                  What do you need? <span style={{ color: '#b91c1c' }}>*</span>
+                  What do you need? <span style={{ color: C.danger }}>*</span>
                 </label>
                 <textarea
                   id={descId}
@@ -366,7 +309,7 @@ export default function CustomerPortalPage() {
                   The old message was a plain <p> with no live region, so a
                   screen-reader user got no feedback at all. */}
               {(fieldErr || submitErr) && (
-                <p id={errId} role="alert" style={{ color: '#b91c1c', fontSize: 13, margin: 0 }}>
+                <p id={errId} role="alert" style={{ color: C.danger, fontSize: 13, margin: 0 }}>
                   {fieldErr?.message ?? submitErr}
                 </p>
               )}
@@ -387,7 +330,7 @@ export default function CustomerPortalPage() {
           <section style={card}>
             <h2 style={sectionHead}>Open Invoices</h2>
             {portal.invoices.map((inv, i) => {
-              const st = STATUS_STYLE[inv.status] ?? UNKNOWN_STATUS
+              const st = publicBadge(inv.status)
               return (
                 <div key={inv.id || i} style={{ ...row, borderBottom: i < portal.invoices.length - 1 ? `1px solid ${C.rowLine}` : 'none' }}>
                   <div style={{ minWidth: 0 }}>
@@ -425,7 +368,7 @@ export default function CustomerPortalPage() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                   <p style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>{fmtCur(inv.total)}</p>
-                  <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: STATUS_STYLE.paid.bg, color: STATUS_STYLE.paid.color }}>Paid</span>
+                  <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: publicBadge('paid').bg, color: publicBadge('paid').color }}>Paid</span>
                 </div>
               </div>
             ))}
@@ -493,20 +436,8 @@ export default function CustomerPortalPage() {
   )
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  border: `1px solid ${C.hairline}`,
-  borderRadius: 8,
-  fontSize: 16, // 16px stops iOS Safari zooming the page on focus
-  color: C.ink,
-  background: C.card,
-  boxSizing: 'border-box',
-  outline: 'none',
-  fontFamily: 'system-ui, sans-serif',
-}
-
-const errorInputStyle: React.CSSProperties = { ...inputStyle, border: '1px solid #b91c1c' }
+const inputStyle = PUBLIC_INPUT
+const errorInputStyle = PUBLIC_INPUT_ERROR
 
 // Day-strip picker for the service-request form's "Preferred Date" — shows
 // the next AVAILABILITY_WINDOW_DAYS days, dimming/disabling any the server
@@ -575,7 +506,7 @@ function DayPicker({
               </div>
               {/* Was #94a3b8 on the full-day surface: 2.34:1. */}
               <div style={{ fontSize: 14, fontWeight: 700 }}>{d.getDate()}</div>
-              {full && <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2 }}>Full</div>}
+              {full && <div style={{ fontSize: 10, color: C.danger, marginTop: 2 }}>Full</div>}
             </button>
           )
         })}

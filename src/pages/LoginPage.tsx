@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
+import { Icon, ICONS } from '../components/Icon'
 import { usePageTitle } from '../hooks/usePageTitle'
 import { IDLE_SIGNOUT_KEY } from '../hooks/useIdleTimeout'
 
@@ -71,7 +72,7 @@ export default function LoginPage() {
 
           {resetSent ? (
             <div className="text-center py-4">
-              <div className="text-3xl mb-3">✉</div>
+              <Icon d={ICONS.envelope} className="w-8 h-8 mx-auto mb-3 text-indigo-400" />
               <p className="text-gray-100 font-medium">Check your email</p>
               <p className="text-gray-400 text-sm mt-1">Password reset link sent to {email}</p>
               <button
@@ -84,8 +85,9 @@ export default function LoginPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
+                <label htmlFor="login-email" className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
                 <input
+                  id="login-email"
                   type="email"
                   className="input-field"
                   placeholder="you@example.com"
@@ -98,9 +100,10 @@ export default function LoginPage() {
 
               {!resetMode && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                  <label htmlFor="login-password" className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
                   <div className="relative">
                     <input
+                      id="login-password"
                       type={showPw ? 'text' : 'password'}
                       className="input-field pr-10"
                       placeholder="••••••••"
@@ -112,7 +115,8 @@ export default function LoginPage() {
                     <button
                       type="button"
                       onClick={() => setShowPw(v => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 transition-colors
+                                 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
                       aria-label={showPw ? 'Hide password' : 'Show password'}
                     >
                       {showPw ? (
@@ -130,8 +134,12 @@ export default function LoginPage() {
                 </div>
               )}
 
+              {/* role="alert", so a failed sign-in is announced. Every public
+                   page in the app rendered its error as a plain element, which
+                   means a screen-reader user submitting bad credentials got no
+                   feedback at all — the page simply didn't change for them. */}
               {error && (
-                <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2.5">
+                <div role="alert" className="bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2.5">
                   <p className="text-red-300 text-sm">{error}</p>
                 </div>
               )}
