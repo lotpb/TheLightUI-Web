@@ -339,19 +339,40 @@ export async function bulkDelete(ids: string[]): Promise<void> {
  * `callback` (see vendorFields in models/customer), so the category has to be
  * passed in rather than assumed.
  */
+/*
+ * These three stamp `lastEditedByName`, like every other write in this file.
+ *
+ * They are the inline controls in /records/:id's sidebar — the only write paths
+ * on that page that don't go through the edit form — and they were the only
+ * ones that didn't stamp it. The audit trigger reads `lastEditedByName` off the
+ * document to attribute the change, so a follow-up date, an attempt count or a
+ * Called toggle was logged against whoever last did a *full* edit. The History
+ * panel showing that wrong name sits on the same page as the controls.
+ *
+ * Their bulk equivalents above (bulkSetFollowUpDate, bulkSetCallback) already
+ * did this, which is what made the single-record versions look deliberate.
+ */
+
 export async function setCalledFlag(id: string, category: string, called: boolean): Promise<void> {
   const field = category.toLowerCase() === 'vendor' ? 'salesman' : 'callback'
-  await updateDoc(doc(db, COLLECTION, id), { [field]: called ? 'Yes' : 'No' })
+  await updateDoc(doc(db, COLLECTION, id), {
+    [field]: called ? 'Yes' : 'No',
+    lastEditedByName: getCurrentUserLabel().name,
+  })
 }
 
 export async function setFollowUpDate(id: string, date: Date | null): Promise<void> {
   await updateDoc(doc(db, COLLECTION, id), {
     followUpDate: date ? Timestamp.fromDate(date) : null,
+    lastEditedByName: getCurrentUserLabel().name,
   })
 }
 
 export async function setContactAttempts(id: string, attempts: number): Promise<void> {
-  await updateDoc(doc(db, COLLECTION, id), { contactAttempts: attempts })
+  await updateDoc(doc(db, COLLECTION, id), {
+    contactAttempts: attempts,
+    lastEditedByName: getCurrentUserLabel().name,
+  })
 }
 
 /**

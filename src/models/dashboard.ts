@@ -4,7 +4,6 @@ import {
   type GoalDoc, type GoalPeriod, type GoalValues, type PeriodRange,
 } from './goal'
 import { buildLeaderboard, type RepStats } from './leaderboard'
-import type { ActivityType } from './activity'
 
 /**
  * Presentation logic for /dashboard.
@@ -226,18 +225,12 @@ export function stageCountsOf(
 // ── Activity glyph tints ──────────────────────────────────────────────────────
 
 /**
- * Colour per activity type.
+ * Re-exported from models/activity, which owns it now that /records/:id tints
+ * the same glyphs.
  *
  * The timeline special-cased calls with a hand-inlined phone SVG so it could
  * be tinted green, while every other type rendered an untinted ACTIVITY_ICONS
- * glyph — but ACTIVITY_ICONS.call is already that same phone path, so the
- * copy existed only to carry a class. Every value here has a global light-mode
- * rule in index.css; dashboard.test.ts checks that stays true.
+ * glyph — but ACTIVITY_ICONS.call is already that same phone path, so the copy
+ * existed only to carry a class.
  */
-export const ACTIVITY_TINT: Record<ActivityType, string> = {
-  call:  'text-green-400',
-  text:  'text-blue-400',
-  email: 'text-indigo-400',
-  visit: 'text-teal-400',
-  note:  'text-gray-400',
-}
+export { ACTIVITY_TINT } from './activity'

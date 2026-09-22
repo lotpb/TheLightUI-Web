@@ -5,13 +5,16 @@ import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerIt
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
 import { Icon, ICONS, ACTIVITY_ICONS } from '../../components/Icon'
-import { dueMeta } from '../../utils/dueDate'
+import { dueMeta, dueMetaCompact } from '../../utils/dueDate'
 import ConfirmModal from '../../components/ConfirmModal'
 import { useNavBack } from '../../hooks/useNavBack'
 import { usePickerStore } from '../../stores/pickerStore'
 import { useAuthStore } from '../../stores/authStore'
 import { subscribeToActivities, addActivity, deleteActivity } from '../../services/activityService'
-import { ACTIVITY_TYPES, type Activity, type ActivityType } from '../../models/activity'
+import {
+  ACTIVITY_TYPES, activityTint, activityTypeLabel,
+  type Activity, type ActivityType,
+} from '../../models/activity'
 import { subscribeToDocuments, uploadDocument, deleteDocument } from '../../services/documentService'
 import { formatFileSize, fileIcon, type CustomerDocument, type FileKind } from '../../models/document'
 import { updateTags } from '../../services/customerService'
@@ -32,7 +35,11 @@ import { subscribeToEntityAuditLog } from '../../services/auditLogService'
 import { fieldLabel, type AuditLogEntry } from '../../models/auditLog'
 import { calculateHealthScore, type CustomerHealth } from '../../utils/customerHealth'
 import { subscribeToTemplates } from '../../services/templateService'
-import { interpolate, type MessageTemplate } from '../../models/template'
+import type { MessageTemplate } from '../../models/template'
+import {
+  clipboardText, composeHref, composeTabs, initialKey, reconcileSelection,
+  templatesForMode, type ComposeTab, type ComposeVars,
+} from '../../models/composeTemplates'
 import {
   subscribeToSequences, subscribeToCustomerEnrollments,
   enrollCustomer, pauseEnrollment, resumeEnrollment, cancelEnrollment, deleteEnrollment,
@@ -217,10 +224,15 @@ function DetailTabBar({
               {/* One rule for all eight: the badge is how many items the panel
                   holds. Any "of which N are open/active" belongs inside the
                   panel where it can carry a word — Tasks says "(N open)" and
-                  Sequences "(N active)" in their own headers. */}
+                  Sequences "(N active)" in their own headers.
+
+                  The inactive pill is bg-gray-700, not bg-gray-800: this strip
+                  sits on the page background, where gray-800 measured 1.37:1
+                  dark and 1.10:1 light — so in light mode the pill was white on
+                  near-white and only the number inside it was visible. */}
               {count > 0 && (
                 <span className={`text-xs font-semibold rounded-full px-1.5 py-0.5 leading-none transition-colors ${
-                  isActive ? 'bg-indigo-500/20 text-indigo-300' : 'bg-gray-800 text-gray-400'
+                  isActive ? 'bg-indigo-500/20 text-indigo-300' : 'bg-gray-700 text-gray-300'
                 }`}>
                   {count}
                 </span>
@@ -286,6 +298,24 @@ export default function CustomerDetailPage() {
   const [tabCounts, setTabCounts] = useState<Record<TabKey, number>>({
     details: 0, related: 0, activity: 0, tasks: 0, texts: 0, email: 0, sequences: 0, documents: 0,
   })
+  /**
+   * The second section inside the Activity and Email tabs.
+   *
+   * Both tabs hold two panels — Activity has the log plus History, Email has
+   * the thread plus Campaigns — and the badge counted only the first. The rule
+   * this strip states for itself is that the badge is how many items the panel
+   * holds, so a tab showing "Email 2" while the panel listed two emails and
+   * four campaigns was breaking its own rule. AuditHistorySection already had
+   * an unused onCount prop waiting for this.
+   */
+  const [auditCount, setAuditCount] = useState(0)
+  const [campaignCount, setCampaignCount] = useState(0)
+
+  const displayCounts: Record<TabKey, number> = {
+    ...tabCounts,
+    activity: tabCounts.activity + auditCount,
+    email: tabCounts.email + campaignCount,
+  }
 
   useEffect(() => {
     if (!id) return
@@ -607,7 +637,7 @@ export default function CustomerDetailPage() {
 
         {/* ── Main: tabbed content ──────────────────────────────────────── */}
         <main className="min-w-0">
-          <DetailTabBar active={activeTab} counts={tabCounts} onChange={setActiveTab} />
+          <DetailTabBar active={activeTab} counts={displayCounts} onChange={setActiveTab} />
 
       <div className={activeTab === 'details' ? 'space-y-4' : 'hidden'}>
 
@@ -818,7 +848,7 @@ export default function CustomerDetailPage() {
           customerId={id!}
           onCount={n => setTabCounts(c => (c.activity === n ? c : { ...c, activity: n }))}
         />
-        <AuditHistorySection entityId={id!} />
+        <AuditHistorySection entityId={id!} onCount={setAuditCount} />
       </div>
 
       <div className={activeTab === 'tasks' ? 'space-y-4' : 'hidden'}>
@@ -842,7 +872,7 @@ export default function CustomerDetailPage() {
           email={customer.email}
           onCount={n => setTabCounts(c => (c.email === n ? c : { ...c, email: n }))}
         />
-        <CampaignHistorySection customerId={id!} />
+        <CampaignHistorySection customerId={id!} onCount={setCampaignCount} />
       </div>
 
       <div className={activeTab === 'sequences' ? 'space-y-4' : 'hidden'}>
@@ -1034,8 +1064,18 @@ function FieldCell({ label, children }: { label: string; children: React.ReactNo
   )
 }
 
+/**
+ * Counts only the children that will actually render.
+ *
+ * `children.length` counted a conditional that evaluated to false or null as a
+ * column, so `<FieldRow>{a}{b}{cond && c}</FieldRow>` claimed three columns
+ * whether or not the third existed — laying out two cells across a 3-column
+ * grid and leaving a third of the row empty.
+ */
 function FieldRow({ children }: { children: React.ReactNode }) {
-  const cols = Array.isArray(children) ? children.length : 1
+  const cols = Array.isArray(children)
+    ? children.filter(c => c !== null && c !== undefined && c !== false).length
+    : 1
   return (
     <div className={`grid gap-4 px-4 py-3 ${cols >= 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
       {children}
@@ -1252,12 +1292,26 @@ function FollowUpSection({
     }
   }
 
-  const now = new Date(); now.setHours(0, 0, 0, 0)
-  const isOverdue = followUpDate && followUpDate < now
-  const isToday   = followUpDate && followUpDate.toDateString() === now.toDateString()
-
-  const statusColor = isOverdue ? 'text-red-400' : isToday ? 'text-yellow-400' : 'text-green-400'
-  const statusLabel = isOverdue ? 'Overdue' : isToday ? 'Today' : null
+  /**
+   * The verdict comes from utils/dueDate, like /todo, /followups, /dashboard
+   * and the Tasks panel three hundred lines below this one.
+   *
+   * This card computed its own: `followUpDate < localMidnight` for overdue and
+   * a `toDateString()` comparison for today. So one page carried two opinions
+   * about whether a date is late, and this one could only ever say "Overdue" or
+   * "Today" — no "Tomorrow", and no count of how many days late, which is the
+   * thing you actually want from an overdue follow-up.
+   *
+   * One caveat left standing: `handleChange` below writes the date as local
+   * noon (`T12:00:00`), while dueMeta reads the UTC calendar day. Noon lands on
+   * the same UTC day for every offset from UTC-11 to UTC+11, so this agrees
+   * with /followups and /dashboard — which already read this field through the
+   * same helper — everywhere but UTC+12 and beyond. Fixing it properly means
+   * storing follow-ups at UTC midnight like task due dates, which changes a
+   * field three pages read and existing documents carry, so it isn't folded in
+   * here.
+   */
+  const due = followUpDate ? dueMetaCompact(followUpDate, false) : null
 
   return (
     <div className="card overflow-hidden">
@@ -1274,9 +1328,14 @@ function FollowUpSection({
             is the transparent overlay below it, so keyboard focus used to land
             on an element with nothing to show for it. */}
         <div className="relative inline-block rounded-lg focus-within:ring-2 focus-within:ring-indigo-500">
-          <div className="input-field text-sm py-1.5" style={{ minWidth: '130px', cursor: 'pointer', userSelect: 'none' }}>
+          <div className="input-field text-sm py-1.5 tabular-nums" style={{ minWidth: '130px', cursor: 'pointer', userSelect: 'none' }}>
+            {/* formatDate, the page's one absolute-date formatter. This built
+                its own `['Jan','Feb',…]` lookup and printed "Mar 5 2026" with
+                no comma — a fifth date format in a file whose own header
+                documents consolidating eleven of them into four, in the card
+                directly above the ones it consolidated. */}
             {followUpDate
-              ? (() => { const d = followUpDate; const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${mo[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}` })()
+              ? formatDate(followUpDate)
               : <span className="text-gray-400">Select date</span>}
           </div>
           <input
@@ -1287,11 +1346,9 @@ function FollowUpSection({
             style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
           />
         </div>
-        {followUpDate && (
+        {followUpDate && due && (
           <>
-            {statusLabel && (
-              <span className={`text-xs font-semibold ${statusColor}`}>{statusLabel}</span>
-            )}
+            <span className={`text-xs font-semibold ${due.cls}`}>{due.label}</span>
             <button
               onClick={handleClear}
               disabled={saving}
@@ -1362,23 +1419,25 @@ function CalledSection({
     }
   }
 
-  // The counter has to agree with the flag: Called = Yes means at least one
-  // attempt was made, Called = No means none were. The flag gets set from the
-  // edit form, the record list's bulk action and the callback queue, none of
-  // which touch the counter, so both directions are reconciled here — 0 → 1
-  // when called, anything → 0 when not.
-  //
-  // Keyed on the record id so it runs once per record, off the values as
-  // loaded. Re-running on every change would mean a failed save re-fires the
-  // effect forever, and the − button could never take a called record back
-  // down to 0.
-  const reconciledId = useRef<string | null>(null)
-  useEffect(() => {
-    if (reconciledId.current === customer.id) return
-    reconciledId.current = customer.id
-    if (called && customer.contactAttempts === 0) handleChange(1)
-    else if (!called && customer.contactAttempts !== 0) handleChange(0)
-  }, [customer.id, called, customer.contactAttempts]) // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * No reconciliation on mount.
+   *
+   * This used to write to Firestore when the flag and the counter disagreed —
+   * 0 → 1 for a called record, anything → 0 for an uncalled one — the first
+   * time a record was opened. `contactAttempts` isn't in the audit trigger's
+   * ignore list, so simply *viewing* a record appended
+   * "Updated · Contact Attempts 0 → 1" to that record's own history, which is
+   * rendered in the Activity tab of the same page. Opening a record is a read;
+   * it shouldn't leave a trace in the record's history, and it certainly
+   * shouldn't leave one attributed to whoever's looking.
+   *
+   * The disagreement it was papering over is real but it isn't a defect: the
+   * edit form, the record list's bulk action and the callback queue all set the
+   * flag without touching the counter, so "called, 0 attempts logged" is an
+   * accurate description of what those surfaces recorded. The toggle below
+   * still keeps the two in step when a person changes the flag *here*, which
+   * is the only place the page has standing to write.
+   */
 
   return (
     <div className="card overflow-hidden">
@@ -1413,10 +1472,12 @@ function CalledSection({
               + glyphs are Icon SVGs so they inherit the button's colour and
               disabled state instead of being typeset text.
 
-              Both are hidden at 0 attempts, which under the reconciliation
-              above only happens on a Called = No record — there the counter is
-              pinned at 0, so a click would only save a value the next load
-              undoes. The count itself stays visible either way. */}
+              Only − hides at 0, because there's nothing to subtract. + used to
+              hide there too, on the grounds that the mount-time reconciliation
+              pinned an uncalled record's counter at 0 so incrementing it would
+              only be undone on the next load. That reconciliation is gone, so
+              the counter is whatever it says it is and logging a first attempt
+              from here has to be possible. */}
           <div className="flex items-center gap-1.5">
             {customer.contactAttempts > 0 && (
               <button
@@ -1431,18 +1492,16 @@ function CalledSection({
               </button>
             )}
             <span className="text-gray-300 font-medium w-4 text-center tabular-nums">{customer.contactAttempts}</span>
-            {customer.contactAttempts > 0 && (
-              <button
-                type="button"
-                onClick={() => handleChange(customer.contactAttempts + 1)}
-                disabled={saving}
-                aria-label="One more contact attempt"
-                className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
-                           disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-              >
-                <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => handleChange(customer.contactAttempts + 1)}
+              disabled={saving}
+              aria-label="One more contact attempt"
+              className="w-6 h-6 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600
+                         disabled:opacity-40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              <Icon d={ICONS.plus} className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </div>
@@ -1763,7 +1822,10 @@ function SmsThreadSection({
       {messages.length === 0 ? (
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No text messages yet</p>
       ) : (
-        <div className="divide-y divide-gray-700/30">
+        // Capped and scrolled. The thread is ordered oldest-first with the
+        // composer below it, so an uncapped list put "Type a text…" as many
+        // rows down the page as the customer had messages.
+        <div className="divide-y divide-gray-700/30 max-h-[420px] overflow-y-auto">
           {messages.map(m => (
             <div key={m.id} className="px-4 py-3">
               <div className="flex items-baseline gap-2 flex-wrap">
@@ -1860,7 +1922,8 @@ function EmailThreadSection({
       {messages.length === 0 ? (
         <p className="px-4 py-5 text-sm text-gray-400 text-center">No email messages yet</p>
       ) : (
-      <div className="divide-y divide-gray-700/30">
+      // Capped, for the same reason as the text thread above it.
+      <div className="divide-y divide-gray-700/30 max-h-[420px] overflow-y-auto">
         {/* The row is no longer a click target. It carried onClick markEmailRead
             on a bare <div> — no role, no tabIndex, no cursor or hover change —
             so it was invisible to keyboard and screen readers, and selecting
@@ -1941,10 +2004,14 @@ function EmailThreadSection({
   )
 }
 
-function CampaignHistorySection({ customerId }: { customerId: string }) {
+function CampaignHistorySection({
+  customerId, onCount,
+}: { customerId: string; onCount?: (n: number) => void }) {
   const [recipients, setRecipients] = useState<CampaignRecipient[]>([])
 
   useEffect(() => subscribeToRecipientsByCustomer(customerId, setRecipients, () => {}), [customerId])
+
+  useEffect(() => { onCount?.(recipients.length) }, [recipients.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (recipients.length === 0) return null
 
@@ -1960,7 +2027,12 @@ function CampaignHistorySection({ customerId }: { customerId: string }) {
           <Link
             key={r.id}
             to={`/campaigns/${r.campaignId}`}
-            className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-800/40 transition-colors"
+            // gray-700/60, the value RELATED_ROW uses. This was
+            // hover:bg-gray-800/40 on a bg-gray-800 card — 1.000:1, so
+            // hovering a campaign produced no feedback at all. Exactly the
+            // defect the FieldGroup docstring describes fixing across the ten
+            // Related Records rows; this eleventh row was missed.
+            className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-700/60 transition-colors"
           >
             <span className="text-sm text-gray-200">{formatDate(r.sentAt)}</span>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full capitalize ${RECIPIENT_STATUS_COLORS[r.status]}`}>
@@ -2036,14 +2108,23 @@ function RelatedGroup<T>({ title, items, renderItem, last = false }: {
   )
 }
 
-/** A chip in the Add row: opens a module's create form prefilled. */
+/**
+ * A chip in the Add row: opens a module's create form prefilled.
+ *
+ * bg-gray-700 with a gray-500 border. It was bg-gray-800/60 inside a
+ * border-gray-600/50 on a bg-gray-800 card: a 1.000:1 fill inside a 1.38:1
+ * outline, so seven chips offering the page's only create actions had no
+ * visible boundary in either theme. The border does the defining work at
+ * 3.04:1 dark / 7.58:1 light — the same treatment the dashboard's triage chips
+ * needed for the same reason.
+ */
 function AddChip({ to, label }: { to: string; label: string }) {
   return (
     <Link
       to={to}
-      className="inline-flex items-center gap-1 shrink-0 rounded-full border border-gray-600/50 bg-gray-800/60 px-2.5 py-1 text-xs font-medium text-gray-300 hover:border-indigo-500/50 hover:bg-indigo-600/15 hover:text-indigo-200 transition-colors"
+      className="inline-flex items-center gap-1 shrink-0 rounded-full border border-gray-500 bg-gray-700 px-2.5 py-1 text-xs font-medium text-gray-200 hover:border-indigo-500 hover:bg-indigo-600/25 hover:text-indigo-200 transition-colors"
     >
-      <span className="leading-none">+</span>
+      <Icon d={ICONS.plus} className="w-3 h-3 shrink-0" />
       {label}
     </Link>
   )
@@ -2407,21 +2488,32 @@ function ActivityLogSection({ customerId, onCount }: { customerId: string; onCou
         </div>
       </div>
 
-      {/* Activity feed */}
-      <div className="divide-y divide-gray-700/30">
+      {/* Activity feed. Capped in height like every other list on this page —
+          History stops at 3, Related groups at 5, past enrolments at 3 — where
+          this one rendered every row a customer had ever accumulated. */}
+      <div className="divide-y divide-gray-700/30 max-h-[420px] overflow-y-auto">
         {activities.length === 0 ? (
           <p className="px-4 py-5 text-sm text-gray-400 text-center">No activity yet</p>
         ) : (
           activities.map(a => {
-            const meta = ACTIVITY_TYPES.find(t => t.value === a.type) ?? ACTIVITY_TYPES[4]
+            // activityTypeLabel, not `?? ACTIVITY_TYPES[4]` — a magic index
+            // that happens to be Note, so a sixth type or any reordering of
+            // that array displayed a confidently wrong label. The icon on the
+            // next line had its own, differently-behaving fallback, so an
+            // unknown type got the note glyph from one mechanism and the word
+            // "Note" from another.
+            const label = activityTypeLabel(a.type)
             const isDeleting = deletingId === a.id
             const canDelete = user?.uid === a.userId
             return (
               <div key={a.id} className="flex gap-3 px-4 py-3 group">
-                <Icon d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note} className="w-5 h-5 shrink-0 mt-0.5 text-gray-400" />
+                <Icon
+                  d={ACTIVITY_ICONS[a.type] ?? ACTIVITY_ICONS.note}
+                  className={`w-5 h-5 shrink-0 mt-0.5 ${activityTint(a.type)}`}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-xs font-semibold text-gray-300">{meta.label}</span>
+                    <span className="text-xs font-semibold text-gray-300">{label ?? a.type}</span>
                     <span className="text-xs text-gray-400">
                       {a.userName} · {formatRelative(a.createdAt)}
                     </span>
@@ -2533,10 +2625,17 @@ function ScorePopoverBadge({
         <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
         {label}
       </button>
-      <span className="text-2xl font-bold text-white">{score}</span>
+      {/* text-lg, not text-2xl. The h1 two cards above is text-2xl and the
+          deal amount text-xl, so at 24px the score tied the record's own name
+          for the largest thing in a 340px column — the hierarchy problem the
+          identity card's docstring describes fixing, left standing here. */}
+      <span className="text-lg font-bold text-white tabular-nums">{score}</span>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-72 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
+        // border-gray-500, matching the enroll dropdown: border-gray-700 on a
+        // card measured 1.42:1 dark and 1.39:1 light, so this popover's edge
+        // was carried entirely by its shadow.
+        <div className="absolute right-0 top-full mt-2 w-72 bg-gray-900 border border-gray-500 rounded-2xl shadow-2xl z-50 overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-700">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-white">{title}</p>
@@ -2729,7 +2828,12 @@ function TagsSection({
             }}
             onBlur={() => { if (!input.trim()) { setAdding(false) } }}
             placeholder="tag name…"
-            className="bg-gray-800 border border-gray-600 rounded-full px-3 py-1 text-xs text-white placeholder-gray-400 outline-none focus:border-indigo-500 w-28"
+            /* .input-field, like every other text box on this page. It was
+               bg-gray-800 on a bg-gray-800 card: a 1.000:1 fill inside a
+               1.38:1 border, so the one input in the sidebar was the only one
+               with no visible box — and the page had just finished teaching
+               that a box means editable. */
+            className="input-field rounded-full px-3 py-1 text-xs w-28"
           />
           <button
             onClick={() => addTag(input)}
@@ -2752,58 +2856,6 @@ function TagsSection({
 
 // ── Compose modal ─────────────────────────────────────────────────────────────
 
-type ComposeTemplate = { label: string; subject?: string; body: string }
-
-function buildTemplates(
-  mode: 'email' | 'sms',
-  firstName: string,
-  fullName: string,
-  apptDate: string,
-): ComposeTemplate[] {
-  if (mode === 'email') {
-    return [
-      {
-        label: 'Follow-Up',
-        subject: `Following up — ${fullName}`,
-        body: `Hi ${firstName},\n\nI wanted to follow up and see if you had any questions or if there's anything I can help you with.\n\nPlease feel free to reach out at any time.\n\nBest regards,`,
-      },
-      {
-        label: 'Appointment',
-        subject: `Your appointment${apptDate ? ` on ${apptDate}` : ''} — ${fullName}`,
-        body: `Hi ${firstName},\n\nThis is a confirmation of your upcoming appointment${apptDate ? ` on ${apptDate}` : ''}.\n\nIf you need to reschedule or have any questions, don't hesitate to contact us.\n\nLooking forward to meeting with you!\n\nBest regards,`,
-      },
-      {
-        label: 'Thank You',
-        subject: `Thank you, ${firstName}!`,
-        body: `Hi ${firstName},\n\nThank you so much for your business! We truly appreciate you choosing us.\n\nIf there's anything we can do to better serve you, please let us know.\n\nWarm regards,`,
-      },
-      {
-        label: 'Custom',
-        subject: `Hello ${firstName}`,
-        body: '',
-      },
-    ]
-  }
-  return [
-    {
-      label: 'Follow-Up',
-      body: `Hi ${firstName}, just wanted to follow up with you. Do you have any questions I can help with? Feel free to reply anytime.`,
-    },
-    {
-      label: 'Appointment',
-      body: `Hi ${firstName}, this is a reminder about your appointment${apptDate ? ` on ${apptDate}` : ''}. Please reply to confirm or call us to reschedule.`,
-    },
-    {
-      label: 'Thank You',
-      body: `Hi ${firstName}, thank you for your business! We appreciate you choosing us. Don't hesitate to reach out if you need anything.`,
-    },
-    {
-      label: 'Custom',
-      body: '',
-    },
-  ]
-}
-
 function ComposeModal({
   mode,
   customer,
@@ -2823,76 +2875,82 @@ function ComposeModal({
     : ''
 
   const isEmail   = mode === 'email'
-  const builtIn   = buildTemplates(mode, firstName, name, apptDate)
 
-  // Load saved templates from Firestore
   const [savedTemplates, setSavedTemplates] = useState<MessageTemplate[]>([])
   useEffect(() => {
     return subscribeToTemplates(
-      ts => setSavedTemplates(ts.filter(t => t.type === mode || t.type === 'both')),
+      ts => setSavedTemplates(templatesForMode(ts, mode)),
       logRelatedError('templates'),
     )
   }, [mode])
 
-  const vars = {
+  const vars: ComposeVars = {
     firstName, name, date: apptDate,
     amount: customer.amount > 0 ? formatCurrency(customer.amount) : '',
     phone:  customer.phone,
     email:  customer.email,
   }
 
-  // Tabs: saved templates first (marked with a ★), then built-in
-  const allTabs: Array<{ label: string; subject: string; body: string; saved?: boolean }> = [
-    ...savedTemplates.map(t => ({
-      label:   t.name,
-      subject: interpolate(t.subject, vars),
-      body:    interpolate(t.body, vars),
-      saved:   true,
-    })),
-    ...builtIn.map(t => ({ label: t.label, subject: t.subject ?? '', body: t.body })),
-  ]
+  const templates = composeTabs(mode, savedTemplates, vars)
 
-  const [tmplIdx, setTmplIdx]   = useState(0)
-  const [subject, setSubject]   = useState(allTabs[0]?.subject ?? '')
-  const [body, setBody]         = useState(allTabs[0]?.body ?? '')
+  /**
+   * Selection is keyed, and edits are protected.
+   *
+   * This tracked an *index* into a list that puts saved templates first — and
+   * saved templates arrive from Firestore a few hundred milliseconds after the
+   * modal opens. So index 0 stopped meaning "Follow-Up" and started meaning
+   * "the first saved template", while an effect keyed on the array length
+   * re-read the selected tab and overwrote subject and body. Anything typed in
+   * that window was destroyed, with the highlighted tab silently changing
+   * meaning without moving.
+   */
+  const [selectedKey, setSelectedKey] = useState(() => initialKey(templates))
+  const [dirty, setDirty] = useState(false)
+  const [subject, setSubject]   = useState(() => templates[0]?.subject ?? '')
+  const [body, setBody]         = useState(() => templates[0]?.body ?? '')
   const [copied, setCopied]     = useState(false)
 
-  // When saved templates load, re-initialize body from the selected tab
   useEffect(() => {
-    const tab = allTabs[tmplIdx]
-    if (tab) { setSubject(tab.subject); setBody(tab.body) }
+    const { tab, refresh, key } = reconcileSelection(templates, { key: selectedKey, dirty })
+    if (key !== selectedKey) setSelectedKey(key)
+    if (refresh && tab) { setSubject(tab.subject); setBody(tab.body) }
+  // Only when the set of tabs actually changes — not on every keystroke.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedTemplates.length])
+  }, [templates.map(t => t.key).join('|')])
 
-  const templates = allTabs
-
-  function selectTemplate(i: number) {
-    setTmplIdx(i)
-    setSubject(allTabs[i].subject ?? '')
-    setBody(allTabs[i].body)
-  }
-
-  function buildHref() {
-    if (isEmail) {
-      const params = new URLSearchParams()
-      if (subject) params.set('subject', subject)
-      if (body)    params.set('body', body)
-      return `mailto:${customer.email}?${params.toString()}`
-    }
-    return `sms:${customer.phone}${body ? `?&body=${encodeURIComponent(body)}` : ''}`
+  function selectTemplate(tab: ComposeTab) {
+    setSelectedKey(tab.key)
+    setSubject(tab.subject)
+    setBody(tab.body)
+    // Choosing a template is an explicit reset, so edits are no longer at risk.
+    setDirty(false)
   }
 
   async function copyToClipboard() {
-    const text = isEmail ? `Subject: ${subject}\n\n${body}` : body
-    await navigator.clipboard.writeText(text)
+    await navigator.clipboard.writeText(clipboardText(mode, subject, body))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // Escape closes, matching ConfirmModal — this was the one modal on the page
+  // that could only be dismissed by pointer.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // And the page behind it doesn't scroll while it's open.
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-0 sm:px-4">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-0 sm:px-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="relative bg-gray-900 border border-gray-500 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-gray-700 shrink-0">
@@ -2905,23 +2963,27 @@ function ComposeModal({
               {isEmail ? customer.email : customer.phone}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="text-gray-400 hover:text-gray-200 transition-colors p-1 -m-1 rounded
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            <Icon d={ICONS.close} className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Template tabs */}
+        {/* Template tabs, keyed by identity rather than position */}
         <div className="flex gap-1.5 px-4 py-2.5 border-b border-gray-700 shrink-0 overflow-x-auto scrollbar-none">
-          {templates.map((t, i) => (
+          {templates.map(t => (
             <button
-              key={`${t.label}-${i}`}
-              onClick={() => selectTemplate(i)}
+              key={t.key}
+              onClick={() => selectTemplate(t)}
+              aria-pressed={selectedKey === t.key}
               className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                tmplIdx === i
+                selectedKey === t.key
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                  : 'bg-gray-700 text-gray-300 hover:text-gray-100 hover:bg-gray-600'
               }`}
             >
               {t.saved && <StarIcon className="w-3 h-3" filled />}
@@ -2930,27 +2992,32 @@ function ComposeModal({
           ))}
         </div>
 
-        {/* Compose area */}
+        {/* Compose area. .input-field, like every other text box in the app —
+            these were hand-rolled as bg-gray-800 on this bg-gray-900 panel,
+            which measures 1.21:1 dark and 1.17:1 light, so the two boxes you
+            type into had almost no edge. */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {isEmail && (
             <div>
-              <label className="text-xs text-gray-400 mb-1 block">Subject</label>
+              <label className="form-label" htmlFor="compose-subject">Subject</label>
               <input
+                id="compose-subject"
                 type="text"
                 value={subject}
-                onChange={e => setSubject(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-indigo-500"
+                onChange={e => { setSubject(e.target.value); setDirty(true) }}
+                className="input-field text-sm"
                 placeholder="Subject…"
               />
             </div>
           )}
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Message</label>
+            <label className="form-label" htmlFor="compose-body">Message</label>
             <textarea
+              id="compose-body"
               value={body}
-              onChange={e => setBody(e.target.value)}
+              onChange={e => { setBody(e.target.value); setDirty(true) }}
               rows={isEmail ? 9 : 5}
-              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-indigo-500 resize-none"
+              className="input-field text-sm resize-none"
               placeholder="Write your message…"
             />
           </div>
@@ -2959,7 +3026,7 @@ function ComposeModal({
         {/* Actions */}
         <div className="px-4 py-3 border-t border-gray-700 flex gap-2 shrink-0">
           <a
-            href={buildHref()}
+            href={composeHref(mode, isEmail ? customer.email : customer.phone, subject, body)}
             className="flex-1 btn-primary text-sm py-2.5 text-center"
           >
             Open in {isEmail ? 'Email App' : 'Messages'}
@@ -2974,11 +3041,14 @@ function ComposeModal({
               WhatsApp
             </a>
           )}
+          {/* A drawn check, not a ✓ codepoint — the last text glyph standing in
+              for a graphic on a page that replaced the rest of them. */}
           <button
             onClick={copyToClipboard}
-            className={`btn-secondary text-sm px-4 py-2.5 transition-colors ${copied ? 'text-green-400' : ''}`}
+            className={`btn-secondary inline-flex items-center gap-1.5 text-sm px-4 py-2.5 transition-colors ${copied ? 'text-green-400' : ''}`}
           >
-            {copied ? '✓ Copied' : 'Copy'}
+            {copied && <Icon d={ICONS.check} className="w-3.5 h-3.5 shrink-0" />}
+            {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
       </div>
@@ -3265,14 +3335,21 @@ function SequencesSection({ customer, onCount }: { customer: CustomerItem; onCou
               {enrolling && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
               + Enroll
             </button>
+            {/* The menu is bg-gray-900 with a gray-500 border. It was
+                bg-gray-800 on a bg-gray-800 card inside a 1.42:1 border — a
+                floating menu overlaying the surface it sits on at 1.000:1, with
+                nothing but a shadow to say where it ended. The border now
+                carries the edge at 3.04:1 dark / 7.58:1 light, and the darker
+                fill adds a step behind it. */}
             {enrollOpen && (
-              <div className="absolute right-0 top-full mt-1 w-52 max-h-72 overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50">
-                <p className="px-3 py-2 text-xs text-gray-400 border-b border-gray-700 sticky top-0 bg-gray-800 rounded-t-xl">Choose a sequence</p>
+              <div className="absolute right-0 top-full mt-1 w-52 max-h-72 overflow-y-auto bg-gray-900 border border-gray-500 rounded-xl shadow-xl z-50">
+                <p className="px-3 py-2 text-xs text-gray-400 border-b border-gray-700 sticky top-0 bg-gray-900 rounded-t-xl">Choose a sequence</p>
                 {sequences.map(seq => (
                   <button
                     key={seq.id}
                     onClick={() => handleEnroll(seq)}
-                    className="w-full text-left px-3 py-2.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                    className="w-full text-left px-3 py-2.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
                   >
                     <p className="font-medium leading-snug">{seq.name}</p>
                     <p className="text-xs text-gray-400">{seq.steps.length} step{seq.steps.length !== 1 ? 's' : ''}</p>
