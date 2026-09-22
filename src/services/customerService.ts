@@ -1,7 +1,7 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
   onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy,
-  startAfter, limit, Timestamp,
+  runTransaction, startAfter, limit, Timestamp,
   type QueryDocumentSnapshot, type Unsubscribe,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
@@ -372,6 +372,40 @@ export async function setContactAttempts(id: string, attempts: number): Promise<
   await updateDoc(doc(db, COLLECTION, id), {
     contactAttempts: attempts,
     lastEditedByName: getCurrentUserLabel().name,
+  })
+}
+
+/**
+ * Prepends a dated note to a record's `comments`, touching nothing else.
+ *
+ * /followups' quick-note box did this with
+ * `updateCustomer(c.id, { ...c, comments: next })` — a full-document write
+ * built from whatever that page had in memory. So saving a one-line note
+ * rewrote all forty fields from a snapshot taken when the page loaded, silently
+ * reverting anything another rep had changed since. It also read the existing
+ * comments from that same stale copy, so two notes added from two tabs would
+ * lose one.
+ *
+ * A transaction fixes both: the current value is read inside it, and only
+ * `comments` is written.
+ */
+export async function appendCustomerComment(id: string, text: string): Promise<void> {
+  const body = text.trim()
+  if (!body) return
+
+  const stamp = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const header = `--- [${stamp}] ---`
+  const lastEditedByName = getCurrentUserLabel().name
+
+  await runTransaction(db, async tx => {
+    const ref = doc(db, COLLECTION, id)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Record not found')
+    const existing = String(snap.data()['comments'] ?? '').trim()
+    tx.update(ref, {
+      comments: existing ? `${header}\n${body}\n\n${existing}` : `${header}\n${body}`,
+      lastEditedByName,
+    })
   })
 }
 

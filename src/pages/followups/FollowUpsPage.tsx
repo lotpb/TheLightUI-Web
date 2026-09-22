@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { subscribeToFollowUps, setFollowUpDate, updateCustomer } from '../../services/customerService'
+import { subscribeToFollowUps, setFollowUpDate, appendCustomerComment } from '../../services/customerService'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
+import { Icon, ICONS } from '../../components/Icon'
+import { dueMetaCompact, fmtDue } from '../../utils/dueDate'
+import {
+  RENDER_CAP, STALE_DAYS, bucketFollowUps, emptyMessage, filteredFollowUps,
+  queueChips, rowInitials, rowName,
+  type QueueFilter,
+} from '../../models/followUpQueue'
 import type { CustomerItem } from '../../models/customer'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -104,33 +111,40 @@ function today0() {
   return d
 }
 
-function fmtDate(d: Date) {
-  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return `${mo[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`
+/*
+ * fmtDue and dueMetaCompact come from utils/dueDate.
+ *
+ * This page had its own of each: a hand-rolled `['Jan','Feb',…]` lookup
+ * printing "Sep 5 2026" with no comma — the same fifth date format just removed
+ * from the record page — and `urgencyLabel`, computing lateness from
+ * `Math.round((date - localMidnight) / 86_400_000)`. That made it the third
+ * implementation of "is this late?" in the app, alongside /todo and the record
+ * page, both of which now go through the shared helper.
+ */
+
+/**
+ * Icons per sequence action, drawn rather than 📞 💬 ✉️ 🚗 📝.
+ *
+ * Emoji render from Apple Color Emoji and ignore `color`, so the glyph on a
+ * blue Call pill was the same shade as the one on a green SMS pill, and none of
+ * them followed light mode. Paths shared from components/Icon.
+ */
+const ACTION_ICONS: Record<SequenceStep['action'], string | readonly string[]> = {
+  Call: ICONS.phone, SMS: ICONS.chat, Email: ICONS.envelope,
+  Visit: ICONS.home, Note: ICONS.pencil,
 }
 
-function daysDiff(a: Date, b: Date) {
-  return Math.round((a.getTime() - b.getTime()) / 86_400_000)
-}
-
-function urgencyLabel(date: Date): { label: string; cls: string } {
-  const diff = daysDiff(date, today0())
-  if (diff < 0)  return { label: `${Math.abs(diff)}d overdue`, cls: 'text-red-400 font-semibold' }
-  if (diff === 0) return { label: 'Due today',               cls: 'text-orange-400 font-semibold' }
-  if (diff === 1) return { label: 'Tomorrow',                cls: 'text-yellow-400' }
-  return { label: `In ${diff} days`,                         cls: 'text-gray-400' }
-}
-
-const ACTION_ICONS: Record<SequenceStep['action'], string> = {
-  Call: '📞', SMS: '💬', Email: '✉️', Visit: '🚗', Note: '📝',
-}
-
+/**
+ * Note used `bg-gray-800`, which is what `.card` already is — a 1.000:1 fill,
+ * so one pill of the five had no surface at all. All five use the tinted
+ * family now, each with an explicit light-mode rule in index.css.
+ */
 const ACTION_COLORS: Record<SequenceStep['action'], string> = {
-  Call:  'bg-blue-900/40 text-blue-300 border-blue-700/30',
-  SMS:   'bg-green-900/40 text-green-300 border-green-700/30',
-  Email: 'bg-indigo-900/40 text-indigo-300 border-indigo-700/30',
-  Visit: 'bg-orange-900/40 text-orange-300 border-orange-700/30',
-  Note:  'bg-gray-800 text-gray-300 border-gray-700',
+  Call:  'bg-blue-500/20 text-blue-300 border-blue-600/40',
+  SMS:   'bg-green-500/20 text-green-300 border-green-600/40',
+  Email: 'bg-indigo-500/20 text-indigo-300 border-indigo-600/40',
+  Visit: 'bg-orange-500/20 text-orange-300 border-orange-600/40',
+  Note:  'bg-gray-700 text-gray-200 border-gray-500',
 }
 
 function genId() { return Math.random().toString(36).slice(2, 10) }
@@ -161,8 +175,19 @@ export default function FollowUpsPage() {
   // Expanded customer card
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // Filter
-  const [filter, setFilter] = useState<'all' | 'overdue' | 'today' | 'upcoming'>('all')
+  /**
+   * Defaults to 'active', not 'all'.
+   *
+   * subscribeToFollowUps now reaches back a year rather than one day, so "all"
+   * means "up to a year of history, oldest first" — which opened this page on
+   * the least actionable row it has and buried today's work below it. 'active'
+   * is overdue-within-a-month plus today plus upcoming; the older backlog is one
+   * chip away with a count.
+   */
+  const [filter, setFilter] = useState<QueueFilter>('active')
+
+  /** How many rows are rendered. Raised by the button at the end of the list. */
+  const [shown, setShown] = useState(RENDER_CAP)
 
   useEffect(() => {
     const unsub = subscribeToFollowUps(
@@ -176,28 +201,16 @@ export default function FollowUpsPage() {
   useEffect(() => { saveSequences(sequences) }, [sequences])
   useEffect(() => { saveStates(seqStates) }, [seqStates])
 
-  // Segment customers by urgency
-  const { overdue, dueToday, upcoming } = useMemo(() => {
-    const t = today0()
-    const overdue:  CustomerItem[] = []
-    const dueToday: CustomerItem[] = []
-    const upcoming: CustomerItem[] = []
-    customers.forEach(c => {
-      if (!c.followUpDate) return
-      const diff = daysDiff(c.followUpDate, t)
-      if (diff < 0)      overdue.push(c)
-      else if (diff === 0) dueToday.push(c)
-      else               upcoming.push(c)
-    })
-    return { overdue, dueToday, upcoming }
-  }, [customers])
+  const buckets = useMemo(() => bucketFollowUps(customers), [customers])
+  const chips = useMemo(() => queueChips(buckets), [buckets])
 
-  const visibleCustomers = useMemo(() => {
-    if (filter === 'overdue')  return overdue
-    if (filter === 'today')    return dueToday
-    if (filter === 'upcoming') return upcoming
-    return [...overdue, ...dueToday, ...upcoming]
-  }, [filter, overdue, dueToday, upcoming])
+  const matching = useMemo(() => filteredFollowUps(buckets, filter), [buckets, filter])
+  const visibleCustomers = useMemo(() => matching.slice(0, shown), [matching, shown])
+  const hiddenCount = matching.length - visibleCustomers.length
+
+  // Switching filters starts the new list from the top of the cap, so changing
+  // chip doesn't inherit a scroll position or a raised limit from the last one.
+  useEffect(() => { setShown(RENDER_CAP); setExpandedId(null) }, [filter])
 
   // ── Sequence assignment ───────────────────────────────────────────────────
 
@@ -268,13 +281,13 @@ export default function FollowUpsPage() {
       [c.id]: { ...state, stepIndex: nextIdx },
     }))
     await setFollowUpDate(c.id, nextDate)
-    toast(`Step ${nextIdx + 1}/${seq.steps.length} — next: ${nextStep.action} on ${fmtDate(nextDate)}`, 'success')
+    toast(`Step ${nextIdx + 1}/${seq.steps.length} — next: ${nextStep.action} on ${fmtDue(nextDate)}`, 'success')
   }
 
   async function snooze(c: CustomerItem, days: number) {
     const d = addDays(today0(), days)
     await setFollowUpDate(c.id, d)
-    toast(`Snoozed to ${fmtDate(d)}`, 'success')
+    toast(`Snoozed to ${fmtDue(d)}`, 'success')
   }
 
   async function clearFollowUp(c: CustomerItem) {
@@ -287,13 +300,23 @@ export default function FollowUpsPage() {
     toast('Follow-up cleared', 'success')
   }
 
+  /**
+   * Appends to the record's comments and nothing else.
+   *
+   * This was `updateCustomer(c.id, { ...c, comments: next })` — a full-document
+   * write of all forty fields, built from the copy this page loaded. Saving a
+   * one-line note therefore reverted anything another rep had changed since,
+   * and it read the existing comments from that same stale copy, so two notes
+   * from two tabs would lose one. appendCustomerComment does it in a
+   * transaction, touching only `comments`.
+   */
   async function addNote(c: CustomerItem, text: string) {
-    if (!text.trim()) return
-    const header = `--- [${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] ---`
-    const existing = c.comments?.trim() ?? ''
-    const newComments = existing ? `${header}\n${text}\n\n${existing}` : `${header}\n${text}`
-    await updateCustomer(c.id, { ...c, comments: newComments })
-    toast('Note saved', 'success')
+    try {
+      await appendCustomerComment(c.id, text)
+      toast('Note saved', 'success')
+    } catch {
+      toast('Could not save that note', 'error')
+    }
   }
 
   // ── Sequence editor ───────────────────────────────────────────────────────
@@ -357,14 +380,19 @@ export default function FollowUpsPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex rounded-xl overflow-hidden border border-gray-700 text-sm w-fit">
+      <div className="flex rounded-xl overflow-hidden border border-gray-500 text-sm w-fit" role="tablist">
         {(['queue', 'sequences'] as Tab[]).map(t => (
           <button
             key={t}
+            role="tab"
+            aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`px-5 py-2 font-medium capitalize transition-colors ${tab === t ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-100'}`}
+            className={`px-5 py-2 font-medium capitalize transition-colors ${tab === t ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:text-gray-100'}`}
           >
-            {t === 'queue' ? `Queue (${customers.length})` : 'Sequences'}
+            {/* The count is the working queue, not every row the query
+                returned — with a year-long window those differ by however much
+                history the company has. */}
+            {t === 'queue' ? `Queue (${chips[0].count})` : 'Sequences'}
           </button>
         ))}
       </div>
@@ -373,39 +401,57 @@ export default function FollowUpsPage() {
       {tab === 'queue' && (
         <div className="space-y-4">
 
-          {/* KPI + filter chips */}
+          {/* Filter chips. Neutral by default with red reserved for overdue —
+              the four used to carry four different border hues encoding
+              nothing, at 1.59–2.66:1 against the page. */}
           <div className="flex flex-wrap gap-2">
-            {([
-              { key: 'all',      label: `All (${customers.length})`,      cls: 'border-gray-600' },
-              { key: 'overdue',  label: `Overdue (${overdue.length})`,    cls: 'border-red-700/60' },
-              { key: 'today',    label: `Today (${dueToday.length})`,     cls: 'border-orange-700/60' },
-              { key: 'upcoming', label: `Upcoming (${upcoming.length})`,  cls: 'border-indigo-700/60' },
-            ] as const).map(({ key, label, cls }) => (
+            {chips.map(chip => (
               <button
-                key={key}
-                onClick={() => setFilter(key)}
+                key={chip.key}
+                onClick={() => setFilter(chip.key)}
+                aria-pressed={filter === chip.key}
                 className={`px-3 py-1.5 rounded-full text-sm border transition-colors font-medium ${
-                  filter === key
+                  filter === chip.key
                     ? 'bg-indigo-600 border-indigo-500 text-white'
-                    : `${cls} text-gray-300 hover:text-white`
+                    : chip.alert && chip.count > 0
+                      ? 'bg-red-500/15 border-red-500/50 text-red-300 hover:text-red-200'
+                      : 'bg-gray-700 border-gray-500 text-gray-300 hover:text-gray-100'
                 }`}
               >
-                {label}
+                {chip.label} ({chip.count})
               </button>
             ))}
           </div>
 
+          {/* Says so when the backlog the widened window exposed is large, and
+              offers the one action that shrinks it. */}
+          {!loading && filter === 'active' && buckets.stale.length > 0 && (
+            <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+              <span className="flex items-start gap-2">
+                <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  {buckets.stale.length} follow-up{buckets.stale.length === 1 ? '' : 's'} more than {STALE_DAYS} days
+                  late {buckets.stale.length === 1 ? 'is' : 'are'} hidden from this view.{' '}
+                  <button onClick={() => setFilter('stale')} className="underline font-medium hover:text-yellow-200">
+                    Review them
+                  </button>{' '}
+                  to clear or reschedule.
+                </span>
+              </span>
+            </div>
+          )}
+
           {loading && (
             <div className="flex items-center justify-center py-12">
-              <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              <div role="status" aria-label="Loading follow-ups" className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
             </div>
           )}
 
           {!loading && visibleCustomers.length === 0 && (
             <div className="card p-10 text-center">
-              <p className="text-4xl mb-3">🎉</p>
-              <p className="text-gray-300 font-semibold">All caught up!</p>
-              <p className="text-gray-500 text-sm mt-1">No follow-ups in this category.</p>
+              <Icon d={ICONS.checkCircle} className="w-9 h-9 mx-auto mb-3 text-green-400" />
+              <p className="text-gray-100 font-semibold">All caught up</p>
+              <p className="text-gray-400 text-sm mt-1">{emptyMessage(filter, buckets)}</p>
             </div>
           )}
 
@@ -414,54 +460,65 @@ export default function FollowUpsPage() {
             const seq   = state ? sequences.find(s => s.id === state.sequenceId) : null
             const step  = seq ? seq.steps[state!.stepIndex] : null
             const isExpanded = expandedId === c.id
-            const urg = c.followUpDate ? urgencyLabel(c.followUpDate) : null
+            const due = c.followUpDate ? dueMetaCompact(c.followUpDate, false) : null
+            const name = rowName(c)
 
             return (
               <div key={c.id} className="card overflow-hidden">
-                {/* Row */}
-                <div
-                  className="px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-800/40 transition-colors"
-                  onClick={() => setExpandedId(isExpanded ? null : c.id)}
-                >
-                  {/* Avatar */}
-                  <div className="w-9 h-9 rounded-full bg-indigo-700/40 flex items-center justify-center text-sm font-bold text-indigo-300 shrink-0">
-                    {(c.first[0] ?? c.lastname[0] ?? '?').toUpperCase()}
+                {/* The disclosure is a real button, so the row can be expanded
+                    from the keyboard. It was a div with onClick and a
+                    cursor-pointer: no role, no tabIndex, no key handler. The
+                    record link sits outside it, since a link inside a button is
+                    invalid and was only working via stopPropagation. */}
+                <div className="px-4 py-3 flex items-center gap-3 hover:bg-gray-700/40 transition-colors">
+                  <div className="w-9 h-9 rounded-full bg-indigo-500/25 flex items-center justify-center text-sm font-bold text-indigo-300 shrink-0">
+                    {rowInitials(c)}
                   </div>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
+                      {/* displayName, so a company record is titled by its
+                          company like everywhere else in the app — this printed
+                          `{first} {lastname}`, which for a company record is
+                          blank or a stray contact name. */}
                       <Link
                         to={`/records/${c.id}`}
-                        onClick={e => e.stopPropagation()}
-                        className="font-semibold text-white hover:text-indigo-300 transition-colors"
+                        className="font-semibold text-white hover:text-indigo-300 transition-colors truncate"
                       >
-                        {c.first} {c.lastname}
+                        {name.title}
                       </Link>
                       {seq && step && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
-                          {ACTION_ICONS[step.action]} {step.action} — Step {(state!.stepIndex + 1)}/{seq.steps.length}
+                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
+                          <Icon d={ACTION_ICONS[step.action]} className="w-3 h-3 shrink-0" />
+                          {step.action} — Step {(state!.stepIndex + 1)}/{seq.steps.length}
                         </span>
                       )}
                       {!seq && (
-                        <span className="text-xs px-2 py-0.5 rounded-full border border-gray-700 text-gray-400">
+                        <span className="text-xs px-2 py-0.5 rounded-full border border-gray-500 text-gray-300">
                           No sequence
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
-                      {c.followUpDate && <span className={urg?.cls}>{urg?.label}</span>}
-                      {c.followUpDate && <span>{fmtDate(c.followUpDate)}</span>}
+                    {/* gray-400, not gray-500 (3.04:1 on this card). */}
+                    <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400 flex-wrap">
+                      {due && <span className={due.cls}>{due.label}</span>}
+                      {c.followUpDate && <span className="tabular-nums">{fmtDue(c.followUpDate)}</span>}
+                      {name.sub && <span className="truncate">{name.sub}</span>}
                       {c.city && <span>{c.city}{c.state ? `, ${c.state}` : ''}</span>}
                       {c.salesman && <span>Rep: {c.salesman}</span>}
                     </div>
                   </div>
 
-                  <svg
-                    className={`w-4 h-4 text-gray-500 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(isExpanded ? null : c.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? 'Hide' : 'Show'} actions for ${name.title}`}
+                    className="p-1.5 -m-1.5 rounded text-gray-400 hover:text-gray-100 shrink-0 transition-colors
+                               focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
-                  </svg>
+                    <Icon d={ICONS.chevronDown} className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                  </button>
                 </div>
 
                 {/* Expanded panel */}
@@ -482,18 +539,58 @@ export default function FollowUpsPage() {
               </div>
             )
           })}
+
+          {/* The cap. Every matching row used to render, which was fine when
+              the query returned at most yesterday-to-two-weeks; with a
+              year-long window a company with a real backlog got a page tens of
+              thousands of pixels tall, with no pagination and nothing to
+              scroll to. */}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setShown(n => n + RENDER_CAP)}
+              className="w-full card px-4 py-3 text-sm text-indigo-400 hover:text-indigo-300 hover:bg-gray-700/40 transition-colors
+                         focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              Show {Math.min(hiddenCount, RENDER_CAP)} more
+              <span className="text-gray-400"> · {hiddenCount} not shown</span>
+            </button>
+          )}
         </div>
       )}
 
       {/* ── SEQUENCES TAB ── */}
       {tab === 'sequences' && (
         <div className="space-y-3">
+          {/* Says where these live, because it isn't where anyone would assume.
+              loadSequences/loadStates read localStorage — so these cadences and
+              the per-customer step positions exist only in this browser. A
+              sequence one rep builds is invisible to everyone else, clearing
+              site data destroys them, and a customer another rep enrolled shows
+              here as "No sequence".
+
+              The app also has a real Firestore-backed sequence engine
+              (services/sequenceService, used by /sequences and the record page's
+              Sequences tab) which does run server-side and is shared. Two
+              sequence systems is the actual problem; consolidating them is a
+              migration with enrolment state to move, not a change to make
+              inside a review pass. Until then this at least stops the page
+              implying company-wide behaviour it doesn't have. */}
+          <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+            <span className="flex items-start gap-2">
+              <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                These sequences are saved in this browser only — they aren&rsquo;t shared with your team and
+                nothing sends automatically. For shared, automated outreach use{' '}
+                <Link to="/sequences" className="underline font-medium hover:text-yellow-200">Outreach → Sequences</Link>.
+              </span>
+            </span>
+          </div>
           {sequences.map(seq => (
             <div key={seq.id} className="card p-4">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div>
                   <p className="font-semibold text-white">{seq.name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{seq.steps.length} steps · {seq.steps[seq.steps.length - 1]?.day ?? 0} days total</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{seq.steps.length} steps · {seq.steps[seq.steps.length - 1]?.day ?? 0} days total</p>
                 </div>
                 <div className="flex gap-2 shrink-0">
                   <button onClick={() => openEditSeq(seq)} className="text-xs text-indigo-400 hover:text-indigo-300">Edit</button>
@@ -513,7 +610,7 @@ export default function FollowUpsPage() {
                       <p className="text-sm font-medium text-gray-200">
                         Day {step.day} — {step.action}
                       </p>
-                      {step.note && <p className="text-xs text-gray-500 mt-0.5">{step.note}</p>}
+                      {step.note && <p className="text-xs text-gray-400 mt-0.5">{step.note}</p>}
                     </div>
                   </div>
                 ))}
@@ -551,7 +648,7 @@ export default function FollowUpsPage() {
                 <div className="mb-4 space-y-1">
                   {seq.steps.map((step, i) => (
                     <div key={i} className="flex items-center gap-2 text-xs text-gray-400">
-                      <span className="font-mono w-10 text-right text-gray-500">Day {step.day}</span>
+                      <span className="font-mono w-10 text-right text-gray-400">Day {step.day}</span>
                       <span className={`px-1.5 py-0.5 rounded border ${ACTION_COLORS[step.action]}`}>{ACTION_ICONS[step.action]} {step.action}</span>
                       <span className="truncate">{step.note}</span>
                     </div>
@@ -590,7 +687,7 @@ export default function FollowUpsPage() {
               {editSteps.map((step, i) => (
                 <div key={i} className="border border-gray-700 rounded-xl p-3 space-y-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500 font-semibold w-5">{i + 1}</span>
+                    <span className="text-xs text-gray-400 font-semibold w-5">{i + 1}</span>
                     <div className="flex gap-2 flex-1">
                       <div className="flex items-center gap-1">
                         <label className="text-xs text-gray-400">Day</label>
@@ -614,7 +711,7 @@ export default function FollowUpsPage() {
                     </div>
                     <button
                       onClick={() => removeStep(i)}
-                      className="text-gray-500 hover:text-red-400 transition-colors ml-1"
+                      className="text-gray-400 hover:text-red-300 transition-colors ml-1 p-1 -m-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -665,56 +762,88 @@ function ExpandedPanel({
   onNote: (text: string) => void
 }) {
   const [noteText, setNoteText] = useState('')
+  const [saving, setSaving] = useState(false)
+  // Snooze is a click-toggle, not a hover reveal — see the button below.
+  const [snoozeOpen, setSnoozeOpen] = useState(false)
+  const snoozeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!snoozeOpen) return
+    function onDown(e: MouseEvent) {
+      if (snoozeRef.current && !snoozeRef.current.contains(e.target as Node)) setSnoozeOpen(false)
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setSnoozeOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [snoozeOpen])
 
   async function handleNote() {
-    if (!noteText.trim()) return
-    await onNote(noteText)
-    setNoteText('')
+    if (!noteText.trim() || saving) return
+    setSaving(true)
+    try {
+      await onNote(noteText)
+      setNoteText('')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const stepLabel = sequence && state
     ? `Step ${state.stepIndex + 1}/${sequence.steps.length}: ${step?.action}`
     : null
 
+  // bg-gray-700/40, not bg-gray-800/20 — the latter is a tint of the card's own
+  // colour over that same colour, i.e. 1.000:1, so the expanded panel had no
+  // surface distinguishing it from the row above it.
   return (
-    <div className="border-t border-gray-700/50 bg-gray-800/20 px-4 py-4 space-y-4">
+    <div className="border-t border-gray-700/50 bg-gray-700/40 px-4 py-4 space-y-4">
 
       {/* Current step info */}
       {sequence && step ? (
-        <div className="rounded-xl border border-gray-700 p-3 bg-gray-800/40">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
-              {ACTION_ICONS[step.action]} {stepLabel}
+        <div className="rounded-xl border border-gray-500 p-3 bg-gray-800">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium ${ACTION_COLORS[step.action]}`}>
+              <Icon d={ACTION_ICONS[step.action]} className="w-3 h-3 shrink-0" />
+              {stepLabel}
             </span>
-            <span className="text-xs text-gray-500">from sequence "{sequence.name}"</span>
+            <span className="text-xs text-gray-400">from sequence &ldquo;{sequence.name}&rdquo;</span>
           </div>
-          {step.note && <p className="text-sm text-gray-300 mt-1">{step.note}</p>}
+          {step.note && <p className="text-sm text-gray-200 mt-1">{step.note}</p>}
         </div>
       ) : (
-        <p className="text-sm text-gray-500 italic">
+        <p className="text-sm text-gray-400 italic">
           {sequences.length > 0 ? 'No sequence assigned — manual follow-up.' : 'No sequences defined.'}
         </p>
       )}
 
-      {/* Contact quick-actions */}
+      {/* Contact quick-actions. Tinted family with drawn icons, replacing
+          bg-X-900/30 fills carrying emoji. */}
       <div className="flex flex-wrap gap-2">
         {customer.phone && (
-          <a href={`tel:${customer.phone}`} className="text-xs px-3 py-1.5 rounded-xl bg-blue-900/30 text-blue-300 border border-blue-700/30 hover:bg-blue-900/50 transition-colors">
-            📞 Call
+          <a href={`tel:${customer.phone}`} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl bg-blue-500/20 text-blue-300 border border-blue-600/40 hover:bg-blue-500/30 transition-colors">
+            <Icon d={ICONS.phone} className="w-3.5 h-3.5 shrink-0" />
+            Call
           </a>
         )}
         {customer.phone && (
-          <a href={`sms:${customer.phone}`} className="text-xs px-3 py-1.5 rounded-xl bg-green-900/30 text-green-300 border border-green-700/30 hover:bg-green-900/50 transition-colors">
-            💬 SMS
+          <a href={`sms:${customer.phone}`} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl bg-green-500/20 text-green-300 border border-green-600/40 hover:bg-green-500/30 transition-colors">
+            <Icon d={ICONS.chat} className="w-3.5 h-3.5 shrink-0" />
+            SMS
           </a>
         )}
         {customer.email && (
-          <a href={`mailto:${customer.email}`} className="text-xs px-3 py-1.5 rounded-xl bg-indigo-900/30 text-indigo-300 border border-indigo-700/30 hover:bg-indigo-900/50 transition-colors">
-            ✉️ Email
+          <a href={`mailto:${customer.email}`} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-600/40 hover:bg-indigo-500/30 transition-colors">
+            <Icon d={ICONS.envelope} className="w-3.5 h-3.5 shrink-0" />
+            Email
           </a>
         )}
-        <Link to={`/records/${customer.id}`} className="text-xs px-3 py-1.5 rounded-xl bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">
-          View Record →
+        <Link to={`/records/${customer.id}`} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl bg-gray-700 text-gray-200 border border-gray-500 hover:bg-gray-600 transition-colors">
+          View Record
+          <Icon d={ICONS.arrowRight} className="w-3 h-3 shrink-0" />
         </Link>
       </div>
 
@@ -722,35 +851,55 @@ function ExpandedPanel({
       <div className="flex flex-wrap gap-2">
         <button
           onClick={onComplete}
-          className="text-sm px-4 py-1.5 rounded-xl bg-green-600/20 text-green-400 border border-green-700/30 hover:bg-green-600/30 transition-colors font-medium"
+          className="inline-flex items-center gap-1.5 text-sm px-4 py-1.5 rounded-xl bg-green-500/20 text-green-300 border border-green-600/40 hover:bg-green-500/30 transition-colors font-medium
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
-          ✓ {sequence ? 'Complete Step' : 'Mark Done'}
+          <Icon d={ICONS.check} className="w-3.5 h-3.5 shrink-0" />
+          {sequence ? 'Complete Step' : 'Mark Done'}
         </button>
         <button
           onClick={onAssign}
-          className="text-sm px-3 py-1.5 rounded-xl bg-indigo-600/20 text-indigo-300 border border-indigo-700/30 hover:bg-indigo-600/30 transition-colors"
+          className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-600/40 hover:bg-indigo-500/30 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
-          {sequence ? '↺ Change Sequence' : '+ Assign Sequence'}
+          <Icon d={sequence ? ICONS.refresh : ICONS.plus} className="w-3.5 h-3.5 shrink-0" />
+          {sequence ? 'Change Sequence' : 'Assign Sequence'}
         </button>
-        <div className="relative group">
-          <button className="text-sm px-3 py-1.5 rounded-xl bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors">
-            ⏰ Snooze
+
+        {/* Snooze opens on click. It was `hidden group-hover:flex`, and there is
+            no hover on a touch device — so on a phone or tablet, which is where
+            a rep works a follow-up queue, Snooze could not be opened at all.
+            Same defect as the record page's activity delete button. */}
+        <div className="relative" ref={snoozeRef}>
+          <button
+            onClick={() => setSnoozeOpen(o => !o)}
+            aria-expanded={snoozeOpen}
+            className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl bg-gray-700 text-gray-200 border border-gray-500 hover:bg-gray-600 transition-colors
+                       focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            <Icon d={ICONS.clock} className="w-3.5 h-3.5 shrink-0" />
+            Snooze
           </button>
-          <div className="absolute bottom-full left-0 mb-1 hidden group-hover:flex flex-col bg-gray-800 border border-gray-700 rounded-xl overflow-hidden shadow-xl z-10 min-w-[110px]">
-            {[1, 3, 7, 14].map(d => (
-              <button
-                key={d}
-                onClick={() => onSnooze(d)}
-                className="px-4 py-2 text-xs text-gray-300 hover:bg-gray-700 text-left"
-              >
-                {d} day{d > 1 ? 's' : ''}
-              </button>
-            ))}
-          </div>
+          {snoozeOpen && (
+            <div className="absolute bottom-full left-0 mb-1 flex flex-col bg-gray-900 border border-gray-500 rounded-xl overflow-hidden shadow-xl z-10 min-w-[110px]">
+              {[1, 3, 7, 14].map(d => (
+                <button
+                  key={d}
+                  onClick={() => { setSnoozeOpen(false); onSnooze(d) }}
+                  className="px-4 py-2 text-xs text-gray-200 hover:bg-gray-700 text-left transition-colors
+                             focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+                >
+                  {d} day{d > 1 ? 's' : ''}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
         <button
           onClick={onClear}
-          className="text-sm px-3 py-1.5 rounded-xl bg-gray-800 text-gray-400 border border-gray-700 hover:text-red-400 hover:border-red-700/40 transition-colors"
+          className="text-sm px-3 py-1.5 rounded-xl bg-gray-700 text-gray-300 border border-gray-500 hover:text-red-300 hover:border-red-500/50 transition-colors
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
           Clear
         </button>
@@ -758,19 +907,23 @@ function ExpandedPanel({
 
       {/* Quick note */}
       <div className="flex gap-2">
+        <label htmlFor={`note-${customer.id}`} className="sr-only">Quick note for {customer.first} {customer.lastname}</label>
         <input
+          id={`note-${customer.id}`}
           type="text"
           value={noteText}
           onChange={e => setNoteText(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleNote() }}
-          placeholder="Add a quick note to this record..."
+          placeholder="Add a quick note to this record…"
+          disabled={saving}
           className="input-field text-sm py-1.5 flex-1"
         />
         <button
           onClick={handleNote}
-          disabled={!noteText.trim()}
-          className="btn-secondary text-sm px-3 disabled:opacity-40"
+          disabled={!noteText.trim() || saving}
+          className="btn-secondary inline-flex items-center gap-1.5 text-sm px-3 disabled:opacity-40"
         >
+          {saving && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />}
           Save
         </button>
       </div>
