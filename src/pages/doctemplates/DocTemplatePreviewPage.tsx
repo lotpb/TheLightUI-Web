@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getDocTemplate } from '../../services/docTemplateService'
 import { subscribeToCustomers } from '../../services/customerService'
@@ -12,7 +12,8 @@ import type { SigningDocSnapshot } from '../../models/signingRequest'
 import { useAuthStore } from '../../stores/authStore'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
-import { subscribeToCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
+import { subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
+import { PUBLIC_COLORS as C } from '../../models/publicTheme'
 
 export default function DocTemplatePreviewPage() {
   const { id } = useParams<{ id: string }>()
@@ -25,6 +26,7 @@ export default function DocTemplatePreviewPage() {
   const [showList,   setShowList]   = useState(false)
   const [tplLoading, setTplLoading] = useState(true)
   const [co,         setCo]         = useState<CompanyProfile>(EMPTY_PROFILE)
+  const coSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [signLink,   setSignLink]   = useState<string | null>(null)
   const [signSending, setSignSending] = useState(false)
   const toast = useToast()
@@ -116,6 +118,24 @@ export default function DocTemplatePreviewPage() {
     }
   }
 
+  /**
+   * Company info goes to Firestore, like /records/:id/quote's identical editor.
+   *
+   * This page *read* the company profile from Firestore
+   * (subscribeToCompanyProfile) but *wrote* each edit to
+   * `localStorage['thelight.co.<field>']` — which nothing reads. So an edit
+   * was reverted on screen the moment that live subscription next emitted, it
+   * never persisted anywhere, and whatever happened to be on screen when you
+   * pressed "create signing request" was baked into the document snapshot that
+   * becomes the signed agreement.
+   */
+  function updateCo(field: keyof CompanyProfile, value: string) {
+    const next = { ...co, [field]: value }
+    setCo(next)
+    if (coSaveTimer.current) clearTimeout(coSaveTimer.current)
+    coSaveTimer.current = setTimeout(() => { saveCompanyProfile(next).catch(() => {}) }, 600)
+  }
+
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
   if (tplLoading) {
@@ -199,14 +219,11 @@ export default function DocTemplatePreviewPage() {
               { field: 'email',   label: 'Email',        placeholder: 'info@company.com' },
             ] as const).map(({ field, label, placeholder }) => (
               <div key={field}>
-                <label className="text-xs text-gray-500 block mb-1">{label}</label>
+                <label htmlFor={`doc-co-${field}`} className="text-xs text-gray-400 block mb-1">{label}</label>
                 <input
+                  id={`doc-co-${field}`}
                   value={co[field]}
-                  onChange={e => {
-                    const next = { ...co, [field]: e.target.value }
-                    setCo(next)
-                    localStorage.setItem(`thelight.co.${field}`, e.target.value)
-                  }}
+                  onChange={e => updateCo(field, e.target.value)}
                   className="input-field text-sm py-1.5"
                   placeholder={placeholder}
                 />
@@ -254,7 +271,7 @@ export default function DocTemplatePreviewPage() {
       <div className="doc-card max-w-3xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
 
         {/* Header band */}
-        <div style={{ background: '#1e293b', padding: '32px 40px' }}>
+        <div style={{ background: C.band, padding: '32px 40px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
             <div>
               <div style={{ width: 48, height: 48, borderRadius: 12, background: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
@@ -265,18 +282,18 @@ export default function DocTemplatePreviewPage() {
               <p style={{ color: 'white', fontSize: 20, fontWeight: 700, margin: 0 }}>
                 {co.name || 'Your Company'}
               </p>
-              {co.address && <p style={{ color: '#94a3b8', fontSize: 13, margin: '4px 0 0' }}>{co.address}</p>}
+              {co.address && <p style={{ color: C.onBand, fontSize: 13, margin: '4px 0 0' }}>{co.address}</p>}
               <div style={{ display: 'flex', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
-                {co.phone && <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>{co.phone}</p>}
-                {co.email && <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>{co.email}</p>}
+                {co.phone && <p style={{ color: C.onBand, fontSize: 13, margin: 0 }}>{co.phone}</p>}
+                {co.email && <p style={{ color: C.onBand, fontSize: 13, margin: 0 }}>{co.email}</p>}
               </div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <p style={{ color: '#94a3b8', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.12em', margin: 0 }}>
+              <p style={{ color: C.onBand, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.12em', margin: 0 }}>
                 {KIND_LABELS[template.kind]}
               </p>
               <p style={{ color: 'white', fontSize: 20, fontWeight: 700, margin: '4px 0 0' }}>{template.name}</p>
-              <p style={{ color: '#94a3b8', fontSize: 13, margin: '10px 0 0' }}>Date: {today}</p>
+              <p style={{ color: C.onBand, fontSize: 13, margin: '10px 0 0' }}>Date: {today}</p>
             </div>
           </div>
         </div>
@@ -288,7 +305,7 @@ export default function DocTemplatePreviewPage() {
           {selected && (
             <>
               <div style={{ marginBottom: 28 }}>
-                <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
+                <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
                   Prepared For
                 </p>
                 <p style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', margin: 0 }}>{fullName(selected)}</p>
@@ -318,7 +335,7 @@ export default function DocTemplatePreviewPage() {
           {template.sections.map((sec, idx) => (
             <div key={idx} style={{ marginBottom: 28 }}>
               {sec.heading && (
-                <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 10px' }}>
+                <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 10px' }}>
                   {fill(sec.heading)}
                 </p>
               )}
@@ -347,28 +364,30 @@ export default function DocTemplatePreviewPage() {
             <div style={{ display: 'flex', gap: 48 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Customer Signature</p>
+                {/* The four signature labels and the footer were #94a3b8 on
+                    the white document — 2.56:1, on the lines being signed. */}
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Customer Signature</p>
               </div>
               <div style={{ width: 160 }}>
                 <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Date</p>
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Date</p>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 48, marginTop: 24 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Authorized Signature</p>
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Authorized Signature</p>
               </div>
               <div style={{ width: 160 }}>
                 <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Date</p>
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Date</p>
               </div>
             </div>
           </div>
 
           {/* Footer */}
           <div style={{ marginTop: 32, textAlign: 'center' }}>
-            <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+            <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>
               {co.name || 'Your Company'}
               {(co.phone || co.email) ? ` · ${co.phone || co.email}` : ''}
             </p>

@@ -4,6 +4,8 @@ import { subscribeToSigningRequests, deleteSigningRequest } from '../../services
 import { KIND_LABELS } from '../../models/docTemplate'
 import { STATUS_COLORS, STATUS_LABELS } from '../../models/signingRequest'
 import type { SigningRequest } from '../../models/signingRequest'
+import { PUBLIC_COLORS as C, fmtPublicDate } from '../../models/publicTheme'
+import { PublicGlyph, ICONS } from '../../components/PublicGlyph'
 import { useToast } from '../../components/Toast'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useCustomerDeepLink } from '../../hooks/useCustomerDeepLink'
@@ -245,67 +247,78 @@ export default function SigningRequestsPage() {
 
 function SignedDocView({ req }: { req: SigningRequest }) {
   const d = req.document
-  const today = req.signedAt?.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-    ?? new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  /**
+   * The recorded signing date, or nothing.
+   *
+   * This was `req.signedAt ?? new Date()` — and the variable was named `today`,
+   * which is what it actually was. So this printable copy of a signed
+   * agreement, the company's own record of the signature, showed the date it
+   * was *opened* as the date it was signed whenever `signedAt` was missing: a
+   * different date every time anyone looked at it. The same bug as
+   * /sign/:token, in the same feature, on the operator's side of it.
+   */
+  const signedDate = req.signedAt ? fmtPublicDate(req.signedAt) : null
 
   return (
     <div style={{ background: 'white', padding: '32px' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <p style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', margin: 0 }}>{d.companyName || 'Company'}</p>
-          {d.companyAddress && <p style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0' }}>{d.companyAddress}</p>}
-          {d.companyPhone && <p style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0' }}>{d.companyPhone}</p>}
+          <p style={{ fontSize: 18, fontWeight: 700, color: C.ink, margin: 0 }}>{d.companyName || 'Company'}</p>
+          {d.companyAddress && <p style={{ fontSize: 13, color: C.inkSubtle, margin: '2px 0 0' }}>{d.companyAddress}</p>}
+          {d.companyPhone && <p style={{ fontSize: 13, color: C.inkSubtle, margin: '2px 0 0' }}>{d.companyPhone}</p>}
         </div>
         <div style={{ textAlign: 'right' }}>
-          <p style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#64748b', margin: 0 }}>{KIND_LABELS[d.templateKind]}</p>
-          <p style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: '4px 0 0' }}>{d.templateName}</p>
-          <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>Date: {today}</p>
+          <p style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.inkSubtle, margin: 0 }}>{KIND_LABELS[d.templateKind]}</p>
+          <p style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: '4px 0 0' }}>{d.templateName}</p>
+          <p style={{ fontSize: 12, color: C.inkSubtle, margin: '4px 0 0' }}>
+            Date: {signedDate ?? 'Not recorded'}
+          </p>
         </div>
       </div>
 
       {/* Prepared for */}
-      <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 20, marginBottom: 20 }}>
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 6px' }}>Prepared For</p>
-        <p style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>{d.customerName}</p>
-        {d.customerStreet && <p style={{ fontSize: 13, color: '#475569', margin: '3px 0 0' }}>{d.customerStreet}</p>}
+      <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 20, marginBottom: 20 }}>
+        <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 6px' }}>Prepared For</p>
+        <p style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{d.customerName}</p>
+        {d.customerStreet && <p style={{ fontSize: 13, color: C.inkMuted, margin: '3px 0 0' }}>{d.customerStreet}</p>}
         {(d.customerCity || d.customerState) && (
-          <p style={{ fontSize: 13, color: '#475569', margin: '2px 0 0' }}>
+          <p style={{ fontSize: 13, color: C.inkMuted, margin: '2px 0 0' }}>
             {[d.customerCity, d.customerState, d.customerZip].filter(Boolean).join(', ')}
           </p>
         )}
-        {d.customerEmail && <p style={{ fontSize: 13, color: '#475569', margin: '2px 0 0' }}>{d.customerEmail}</p>}
+        {d.customerEmail && <p style={{ fontSize: 13, color: C.inkMuted, margin: '2px 0 0' }}>{d.customerEmail}</p>}
       </div>
 
       {/* Intro */}
       {d.intro && (
-        <p style={{ fontSize: 14, color: '#334155', lineHeight: 1.8, margin: '0 0 24px', whiteSpace: 'pre-wrap' }}>{d.intro}</p>
+        <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.8, margin: '0 0 24px', whiteSpace: 'pre-wrap' }}>{d.intro}</p>
       )}
 
       {/* Sections */}
       {d.sections.map((sec, i) => (
         <div key={i} style={{ marginBottom: 20 }}>
           {sec.heading && (
-            <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
               {sec.heading}
             </p>
           )}
           {sec.body && (
-            <p style={{ fontSize: 14, color: '#334155', lineHeight: 1.8, margin: 0, whiteSpace: 'pre-wrap' }}>{sec.body}</p>
+            <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.8, margin: 0, whiteSpace: 'pre-wrap' }}>{sec.body}</p>
           )}
         </div>
       ))}
 
       {/* Closing */}
       {d.closing && (
-        <p style={{ fontSize: 14, color: '#334155', lineHeight: 1.8, margin: '0 0 28px', whiteSpace: 'pre-wrap', borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+        <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.8, margin: '0 0 28px', whiteSpace: 'pre-wrap', borderTop: `1px solid ${C.hairline}`, paddingTop: 20 }}>
           {d.closing}
         </p>
       )}
 
       {/* Signature */}
-      <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 24 }}>
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 12px' }}>
+      <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 24 }}>
+        <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 12px' }}>
           Electronic Signature
         </p>
         <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
@@ -317,22 +330,28 @@ function SignedDocView({ req }: { req: SigningRequest }) {
                 style={{ maxHeight: 80, maxWidth: '100%', objectFit: 'contain', display: 'block', marginBottom: 6 }}
               />
             )}
-            <div style={{ borderTop: '1px solid #cbd5e1', paddingTop: 4 }}>
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+            <div style={{ borderTop: `1px solid ${C.divider}`, paddingTop: 4 }}>
+              {/* inkMuted (7.58:1). Was #94a3b8 — 2.56:1 on the white
+                  document, naming who signed it. */}
+              <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>
                 {req.signerName ? `${req.signerName} — Customer Signature` : 'Customer Signature'}
               </p>
             </div>
           </div>
           <div style={{ width: 160 }}>
-            <p style={{ fontSize: 14, fontWeight: 600, color: '#334155', margin: '0 0 6px' }}>{today}</p>
-            <div style={{ borderTop: '1px solid #cbd5e1', paddingTop: 4 }}>
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Date Signed</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: C.ink, margin: '0 0 6px' }}>{signedDate ?? 'Not recorded'}</p>
+            <div style={{ borderTop: `1px solid ${C.divider}`, paddingTop: 4 }}>
+              <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Date Signed</p>
             </div>
           </div>
         </div>
         <div style={{ marginTop: 12, padding: '8px 12px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8 }}>
-          <p style={{ fontSize: 12, color: '#16a34a', margin: 0 }}>
-            ✓ Electronically signed via TheLightUI on {today}
+          {/* #166534 (6.81:1). Was #16a34a on #f0fdf4 — 3.15:1. */}
+          <p style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#166534', margin: 0 }}>
+            <PublicGlyph d={ICONS.check} size={13} color="#166534" />
+            {signedDate
+              ? `Electronically signed via TheLightUI on ${signedDate}`
+              : 'Electronically signed via TheLightUI'}
           </p>
         </div>
       </div>

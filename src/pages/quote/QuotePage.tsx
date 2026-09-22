@@ -6,6 +6,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import {
   subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile,
 } from '../../services/companyProfileService'
+import { PUBLIC_COLORS as C } from '../../models/publicTheme'
 
 type CompanyInfo = CompanyProfile
 
@@ -26,7 +27,9 @@ function WorkRow({ label, value }: { label: string; value: string }) {
   if (!value) return null
   return (
     <tr>
-      <td style={{ paddingBottom: 10, paddingRight: 16, fontSize: 13, color: '#94a3b8', verticalAlign: 'top', width: 140, whiteSpace: 'nowrap' }}>
+      {/* inkMuted (7.58:1). Was #94a3b8 — 2.56:1 on the white document, on
+          every row label in the scope of work. */}
+      <td style={{ paddingBottom: 10, paddingRight: 16, fontSize: 13, color: C.inkMuted, verticalAlign: 'top', width: 140, whiteSpace: 'nowrap' }}>
         {label}
       </td>
       <td style={{ paddingBottom: 10, fontSize: 14, color: '#1e293b', fontWeight: 500 }}>
@@ -143,7 +146,7 @@ export default function QuotePage() {
 
         {/* Company info editor */}
         <div className="card p-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">Your Company Info</p>
+          <p className="text-xs text-gray-400 uppercase tracking-wider font-medium mb-3">Your Company Info</p>
           <div className="grid grid-cols-2 gap-3">
             {([
               { field: 'name',    label: 'Company Name', placeholder: 'Your Company' },
@@ -152,8 +155,9 @@ export default function QuotePage() {
               { field: 'email',   label: 'Email',        placeholder: 'info@company.com' },
             ] as const).map(({ field, label, placeholder }) => (
               <div key={field}>
-                <label className="text-xs text-gray-500 block mb-1">{label}</label>
+                <label htmlFor={`quote-co-${field}`} className="text-xs text-gray-400 block mb-1">{label}</label>
                 <input
+                  id={`quote-co-${field}`}
                   value={co[field]}
                   onChange={e => updateCo(field, e.target.value)}
                   className="input-field text-sm py-1.5"
@@ -162,7 +166,9 @@ export default function QuotePage() {
               </div>
             ))}
           </div>
-          <p className="text-xs text-gray-600 mt-2">Saved automatically — reused on every quote.</p>
+          {/* gray-400 (5.78:1). This was gray-600: 1.94:1 on the card — the
+              only thing telling you the fields persist. */}
+          <p className="text-xs text-gray-400 mt-2">Saved automatically — reused on every quote.</p>
         </div>
       </div>
 
@@ -170,7 +176,7 @@ export default function QuotePage() {
       <div className="quote-doc paper max-w-3xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
 
         {/* Header band */}
-        <div style={{ background: '#1e293b', padding: '32px 40px' }}>
+        <div style={{ background: C.band, padding: '32px 40px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
             <div>
               <div style={{ width: 48, height: 48, borderRadius: 12, background: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
@@ -178,24 +184,24 @@ export default function QuotePage() {
                   {(co.name || 'C')[0].toUpperCase()}
                 </span>
               </div>
-              <p style={{ color: 'white', fontSize: 20, fontWeight: 700, margin: 0 }}>
+              <h1 style={{ color: 'white', fontSize: 20, fontWeight: 700, margin: 0 }}>
                 {co.name || 'Your Company'}
-              </p>
-              {co.address && <p style={{ color: '#94a3b8', fontSize: 13, margin: '4px 0 0' }}>{co.address}</p>}
+              </h1>
+              {co.address && <p style={{ color: C.onBand, fontSize: 13, margin: '4px 0 0' }}>{co.address}</p>}
               <div style={{ display: 'flex', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
-                {co.phone && <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>{co.phone}</p>}
-                {co.email && <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>{co.email}</p>}
+                {co.phone && <p style={{ color: C.onBand, fontSize: 13, margin: 0 }}>{co.phone}</p>}
+                {co.email && <p style={{ color: C.onBand, fontSize: 13, margin: 0 }}>{co.email}</p>}
               </div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <p style={{ color: '#94a3b8', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.12em', margin: 0 }}>
+              <p style={{ color: C.onBand, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.12em', margin: 0 }}>
                 Estimate
               </p>
               <p style={{ color: 'white', fontSize: 22, fontWeight: 700, margin: '4px 0 0' }}>
                 {quoteNumber(customer.id)}
               </p>
-              <p style={{ color: '#94a3b8', fontSize: 13, margin: '10px 0 0' }}>Date: {fmtDate(today)}</p>
-              <p style={{ color: '#94a3b8', fontSize: 13, margin: '4px 0 0' }}>Valid until: {fmtDate(validDate)}</p>
+              <p style={{ color: C.onBand, fontSize: 13, margin: '10px 0 0' }}>Date: {fmtDate(today)}</p>
+              <p style={{ color: C.onBand, fontSize: 13, margin: '4px 0 0' }}>Valid until: {fmtDate(validDate)}</p>
             </div>
           </div>
         </div>
@@ -205,20 +211,20 @@ export default function QuotePage() {
 
           {/* Prepared For */}
           <div style={{ marginBottom: 30 }}>
-            <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
               Prepared For
             </p>
-            <p style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', margin: 0 }}>{name || '—'}</p>
-            {address && <p style={{ fontSize: 14, color: '#475569', margin: '4px 0 0' }}>{address}</p>}
-            {customer.phone && <p style={{ fontSize: 14, color: '#475569', margin: '3px 0 0' }}>{customer.phone}</p>}
-            {customer.email && <p style={{ fontSize: 14, color: '#475569', margin: '3px 0 0' }}>{customer.email}</p>}
+            <p style={{ fontSize: 18, fontWeight: 700, color: C.ink, margin: 0 }}>{name || '—'}</p>
+            {address && <p style={{ fontSize: 14, color: C.inkMuted, margin: '4px 0 0' }}>{address}</p>}
+            {customer.phone && <p style={{ fontSize: 14, color: C.inkMuted, margin: '3px 0 0' }}>{customer.phone}</p>}
+            {customer.email && <p style={{ fontSize: 14, color: C.inkMuted, margin: '3px 0 0' }}>{customer.email}</p>}
           </div>
 
-          <div style={{ borderTop: '1px solid #e2e8f0', margin: '0 0 30px' }} />
+          <div style={{ borderTop: `1px solid ${C.hairline}`, margin: '0 0 30px' }} />
 
           {/* Scope of Work */}
           <div style={{ marginBottom: 28 }}>
-            <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 14px' }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 14px' }}>
               Scope of Work
             </p>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -234,17 +240,17 @@ export default function QuotePage() {
 
             {/* Date range pill */}
             {(fmtDate(customer.startDate) || fmtDate(customer.completionDate)) && (
-              <div style={{ display: 'flex', gap: 32, background: '#f8fafc', borderRadius: 10, padding: '14px 18px', marginTop: 14, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 32, background: C.cardHead, borderRadius: 10, padding: '14px 18px', marginTop: 14, flexWrap: 'wrap' }}>
                 {fmtDate(customer.startDate) && (
                   <div>
-                    <p style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>Start</p>
-                    <p style={{ fontSize: 14, color: '#0f172a', fontWeight: 600, margin: '4px 0 0' }}>{fmtDate(customer.startDate)}</p>
+                    <p style={{ fontSize: 10, color: C.inkMuted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>Start</p>
+                    <p style={{ fontSize: 14, color: C.ink, fontWeight: 600, margin: '4px 0 0' }}>{fmtDate(customer.startDate)}</p>
                   </div>
                 )}
                 {fmtDate(customer.completionDate) && (
                   <div>
-                    <p style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>Est. Completion</p>
-                    <p style={{ fontSize: 14, color: '#0f172a', fontWeight: 600, margin: '4px 0 0' }}>{fmtDate(customer.completionDate)}</p>
+                    <p style={{ fontSize: 10, color: C.inkMuted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>Est. Completion</p>
+                    <p style={{ fontSize: 14, color: C.ink, fontWeight: 600, margin: '4px 0 0' }}>{fmtDate(customer.completionDate)}</p>
                   </div>
                 )}
               </div>
@@ -254,11 +260,11 @@ export default function QuotePage() {
           {/* Total */}
           {customer.amount > 0 && (
             <>
-              <div style={{ borderTop: '1px solid #e2e8f0', margin: '0 0 18px' }} />
+              <div style={{ borderTop: `1px solid ${C.hairline}`, margin: '0 0 18px' }} />
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 28 }}>
-                <div style={{ background: '#f8fafc', borderRadius: 12, padding: '16px 24px', textAlign: 'right', minWidth: 200 }}>
-                  <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Total Estimate</p>
-                  <p style={{ fontSize: 28, fontWeight: 700, color: '#0f172a', margin: '4px 0 0' }}>
+                <div style={{ background: C.cardHead, borderRadius: 12, padding: '16px 24px', textAlign: 'right', minWidth: 200 }}>
+                  <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Total Estimate</p>
+                  <p style={{ fontSize: 28, fontWeight: 700, color: C.ink, margin: '4px 0 0' }}>
                     {formatCurrency(customer.amount)}
                   </p>
                 </div>
@@ -268,19 +274,21 @@ export default function QuotePage() {
 
           {/* Notes / Terms */}
           <div style={{ marginBottom: 32 }}>
-            <p style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
+            <p id="quote-notes-label" style={{ fontSize: 11, fontWeight: 600, color: C.inkSubtle, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 8px' }}>
               Notes &amp; Terms
             </p>
             <textarea
+              id="quote-notes"
+              aria-labelledby="quote-notes-label"
               value={notes}
               onChange={e => saveNotes(e.target.value)}
               rows={4}
               placeholder="Payment due upon completion. Price includes all materials and labor. Any additional scope will be quoted separately…"
               style={{
                 width: '100%', boxSizing: 'border-box',
-                background: '#f8fafc', border: '1px solid #e2e8f0',
+                background: C.cardHead, border: `1px solid ${C.hairline}`,
                 borderRadius: 10, padding: '12px 14px',
-                fontSize: 13, color: '#334155',
+                fontSize: 14, color: C.ink,
                 resize: 'vertical', outline: 'none',
                 fontFamily: 'inherit', lineHeight: 1.7,
               }}
@@ -288,32 +296,34 @@ export default function QuotePage() {
           </div>
 
           {/* Signature lines */}
-          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 32 }}>
+          <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 32 }}>
             <div style={{ display: 'flex', gap: 48 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Customer Signature</p>
+                <div style={{ borderBottom: `1px solid ${C.divider}`, height: 36, marginBottom: 6 }} />
+                {/* The four signature labels were #94a3b8 on white — 2.56:1,
+                    on the lines a customer is being asked to sign. */}
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Customer Signature</p>
               </div>
               <div style={{ width: 160 }}>
-                <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Date</p>
+                <div style={{ borderBottom: `1px solid ${C.divider}`, height: 36, marginBottom: 6 }} />
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Date</p>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 48, marginTop: 24 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Authorized Signature</p>
+                <div style={{ borderBottom: `1px solid ${C.divider}`, height: 36, marginBottom: 6 }} />
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Authorized Signature</p>
               </div>
               <div style={{ width: 160 }}>
-                <div style={{ borderBottom: '1px solid #cbd5e1', height: 36, marginBottom: 6 }} />
-                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Date</p>
+                <div style={{ borderBottom: `1px solid ${C.divider}`, height: 36, marginBottom: 6 }} />
+                <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>Date</p>
               </div>
             </div>
           </div>
 
           {/* Footer */}
           <div style={{ marginTop: 32, textAlign: 'center' }}>
-            <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+            <p style={{ fontSize: 12, color: C.inkMuted, margin: 0 }}>
               Thank you for your business.
               {(co.phone || co.email) ? ` Questions? ${co.phone || co.email}` : ''}
             </p>

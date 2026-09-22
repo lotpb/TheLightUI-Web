@@ -185,6 +185,59 @@ describe.each(PUBLIC_PAGES)('%s', file => {
   })
 })
 
+// ── Printable documents ───────────────────────────────────────────────────────
+
+/**
+ * Two more white-document surfaces carrying the same #94a3b8.
+ *
+ * /records/:id/quote is printed and handed to a customer to sign, and
+ * /signing-requests renders the company's own printable copy of a completed
+ * signature. Neither is one of the eight public routes, but both are documents
+ * on a white page outside the theme system, so they belong to this palette.
+ */
+const DOCUMENT_PAGES = [
+  'src/pages/quote/QuotePage.tsx',
+  'src/pages/signing/SigningRequestsPage.tsx',
+  'src/pages/doctemplates/DocTemplatePreviewPage.tsx',
+]
+
+describe.each(DOCUMENT_PAGES)('%s', file => {
+  const src = readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+    .split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n')
+
+  it('uses the shared document palette', () => {
+    expect(src).toContain('publicTheme')
+  })
+
+  it('has no #94a3b8 on its white surfaces', () => {
+    expect(src).not.toContain('#94a3b8')
+  })
+})
+
+/**
+ * Both halves of the signing feature fabricated a date.
+ *
+ * `signedAt ?? new Date()` meant an agreement with no stored timestamp showed
+ * the moment it was *opened* as the moment it was signed — on /sign/:token for
+ * the customer, and in SignedDocView for the company's printable record.
+ */
+describe('the signing feature never invents a signing date', () => {
+  it.each([
+    'src/pages/signing/PublicSigningPage.tsx',
+    'src/pages/signing/SigningRequestsPage.tsx',
+  ])('%s falls back to nothing, not to now', file => {
+    // Comments quote the removed expression, so they go first — this assertion
+    // matched its own explanation on the first run.
+    const src = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n')
+    expect(src).not.toMatch(/signedAt[^\n]*\?\?\s*new Date\(\)/)
+    expect(src).toContain('Not recorded')
+  })
+})
+
 // ── The two defects every public page shared ──────────────────────────────────
 
 /**
@@ -235,5 +288,25 @@ describe.each([...PUBLIC_PAGES, ...THEMED_PUBLIC_PAGES])('%s labels its fields',
     // had no htmlFor and no input id, so not one field had an accessible name.
     const withFor = src.match(/<label[^>]*htmlFor=/g) ?? []
     expect(withFor.length).toBe(labels.length)
+  })
+})
+
+/**
+ * The three document pages are built from one template — identical signature
+ * lines, identical "Your Company Info" editor — so a defect in one is a defect
+ * in all three. /doc-templates/:id/generate read the company profile from
+ * Firestore but wrote each edit to localStorage, which nothing reads: the edit
+ * reverted as soon as the live subscription next emitted, and whatever was on
+ * screen got baked into the signing-request snapshot that becomes the signed
+ * agreement.
+ */
+describe('the company-info editors agree on where they save', () => {
+  it.each([
+    'src/pages/quote/QuotePage.tsx',
+    'src/pages/doctemplates/DocTemplatePreviewPage.tsx',
+  ])('%s saves the company profile to Firestore', file => {
+    const src = readFileSync(file, 'utf8')
+    expect(src).toContain('saveCompanyProfile')
+    expect(src).not.toContain("localStorage.setItem(`thelight.co.")
   })
 })
