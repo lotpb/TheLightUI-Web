@@ -4,97 +4,39 @@ import { subscribeToFollowUps, setFollowUpDate, appendCustomerComment } from '..
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
 import { Icon, ICONS } from '../../components/Icon'
+import ConfirmModal from '../../components/ConfirmModal'
 import { dueMetaCompact, fmtDue } from '../../utils/dueDate'
 import {
   RENDER_CAP, STALE_DAYS, bucketFollowUps, emptyMessage, filteredFollowUps,
   queueChips, rowInitials, rowName,
   type QueueFilter,
 } from '../../models/followUpQueue'
+import {
+  advanceCadence, firstStepDate, isAssignable,
+  type CadencePosition, type CadenceStep, type FollowUpCadence,
+} from '../../models/followUpCadence'
+import {
+  clearCadencePosition, deleteCadence as deleteCadenceDoc, migrateAndSeedCadences,
+  saveCadence, setCadencePosition, subscribeToCadencePositions, subscribeToCadences,
+} from '../../services/followUpCadenceService'
 import type { CustomerItem } from '../../models/customer'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+/*
+ * The cadences and each customer's position in one live in Firestore now.
+ *
+ * They were `localStorage['thelight.sequences']` and `['thelight.seqstate']`,
+ * so a cadence one rep built was invisible to everyone else, clearing site
+ * data destroyed them, and a customer another rep had started through one read
+ * here as "No sequence". models/followUpCadence owns the shapes and the step
+ * maths; followUpCadenceService owns the reads, the writes and the one-time
+ * migration of whatever is still in a browser.
+ *
+ * Still deliberately separate from `sequences`/`sequenceEnrollments`, which
+ * drive runSequences and actually send. A cadence only moves followUpDate.
+ */
 
-interface SequenceStep {
-  day: number       // days after sequence start
-  action: 'Call' | 'SMS' | 'Email' | 'Visit' | 'Note'
-  note: string
-}
-
-interface Sequence {
-  id: string
-  name: string
-  steps: SequenceStep[]
-}
-
-interface CustomerSequenceState {
-  sequenceId: string
-  startDate: string   // ISO date when sequence was assigned
-  stepIndex: number   // which step we're currently on
-}
-
-// ─── Local storage helpers ────────────────────────────────────────────────────
-
-const SEQ_KEY   = 'thelight.sequences'
-const STATE_KEY = 'thelight.seqstate'
-
-function loadSequences(): Sequence[] {
-  try {
-    const raw = localStorage.getItem(SEQ_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch { /* ignore */ }
-  return DEFAULT_SEQUENCES
-}
-
-function saveSequences(seqs: Sequence[]) {
-  localStorage.setItem(SEQ_KEY, JSON.stringify(seqs))
-}
-
-function loadStates(): Record<string, CustomerSequenceState> {
-  try {
-    const raw = localStorage.getItem(STATE_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch { /* ignore */ }
-  return {}
-}
-
-function saveStates(states: Record<string, CustomerSequenceState>) {
-  localStorage.setItem(STATE_KEY, JSON.stringify(states))
-}
-
-// ─── Defaults ────────────────────────────────────────────────────────────────
-
-const DEFAULT_SEQUENCES: Sequence[] = [
-  {
-    id: 'new-lead',
-    name: 'New Lead Nurture',
-    steps: [
-      { day: 0,  action: 'Call',  note: 'Initial contact — introduce yourself and understand their need' },
-      { day: 3,  action: 'SMS',   note: 'Quick follow-up text — did they have any questions?' },
-      { day: 7,  action: 'Call',  note: 'Second call — present a quote or solution' },
-      { day: 14, action: 'Email', note: 'Follow-up email with any brochures or references' },
-      { day: 30, action: 'Call',  note: 'Final check-in — still interested?' },
-    ],
-  },
-  {
-    id: 'post-job',
-    name: 'Post-Job Follow-up',
-    steps: [
-      { day: 1,  action: 'Call',  note: 'Thank them for their business — confirm satisfaction' },
-      { day: 7,  action: 'SMS',   note: 'Check in — any issues or concerns?' },
-      { day: 30, action: 'Call',  note: 'Request a review or referral' },
-      { day: 90, action: 'Email', note: 'Seasonal maintenance reminder' },
-    ],
-  },
-  {
-    id: 'cold-re-engage',
-    name: 'Cold Re-engagement',
-    steps: [
-      { day: 0,  action: 'Call',  note: 'Re-introduce — check if their needs have changed' },
-      { day: 5,  action: 'Email', note: 'Send a special offer or updated pricing' },
-      { day: 15, action: 'Call',  note: 'Final outreach attempt' },
-    ],
-  },
-]
+type SequenceStep = CadenceStep
+type Sequence = FollowUpCadence
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,8 +102,8 @@ export default function FollowUpsPage() {
   const [tab, setTab] = useState<Tab>('queue')
   const [customers, setCustomers] = useState<CustomerItem[]>([])
   const [loading, setLoading]     = useState(true)
-  const [sequences, setSequences] = useState<Sequence[]>(() => loadSequences())
-  const [seqStates, setSeqStates] = useState<Record<string, CustomerSequenceState>>(() => loadStates())
+  const [sequences, setSequences] = useState<Sequence[]>([])
+  const [seqStates, setSeqStates] = useState<Record<string, CadencePosition>>({})
 
   // Sequence editor state
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null)
@@ -174,6 +116,9 @@ export default function FollowUpsPage() {
 
   // Expanded customer card
   const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  /** The cadence awaiting a delete confirmation — see deleteSeq. */
+  const [confirmDeleteSeq, setConfirmDeleteSeq] = useState<Sequence | null>(null)
 
   /**
    * Defaults to 'active', not 'all'.
@@ -197,9 +142,28 @@ export default function FollowUpsPage() {
     return unsub
   }, [])
 
-  // Persist sequences
-  useEffect(() => { saveSequences(sequences) }, [sequences])
-  useEffect(() => { saveStates(seqStates) }, [seqStates])
+  useEffect(() => subscribeToCadences(setSequences, () => {}), [])
+  useEffect(() => subscribeToCadencePositions(setSeqStates, () => {}), [])
+
+  /**
+   * Brings this browser's leftovers into Firestore, once.
+   *
+   * Runs on mount because there's nowhere else it can: the data is in
+   * localStorage, so only a browser that has it can move it. It's written to
+   * be safe to call every load — seeds are keyed on stable ids, only
+   * genuinely-customised cadences migrate, and positions are keyed on customer
+   * id so two reps converge instead of duplicating. See the service.
+   */
+  useEffect(() => {
+    migrateAndSeedCadences()
+      .then(r => {
+        if (r.migrated > 0 || r.positions > 0) {
+          toast(`Moved ${r.migrated} cadence${r.migrated === 1 ? '' : 's'} and ${r.positions} in-progress follow-up${r.positions === 1 ? '' : 's'} to your team`, 'success')
+        }
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const buckets = useMemo(() => bucketFollowUps(customers), [customers])
   const chips = useMemo(() => queueChips(buckets), [buckets])
@@ -222,66 +186,59 @@ export default function FollowUpsPage() {
   async function confirmAssign() {
     if (!assignTarget || !assignSeqId) return
     const seq = sequences.find(s => s.id === assignSeqId)
-    if (!seq || seq.steps.length === 0) return
+    if (!seq || !isAssignable(seq)) return
 
     const start = today0()
-    const firstStep = seq.steps[0]
-    const firstDate = addDays(start, firstStep.day)
-
-    const newState: CustomerSequenceState = {
-      sequenceId: assignSeqId,
-      startDate: start.toISOString(),
-      stepIndex: 0,
-    }
-
-    setSeqStates(prev => ({ ...prev, [assignTarget.id]: newState }))
+    const firstDate = firstStepDate(seq, start)
+    const target = assignTarget
+    setAssignTarget(null)
 
     try {
-      await setFollowUpDate(assignTarget.id, firstDate)
-      toast(`Sequence "${seq.name}" assigned to ${assignTarget.first} ${assignTarget.lastname}`, 'success')
+      // The position is written first: if the followUpDate write fails, the
+      // customer is still recorded as being on this cadence rather than the
+      // page showing a date with no cadence behind it.
+      await setCadencePosition(target.id, seq.id, start, 0)
+      if (firstDate) await setFollowUpDate(target.id, firstDate)
+      toast(`"${seq.name}" assigned to ${rowName(target).title}`, 'success')
     } catch {
-      toast('Could not set follow-up date', 'error')
+      toast('Could not assign that cadence', 'error')
     }
-    setAssignTarget(null)
   }
 
   // ── Step completion ───────────────────────────────────────────────────────
 
   async function completeStep(c: CustomerItem) {
     const state = seqStates[c.id]
-    const seq   = state ? sequences.find(s => s.id === state.sequenceId) : null
+    const seq   = state ? sequences.find(s => s.id === state.cadenceId) : null
 
-    if (!seq || !state) {
-      // No sequence — just clear the follow-up date
-      await setFollowUpDate(c.id, null)
-      toast('Follow-up marked done', 'success')
-      return
+    try {
+      if (!seq || !state) {
+        // No cadence — just clear the follow-up date.
+        await setFollowUpDate(c.id, null)
+        toast('Follow-up marked done', 'success')
+        return
+      }
+
+      // advanceCadence decides both what gets written and what the toast says;
+      // the page used to compute those separately from the same three values.
+      const next = advanceCadence(seq, state)
+
+      if (next.complete) {
+        await clearCadencePosition(c.id)
+        await setFollowUpDate(c.id, null)
+        toast(`"${seq.name}" completed for ${rowName(c).title}`, 'success')
+        return
+      }
+
+      await setCadencePosition(c.id, seq.id, state.startDate, next.nextStepIndex!)
+      await setFollowUpDate(c.id, next.followUpDate)
+      toast(
+        `Step ${next.nextStepIndex! + 1}/${seq.steps.length} — next: ${next.nextStep!.action} on ${fmtDue(next.followUpDate!)}`,
+        'success',
+      )
+    } catch {
+      toast('Could not update that follow-up', 'error')
     }
-
-    const nextIdx = state.stepIndex + 1
-    if (nextIdx >= seq.steps.length) {
-      // Sequence complete
-      setSeqStates(prev => {
-        const n = { ...prev }
-        delete n[c.id]
-        return n
-      })
-      await setFollowUpDate(c.id, null)
-      toast(`Sequence "${seq.name}" completed for ${c.first} ${c.lastname}!`, 'success')
-      return
-    }
-
-    // Advance to next step
-    const nextStep = seq.steps[nextIdx]
-    const base = new Date(state.startDate)
-    const nextDate = addDays(base, nextStep.day)
-
-    setSeqStates(prev => ({
-      ...prev,
-      [c.id]: { ...state, stepIndex: nextIdx },
-    }))
-    await setFollowUpDate(c.id, nextDate)
-    toast(`Step ${nextIdx + 1}/${seq.steps.length} — next: ${nextStep.action} on ${fmtDue(nextDate)}`, 'success')
   }
 
   async function snooze(c: CustomerItem, days: number) {
@@ -291,13 +248,13 @@ export default function FollowUpsPage() {
   }
 
   async function clearFollowUp(c: CustomerItem) {
-    setSeqStates(prev => {
-      const n = { ...prev }
-      delete n[c.id]
-      return n
-    })
-    await setFollowUpDate(c.id, null)
-    toast('Follow-up cleared', 'success')
+    try {
+      await clearCadencePosition(c.id)
+      await setFollowUpDate(c.id, null)
+      toast('Follow-up cleared', 'success')
+    } catch {
+      toast('Could not clear that follow-up', 'error')
+    }
   }
 
   /**
@@ -322,7 +279,7 @@ export default function FollowUpsPage() {
   // ── Sequence editor ───────────────────────────────────────────────────────
 
   function openNewSeq() {
-    setEditingSeq({ id: genId(), name: '', steps: [{ day: 0, action: 'Call', note: '' }] })
+    setEditingSeq({ id: genId(), companyId: '', name: '', steps: [{ day: 0, action: 'Call', note: '' }], createdAt: new Date() })
     setEditName('')
     setEditSteps([{ day: 0, action: 'Call', note: '' }])
   }
@@ -333,19 +290,35 @@ export default function FollowUpsPage() {
     setEditSteps(seq.steps.map(s => ({ ...s })))
   }
 
-  function saveSeq() {
+  /** Saved for the whole company. The live subscription brings it back. */
+  async function saveSeq() {
     if (!editingSeq || !editName.trim()) return
-    const updated: Sequence = { ...editingSeq, name: editName.trim(), steps: editSteps }
-    setSequences(prev => {
-      const idx = prev.findIndex(s => s.id === editingSeq.id)
-      if (idx >= 0) { const n = [...prev]; n[idx] = updated; return n }
-      return [...prev, updated]
-    })
+    const { id } = editingSeq
     setEditingSeq(null)
+    try {
+      await saveCadence(id, editName, editSteps)
+      toast('Cadence saved for your team', 'success')
+    } catch {
+      toast('Could not save that cadence', 'error')
+    }
   }
 
-  function deleteSeq(id: string) {
-    setSequences(prev => prev.filter(s => s.id !== id))
+  /**
+   * Deletes a cadence for the whole company, after asking.
+   *
+   * This filtered a local array, so it only ever removed the cadence from the
+   * rep's own browser and there was nothing to confirm. Now it removes it for
+   * everyone, so it asks — and it says how many customers are currently part-way
+   * through it, since those positions will be left pointing at nothing.
+   */
+  async function deleteSeq(id: string) {
+    try {
+      await deleteCadenceDoc(id)
+      toast('Cadence deleted', 'success')
+    } catch {
+      toast('Could not delete that cadence', 'error')
+    }
+    setConfirmDeleteSeq(null)
   }
 
   function addStep() {
@@ -457,7 +430,7 @@ export default function FollowUpsPage() {
 
           {visibleCustomers.map(c => {
             const state = seqStates[c.id]
-            const seq   = state ? sequences.find(s => s.id === state.sequenceId) : null
+            const seq   = state ? sequences.find(s => s.id === state.cadenceId) : null
             const step  = seq ? seq.steps[state!.stepIndex] : null
             const isExpanded = expandedId === c.id
             const due = c.followUpDate ? dueMetaCompact(c.followUpDate, false) : null
@@ -561,27 +534,18 @@ export default function FollowUpsPage() {
       {/* ── SEQUENCES TAB ── */}
       {tab === 'sequences' && (
         <div className="space-y-3">
-          {/* Says where these live, because it isn't where anyone would assume.
-              loadSequences/loadStates read localStorage — so these cadences and
-              the per-customer step positions exist only in this browser. A
-              sequence one rep builds is invisible to everyone else, clearing
-              site data destroys them, and a customer another rep enrolled shows
-              here as "No sequence".
-
-              The app also has a real Firestore-backed sequence engine
-              (services/sequenceService, used by /sequences and the record page's
-              Sequences tab) which does run server-side and is shared. Two
-              sequence systems is the actual problem; consolidating them is a
-              migration with enrolment state to move, not a change to make
-              inside a review pass. Until then this at least stops the page
-              implying company-wide behaviour it doesn't have. */}
-          <div className="bg-yellow-900/20 border border-yellow-600/40 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+          {/* Says what these do, since the app has two things called a
+              sequence. These are shared now — followUpCadences in Firestore —
+              but they still only move a customer's followUpDate. The engine
+              behind /sequences actually sends, which is the distinction worth
+              stating on the page rather than leaving people to discover. */}
+          <div className="bg-gray-700 border border-gray-500 rounded-xl px-4 py-3 text-gray-200 text-sm">
             <span className="flex items-start gap-2">
-              <Icon d={ICONS.warning} className="w-4 h-4 shrink-0 mt-0.5" />
+              <Icon d={ICONS.clock} className="w-4 h-4 shrink-0 mt-0.5 text-gray-300" />
               <span>
-                These sequences are saved in this browser only — they aren&rsquo;t shared with your team and
-                nothing sends automatically. For shared, automated outreach use{' '}
-                <Link to="/sequences" className="underline font-medium hover:text-yellow-200">Outreach → Sequences</Link>.
+                These cadences are shared with your team and only schedule follow-up dates —
+                nothing is sent automatically. For automated outreach that does send, use{' '}
+                <Link to="/sequences" className="underline font-medium hover:text-white">Outreach → Sequences</Link>.
               </span>
             </span>
           </div>
@@ -594,7 +558,7 @@ export default function FollowUpsPage() {
                 </div>
                 <div className="flex gap-2 shrink-0">
                   <button onClick={() => openEditSeq(seq)} className="text-xs text-indigo-400 hover:text-indigo-300">Edit</button>
-                  <button onClick={() => deleteSeq(seq.id)} className="text-xs text-red-400 hover:text-red-300">Delete</button>
+                  <button onClick={() => setConfirmDeleteSeq(seq)} className="text-xs text-red-400 hover:text-red-300">Delete</button>
                 </div>
               </div>
               <div className="flex flex-col gap-1.5">
@@ -663,6 +627,20 @@ export default function FollowUpsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!confirmDeleteSeq}
+        message={(() => {
+          if (!confirmDeleteSeq) return ''
+          const inProgress = Object.values(seqStates).filter(p => p.cadenceId === confirmDeleteSeq.id).length
+          const base = `Delete "${confirmDeleteSeq.name}" for everyone at your company?`
+          return inProgress > 0
+            ? `${base} ${inProgress} customer${inProgress === 1 ? ' is' : 's are'} part-way through it and will be left without a cadence.`
+            : base
+        })()}
+        onConfirm={() => confirmDeleteSeq && deleteSeq(confirmDeleteSeq.id)}
+        onCancel={() => setConfirmDeleteSeq(null)}
+      />
 
       {/* ── Sequence editor modal ── */}
       {editingSeq && (
@@ -752,7 +730,7 @@ function ExpandedPanel({
 }: {
   customer: CustomerItem
   sequence: Sequence | null
-  state: CustomerSequenceState | null
+  state: CadencePosition | null
   step: SequenceStep | null
   sequences: Sequence[]
   onAssign: () => void

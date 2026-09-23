@@ -300,8 +300,13 @@ describe('FollowUpsPage wiring', () => {
     }
   })
 
-  it('says the sequences here are browser-local, and points at the real engine', () => {
-    expect(page).toContain('saved in this browser only')
+  it('says what these cadences do, and points at the one that sends', () => {
+    // This asserted the banner said "saved in this browser only", which was
+    // true when the cadences were localStorage. They're in Firestore now, so
+    // the claim that needs pinning is the one that's still surprising: these
+    // schedule, /sequences sends. followUpCadence.test.ts covers the storage.
+    expect(page).toContain('shared with your team')
+    expect(page).toContain('nothing is sent automatically')
     expect(page).toContain('to="/sequences"')
   })
 

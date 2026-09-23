@@ -1118,9 +1118,54 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
+    // ── Follow-up Cadences ────────────────────────────────────────────────────
+    //
+    //   /followups' reminder templates, and each customer's position in one.
+    //
+    //   Distinct from `sequences` / `sequenceEnrollments` below, which drive
+    //   runSequences and actually send texts and emails. A cadence only ever
+    //   moves a customer's followUpDate so the record surfaces in the queue on
+    //   the right day — nothing is sent. Both of these were localStorage until
+    //   now, so a cadence one rep built was invisible to the rest.
+    //
+    //   Cadence document ids are `{companyId}__{cadenceId}` because the three
+    //   seeded templates share stable ids across companies; the companyId
+    //   check below is what actually enforces the boundary, not the id shape.
+    //   A position's document id is the customer id, so there is one per
+    //   customer and two reps converge rather than duplicating.
+    //
+    match /followUpCadences/{cadenceDocId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
+    match /followUpCadencePositions/{customerId} {
+      allow get:    if hasCompanyId()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+      allow list:   if hasCompanyId()
+                    && resource.data.companyId == claimedCompanyId();
+      allow create: if hasCompanyId() && !isViewer()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow update: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId()
+                    && request.resource.data.get('companyId', '') == claimedCompanyId();
+      allow delete: if hasCompanyId() && !isViewer()
+                    && resource.data.get('companyId', '') == claimedCompanyId();
+    }
+
     // ── Follow-up Sequences ───────────────────────────────────────────────────
     //
     //   Drip campaign templates. All CRUD scoped to the caller's companyId.
+    //   These *do* send — see followUpCadences above for the reminder-only pair.
     //
     match /sequences/{sequenceId} {
       allow get:    if hasCompanyId()
