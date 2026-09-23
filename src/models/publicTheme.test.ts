@@ -310,3 +310,56 @@ describe('the company-info editors agree on where they save', () => {
     expect(src).not.toContain("localStorage.setItem(`thelight.co.")
   })
 })
+
+/**
+ * The quote's Notes & Terms are on the record, not in one browser.
+ *
+ * They lived in localStorage['thelight.quote.notes.<id>'] — the terms of a
+ * document a customer signs. Printing the same quote from another machine
+ * produced a document with no terms on it, and /invoices/new read the same key,
+ * so converting from another machine dropped them silently.
+ *
+ * The quote has no Firestore document of its own (it's generated on demand from
+ * the customer record), so the record is where they belong.
+ */
+describe('quote terms persist on the record', () => {
+  const strip = (f: string) => readFileSync(f, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n')
+
+  it('the customer model carries quoteNotes', () => {
+    const model = strip('src/models/customer.ts')
+    expect(model).toContain('quoteNotes: string')
+    expect(model).toContain("quoteNotes: str(d, 'quoteNotes')")
+    expect(model).toContain('quoteNotes: c.quoteNotes')
+  })
+
+  it('neither page touches localStorage for them any more', () => {
+    for (const f of ['src/pages/quote/QuotePage.tsx', 'src/pages/invoices/InvoiceFormPage.tsx']) {
+      expect(strip(f), f).not.toContain('thelight.quote.notes')
+    }
+  })
+
+  it('the quote page saves through a targeted setter', () => {
+    const page = strip('src/pages/quote/QuotePage.tsx')
+    expect(page).toContain('setQuoteNotes')
+    // Not updateCustomer, which writes all forty fields from a stale copy.
+    expect(page).not.toContain('updateCustomer')
+  })
+
+  it('converting to an invoice reads them off the record', () => {
+    expect(strip('src/pages/invoices/InvoiceFormPage.tsx')).toContain('c.quoteNotes')
+  })
+
+  it('does not widen the iOS JSON contract', () => {
+    // Both CustomerJSONRecord shapes are documented as matching
+    // CustomerJSONTransfer.swift exactly, so quoteNotes defaults rather than
+    // being read from a backup until the iOS side adds it too.
+    for (const f of ['src/services/customerService.ts', 'src/utils/exportUtils.ts']) {
+      const src = readFileSync(f, 'utf8')
+      const i = src.indexOf('interface CustomerJSONRecord')
+      const block = src.slice(i, src.indexOf('}', i))
+      expect(block, f).not.toContain('quoteNotes')
+    }
+  })
+})

@@ -25,6 +25,16 @@ export interface CustomerItem {
   rate: string
   phone: string
   comments: string
+  /**
+   * The Notes & Terms printed on /records/:id/quote.
+   *
+   * Distinct from `comments`, which is the record's dated activity feed. These
+   * are the terms of a document a customer signs, and they lived in
+   * localStorage['thelight.quote.notes.<id>'] — so printing the same quote from
+   * another machine produced a document with no terms on it, and converting it
+   * to an invoice silently dropped them.
+   */
+  quoteNotes: string
   spouse: string
   email: string
   contractor: string
@@ -100,6 +110,7 @@ export const emptyCustomer = (): CustomerItem => ({
   rate: '',
   phone: '',
   comments: '',
+  quoteNotes: '',
   spouse: '',
   email: '',
   contractor: '',
@@ -204,6 +215,7 @@ export function customerFromDoc(doc: QueryDocumentSnapshot | DocumentSnapshot): 
     rate: str(d, 'rate'),
     phone: str(d, 'phone'),
     comments: str(d, 'comments'),
+    quoteNotes: str(d, 'quoteNotes'),
     spouse: str(d, 'spouse'),
     email: str(d, 'email'),
     contractor: str(d, 'contractor'),
@@ -276,6 +288,7 @@ export function customerToFirestore(c: CustomerItem, userId?: string): Record<st
     rate: c.rate,
     quan: c.quantity,
     comments: c.comments,
+    quoteNotes: c.quoteNotes,
     spouse: c.spouse,
     photo: c.photo,
     start: c.startDate ? Timestamp.fromDate(c.startDate) : null,

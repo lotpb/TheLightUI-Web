@@ -376,6 +376,26 @@ export async function setContactAttempts(id: string, attempts: number): Promise<
 }
 
 /**
+ * Saves the quote's Notes & Terms onto the record, touching nothing else.
+ *
+ * These are the terms of a document a customer signs, and they lived in
+ * `localStorage['thelight.quote.notes.<id>']` — so printing the same quote from
+ * a different machine produced a document with no terms on it, and converting
+ * it to an invoice silently dropped them. The quote has no document of its own
+ * (it's generated on demand from the customer record), so the record is where
+ * they belong.
+ *
+ * A targeted update rather than updateCustomer, which writes all forty fields
+ * from a caller's possibly-stale copy.
+ */
+export async function setQuoteNotes(id: string, quoteNotes: string): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), {
+    quoteNotes,
+    lastEditedByName: getCurrentUserLabel().name,
+  })
+}
+
+/**
  * Prepends a dated note to a record's `comments`, touching nothing else.
  *
  * /followups' quick-note box did this with
@@ -620,6 +640,11 @@ export async function importCustomersFromJSON(
         rate: r.rate ?? '',
         phone: r.phone ?? '',
         comments: r.comments ?? '',
+        // Deliberately not read from the JSON: both CustomerJSONRecord shapes
+        // match iOS's CustomerJSONTransfer.swift exactly, and that's a
+        // documented cross-platform contract. quoteNotes doesn't round-trip
+        // through a backup until the iOS side adds it too.
+        quoteNotes: '',
         spouse: r.spouse ?? '',
         email: r.email ?? '',
         contractor: r.contractor ?? '',

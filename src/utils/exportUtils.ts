@@ -188,6 +188,8 @@ export async function importCustomersJSON(
     birthDate:     r.birthDate     ?? '',
     driverLicense: r.driverLicense ?? '',
     comments:      r.comments      ?? '',
+    // Not in the JSON: this shape matches CustomerJSONTransfer.swift exactly.
+    quoteNotes:    '',
     rate:          r.rate          ?? '',
     amount:        r.amount        ?? 0,
     quantity:      r.quantity      ?? 0,

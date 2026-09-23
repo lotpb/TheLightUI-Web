@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { getCustomer } from '../../services/customerService'
+import { getCustomer, setQuoteNotes } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import {
@@ -47,7 +47,8 @@ export default function QuotePage() {
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
   const [loading, setLoading]   = useState(true)
   const [co, setCo]             = useState<CompanyInfo>(EMPTY_PROFILE)
-  const [notes, setNotes]       = useState(() => localStorage.getItem(`thelight.quote.notes.${id}`) ?? '')
+  const [notes, setNotes]       = useState('')
+  const notesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const coSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   usePageTitle(customer ? `Quote — ${fullName(customer)}` : 'Quote')
@@ -57,7 +58,7 @@ export default function QuotePage() {
   useEffect(() => {
     if (!id) return
     getCustomer(id)
-      .then(c => { setCustomer(c); setLoading(false) })
+      .then(c => { setCustomer(c); setNotes(c?.quoteNotes ?? ''); setLoading(false) })
       .catch(() => setLoading(false))
   }, [id])
 
@@ -86,9 +87,19 @@ export default function QuotePage() {
     coSaveTimer.current = setTimeout(() => { saveCompanyProfile(next).catch(() => {}) }, 600)
   }
 
+  /**
+   * Saves to the record, debounced, like the company-info editor above.
+   *
+   * This wrote to `localStorage['thelight.quote.notes.<id>']` — the terms of a
+   * document a customer signs, held in one browser. Print the same quote from
+   * another machine and the terms were missing; convert it to an invoice from
+   * another machine and they were dropped silently.
+   */
   function saveNotes(v: string) {
     setNotes(v)
-    localStorage.setItem(`thelight.quote.notes.${id}`, v)
+    if (!id) return
+    if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current)
+    notesSaveTimer.current = setTimeout(() => { setQuoteNotes(id, v).catch(() => {}) }, 600)
   }
 
   if (loading) {

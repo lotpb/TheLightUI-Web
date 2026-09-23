@@ -141,9 +141,12 @@ export default function InvoiceFormPage() {
     if (description || rate > 0) {
       setLineItems([{ description, qty, rate }])
     }
-    // Pull notes saved on the quote
-    const quoteNotes = localStorage.getItem(`thelight.quote.notes.${fromQuoteId}`)
-    if (quoteNotes) setNotes(quoteNotes)
+    // Pull the quote's Notes & Terms off the record.
+    //
+    // This read localStorage['thelight.quote.notes.<id>'], so converting a
+    // quote to an invoice from any machine other than the one the terms were
+    // typed on silently produced an invoice with no terms.
+    if (c.quoteNotes) setNotes(c.quoteNotes)
   }, [fromQuoteId, customers, isEdit])
 
   function selectCustomer(c: CustomerItem) {
