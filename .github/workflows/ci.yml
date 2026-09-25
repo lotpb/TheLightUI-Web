@@ -35,6 +35,9 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: npm ci
+      # test:rules shells out to the `firebase` CLI, which isn't a project
+      # dependency, so the runner needs it installed explicitly.
+      - run: npm install -g firebase-tools
       - run: npm run test:rules
 
   functions:
