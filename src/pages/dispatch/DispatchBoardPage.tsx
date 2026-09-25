@@ -21,6 +21,7 @@ import PipelineJobsTabs from '../../components/PipelineJobsTabs'
 import ConfirmModal from '../../components/ConfirmModal'
 import { Icon, ICONS } from '../../components/Icon'
 import { weekDayLoads, CELL_VISIBLE_LIMIT, type DayLoad } from '../../models/dispatchLoad'
+import { moveIsNoOp } from '../../models/dispatchMove'
 import { subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
 
 const DAY_MS = 86_400_000
@@ -274,6 +275,10 @@ export default function DispatchBoardPage() {
     const memberName = rows.find(r => r.uid === uid)
     const assignedToName = uid ? [memberName?.firstName, memberName?.lastName].filter(Boolean).join(' ') : ''
 
+    // Back onto its own cell is how a drag gets abandoned — nothing to write.
+    if (payload.kind === 'assignment' && payload.assignment
+        && moveIsNoOp(payload.assignment, uid, dayIndex, weekStart)) return
+
     try {
       if (payload.kind === 'assignment' && payload.assignmentId && payload.assignment) {
         await moveAssignment(
@@ -301,6 +306,7 @@ export default function DispatchBoardPage() {
   }
 
   async function handleMoveExisting(a: DispatchAssignment, uid: string, dayIndex: number) {
+    if (moveIsNoOp(a, uid, dayIndex, weekStart)) return
     const day = weekDays[dayIndex]
     const memberName = rows.find(r => r.uid === uid)
     const assignedToName = uid ? [memberName?.firstName, memberName?.lastName].filter(Boolean).join(' ') : ''
@@ -408,7 +414,11 @@ export default function DispatchBoardPage() {
   )
 
   return (
-    <div className="px-4 py-6">
+    // dragend bubbles from every card, backlog or board. Without it, a drag
+    // dropped anywhere but a cell left its payload in dragRef, and the next
+    // thing dropped on a cell — a text selection, a link — scheduled or moved
+    // that stale visit.
+    <div className="px-4 py-6" onDragEnd={() => { dragRef.current = null; setDragOverCell(null) }}>
       <PipelineJobsTabs />
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
@@ -543,7 +553,12 @@ export default function DispatchBoardPage() {
                       <div
                         key={dayIndex}
                         onDragOver={e => { e.preventDefault(); if (canEdit) setDragOverCell(cellKey) }}
-                        onDragLeave={() => setDragOverCell(null)}
+                        // Only when leaving the cell itself: crossing onto a
+                        // card inside it fired dragleave too, so the highlight
+                        // blinked over every busy cell.
+                        onDragLeave={e => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOverCell(null)
+                        }}
                         onDrop={e => { e.preventDefault(); if (canEdit) handleDropOnCell(member.uid, dayIndex) }}
                         className={`min-h-[64px] rounded-lg border p-1 space-y-1 transition-colors ${
                           isOver ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-800 bg-gray-900/60'
@@ -654,6 +669,7 @@ export default function DispatchBoardPage() {
           weekDays={weekDays}
           initialUid={movingAssignment.assignedToUid}
           initialDayIndex={Math.max(0, dayIndexInWeek(movingAssignment.startAt, weekStart))}
+          isUnchanged={(uid, dayIndex) => moveIsNoOp(movingAssignment, uid, dayIndex, weekStart)}
           confirmLabel="Move"
           onConfirm={(uid, dayIndex) => {
             const a = movingAssignment
@@ -887,7 +903,7 @@ function ActionsModal({
 
 function ScheduleModal({
   title, rows, weekDays, onConfirm, onCancel,
-  initialUid, initialDayIndex = 0, confirmLabel = 'Schedule',
+  initialUid, initialDayIndex = 0, confirmLabel = 'Schedule', isUnchanged,
 }: {
   title: string
   rows: TeamMember[]
@@ -897,9 +913,12 @@ function ScheduleModal({
   initialUid?: string
   initialDayIndex?: number
   confirmLabel?: string
+  /** For Move: true while the pick is where the visit already is. */
+  isUnchanged?: (uid: string, dayIndex: number) => boolean
 }) {
   const [uid, setUid] = useState(initialUid ?? rows[0]?.uid ?? '')
   const [dayIndex, setDayIndex] = useState(initialDayIndex)
+  const unchanged = isUnchanged?.(uid, dayIndex) ?? false
 
   // Was a plain div: no role, no aria-modal, no Escape, no backdrop dismiss,
   // no autofocus — the pattern ConfirmModal has handled in ten other files.
@@ -948,11 +967,18 @@ function ScheduleModal({
             way to reach another week is the board's own navigation. */}
         <p className="text-xs text-gray-400 mb-4">
           Days in the week shown on the board. Use Prev/Next to reach another week.
+          {/* Move opens preset to where the visit already is, and confirming
+              that wrote the visit without moving it. */}
+          {unchanged && ' Pick a different tech or day to move it.'}
         </p>
 
         <div className="flex gap-2 justify-end">
           <button onClick={onCancel} className="btn-secondary text-sm px-4 py-2">Cancel</button>
-          <button onClick={() => onConfirm(uid, dayIndex)} className="btn-primary text-sm px-4 py-2">
+          <button
+            onClick={() => onConfirm(uid, dayIndex)}
+            disabled={unchanged}
+            className="btn-primary text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             {confirmLabel}
           </button>
         </div>
