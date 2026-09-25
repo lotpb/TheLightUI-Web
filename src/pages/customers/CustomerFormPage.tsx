@@ -5,7 +5,7 @@ import { db } from '../../firebase/config'
 import { getCustomer, createCustomer, updateCustomer, getAllCustomersOnce } from '../../services/customerService'
 import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
 import { fetchSalesmenForCompany, memberDisplayName, type TeamMember } from '../../services/teamService'
-import { emptyCustomer, fullName, type CustomerItem } from '../../models/customer'
+import { emptyCustomer, formUnownedFields, fullName, type CustomerItem } from '../../models/customer'
 import type { CustomFieldDef } from '../../models/customField'
 import { useDebounce } from '../../hooks/useDebounce'
 import { usePickerStore, RATE_OPTIONS, CALLBACK_OPTIONS, CATEGORY_OPTIONS } from '../../stores/pickerStore'
@@ -176,7 +176,8 @@ export default function CustomerFormPage() {
         const newId = await createCustomer(form, user?.uid)
         navigate(`/records/${newId}`, { replace: true })
       } else {
-        await updateCustomer(id!, form, user?.uid)
+        // Only the fields this form has inputs for. See formUnownedFields.
+        await updateCustomer(id!, form, user?.uid, formUnownedFields(form))
         navigate(`/records/${id}`, { replace: true })
       }
     } catch (err) {

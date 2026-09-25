@@ -352,6 +352,21 @@ export function fullName(c: Pick<CustomerItem, 'first' | 'lastname'> & { categor
   return [c.first, c.lastname].filter(Boolean).join(' ')
 }
 
+/**
+ * A single-line postal address, for geocoding or display.
+ *
+ * Returns '' when there's nothing to build from — callers must treat that as
+ * "not routable" rather than handing an empty string to a maps API.
+ */
+export function oneLineAddress(
+  c: Pick<CustomerItem, 'street' | 'city' | 'state' | 'zip'>,
+): string {
+  return [c.street, c.city, c.state, c.zip]
+    .map(s => (s ?? '').trim())
+    .filter(Boolean)
+    .join(', ')
+}
+
 // The name a record is identified by: a company name outranks the person's name,
 // matching how the detail page titles the record.
 export function displayName(
@@ -372,4 +387,22 @@ export function vendorFields(c: Pick<CustomerItem, 'salesman' | 'callback'>): {
   manager: string
 } {
   return { callbackFlag: c.salesman, manager: c.callback }
+}
+
+/**
+ * Firestore keys the record edit form must not write on update.
+ *
+ * Each is edited elsewhere by a targeted setter — /quote's Notes & Terms,
+ * appendCustomerComment, the record page's tag editor, /followups' snooze and
+ * complete — and the form has no input for it, so anything it wrote would be
+ * the stale value it loaded. followUpDate is the conditional one: the form
+ * shows it for vendors, so it's owned there and unowned everywhere else.
+ *
+ * Create is unaffected — a new record has nothing to overwrite and should get
+ * the defaults.
+ */
+export function formUnownedFields(c: Pick<CustomerItem, 'category'>): string[] {
+  const keys = ['quoteNotes', 'comments', 'tags']
+  if (c.category.toLowerCase() !== 'vendor') keys.push('followUpDate')
+  return keys
 }

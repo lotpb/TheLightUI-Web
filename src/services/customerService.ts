@@ -1,15 +1,35 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
   onSnapshot, getDoc, getDocs, writeBatch, query, where, orderBy,
-  runTransaction, startAfter, limit, Timestamp,
+  runTransaction, startAfter, limit, Timestamp, getCountFromServer,
   type QueryDocumentSnapshot, type Unsubscribe,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
 import { customerFromDoc, customerToFirestore, type CustomerItem } from '../models/customer'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
+import { usePlanStore } from '../stores/planStore'
+import { PLAN_LIMITS, recordCapError } from '../models/plan'
 
 const COLLECTION = 'Customers'
+
+/**
+ * Throws, with a message fit for a toast, when adding `adding` records would
+ * push the company past its plan's record cap (Starter: 500). Plans without a
+ * cap skip the count query entirely.
+ *
+ * Client-side only: Firestore rules can't count documents, so this stops the
+ * app's create and import paths but not a hand-crafted SDK write.
+ */
+export async function assertRecordCapacity(companyId: string, adding: number): Promise<void> {
+  const { plan } = usePlanStore.getState()
+  if (PLAN_LIMITS[plan].leads === null || adding <= 0) return
+  const agg = await getCountFromServer(
+    query(collection(db, COLLECTION), where('companyId', '==', companyId)),
+  )
+  const error = recordCapError(plan, agg.data().count, adding)
+  if (error) throw new Error(error)
+}
 
 // Safety cap for the real-time listener. Prevents loading 100k+ documents into
 // the browser's JS heap. Companies that grow past this limit should migrate to
@@ -73,6 +93,7 @@ export async function createCustomer(
   userId?: string,
 ): Promise<string> {
   const companyId = getCompanyId()
+  await assertRecordCapacity(companyId, 1)
   const me = getCurrentUserLabel()
   const data: Record<string, unknown> = {
     ...customerToFirestore(customer as CustomerItem, userId),
@@ -90,17 +111,30 @@ export async function createCustomer(
   return ref.id
 }
 
+/**
+ * Writes a customer document.
+ *
+ * `omit` lists Firestore keys the caller doesn't own and must not write. This
+ * matters because the call writes every field from the caller's copy: the edit
+ * form has no inputs for `quoteNotes`, `comments` or `tags` (or `followUpDate`,
+ * outside vendors), yet wrote all of them back from whatever it loaded. So
+ * saving the form reverted terms typed on /quote since it opened, deleted notes
+ * added from /followups, reverted tag changes, and un-snoozed follow-ups — all
+ * silently, from a page that never showed those fields.
+ */
 export async function updateCustomer(
   id: string,
   customer: CustomerItem,
   userId?: string,
+  omit: readonly string[] = [],
 ): Promise<void> {
   const companyId = getCompanyId()
-  const data = {
+  const data: Record<string, unknown> = {
     ...customerToFirestore(customer, userId),
     companyId,
     lastEditedByName: getCurrentUserLabel().name,
   }
+  for (const key of omit) delete data[key]
   await updateDoc(doc(db, COLLECTION, id), data)
 }
 
@@ -618,6 +652,9 @@ export async function importCustomersFromJSON(
     ? (parsed as CustomerJSONRecord[])
     : ((parsed as { records?: CustomerJSONRecord[] }).records ?? [])
   if (!Array.isArray(records)) throw new Error('Invalid format: expected a JSON array.')
+  // All-or-nothing: an import that would cross the cap is refused up front,
+  // rather than committing the first batches and failing partway through.
+  await assertRecordCapacity(companyId, records.length)
 
   const BATCH_SIZE = 500
   let total = 0
@@ -707,6 +744,7 @@ export async function importCustomersFromCSVRows(
 ): Promise<{ count: number }> {
   const companyId = getCompanyId()
   if (!companyId) throw new Error('Not authenticated')
+  await assertRecordCapacity(companyId, rows.length)
 
   const BATCH_SIZE = 500
   let total = 0
