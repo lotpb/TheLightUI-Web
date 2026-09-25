@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
-import { customerFromDoc, customerToFirestore, diffCustomerEdit, type CustomerItem } from '../models/customer'
+import { customerFromDoc, customerToFirestore, diffCustomerEdit, restoredFirestoreKeys, type CustomerItem } from '../models/customer'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { usePlanStore } from '../stores/planStore'
 import { PLAN_LIMITS, recordCapError } from '../models/plan'
@@ -600,6 +600,9 @@ export interface CustomerJSONRecord {
   companyName?: string
   leadSource?: string
   paymentStatus?: string
+  // In iOS exports; the web exporter doesn't write them yet.
+  followUpDate?: string | null
+  tags?: string[]
 }
 
 function safeDate(s: string | undefined): Date {
@@ -732,8 +735,8 @@ export async function importCustomersFromJSON(
         driverLicense: r.driverLicense ?? '',
         profession: r.profession ?? '',
         manager: r.manager ?? '',
-        followUpDate: null,
-        tags: [],
+        followUpDate: r.followUpDate ? safeDate(r.followUpDate) : null,
+        tags: Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === 'string') : [],
         paymentTerms: r.paymentTerms ?? '',
         taxId: r.taxId ?? '',
         accountNumber: r.accountNumber ?? '',
@@ -758,11 +761,19 @@ export async function importCustomersFromJSON(
         createdByUid: '',
         portalToken: '',
       }
-      const data = { ...customerToFirestore(item, userId), companyId }
-      const ref = r.id
-        ? doc(db, COLLECTION, r.id)
-        : doc(collection(db, COLLECTION))
-      batch.set(ref, data)
+      const data: Record<string, unknown> = { ...customerToFirestore(item, userId), companyId }
+      if (r.id) {
+        // Restoring over a record that may exist: write only what the file
+        // supplies, merged, so fields a backup never holds survive. See
+        // restoredFirestoreKeys.
+        const supplied = restoredFirestoreKeys(r)
+        const keep = new Set([...supplied, 'companyId', 'uid', 'lastUpdate'])
+        if (!supplied.has('category') && data['category']) keep.add('category')
+        const merged = Object.fromEntries(Object.entries(data).filter(([k]) => keep.has(k)))
+        batch.set(doc(db, COLLECTION, r.id), merged, { merge: true })
+      } else {
+        batch.set(doc(collection(db, COLLECTION)), data)
+      }
       total++
     }
     await batch.commit()

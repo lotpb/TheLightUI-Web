@@ -5,7 +5,9 @@ import { getFunctions, httpsCallable } from 'firebase/functions'
 import { usePickerStore } from '../stores/pickerStore'
 import { useAuthStore, setNotificationPref } from '../stores/authStore'
 import { usePrefStore } from '../stores/prefStore'
-import { savePickerLists, type PickerLists, type PickerLabels } from '../services/pickerService'
+import { savePickerListEdits, type PickerLists, type PickerLabels } from '../services/pickerService'
+import { usePermissions } from '../hooks/usePermissions'
+import { importConfirmMessage, type PendingImport } from '../models/backupImport'
 import { useToast } from '../components/Toast'
 import { Icon, ICONS } from '../components/Icon'
 import ConfirmModal from '../components/ConfirmModal'
@@ -35,6 +37,7 @@ const SECTION_KEYS: { key: ListKey; placeholder: string }[] = [
 const LIST_KEYS: ListKey[] = SECTION_KEYS.map(s => s.key)
 
 const PREF_KEY = 'thelight.showInactive'
+
 
 /**
  * A settings section.
@@ -174,6 +177,10 @@ export default function SettingsPage() {
   const { coloredAvatars, setColoredAvatars } = usePrefStore()
   const toast = useToast()
   const navigate = useNavigate()
+  // The page ignored roles below Company & Team: a salesman got Import — which
+  // the records list withholds from them — and a viewer got list, field and
+  // import controls that the rules then refused.
+  const perms = usePermissions()
 
   const [showInactivePref, setShowInactivePref] = useState(
     () => localStorage.getItem(PREF_KEY) === 'true'
@@ -217,6 +224,7 @@ export default function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [transferring, setTransferring] = useState(false)
 
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null)
   const [copiedCompanyId, setCopiedCompanyId] = useState(false)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
 
@@ -279,12 +287,18 @@ export default function SettingsPage() {
     }
   }
 
+  /**
+   * Reads and classifies the file, then asks before writing anything.
+   *
+   * This imported on file selection. It writes company-wide, and every record
+   * carrying an ID updates the live record with that ID — so picking the wrong
+   * file (or an old backup) changed records across the company with no
+   * chance to back out, and the first word of it was the success toast.
+   */
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     e.target.value = ''
-    const userId = useAuthStore.getState().user?.uid ?? ''
-    setTransferring(true)
     try {
       const text = await file.text()
       const parsed: unknown = JSON.parse(text)
@@ -296,15 +310,29 @@ export default function SettingsPage() {
         toast('File is empty or has no records.', 'error')
         return
       }
-
       const sample = records[0]
+      const kind: PendingImport['kind'] =
+        'isCompleted' in sample ? 'todos' : 'isReimbursable' in sample ? 'expenses' : 'records'
+      const withIds = records.filter(r => typeof r['id'] === 'string' && r['id']).length
+      setPendingImport({ text, kind, count: records.length, withIds, fileName: file.name })
+    } catch {
+      toast(`${file.name} isn't a valid JSON backup.`, 'error')
+    }
+  }
+
+  async function runImport(p: PendingImport) {
+    setPendingImport(null)
+    const userId = useAuthStore.getState().user?.uid ?? ''
+    const text = p.text
+    setTransferring(true)
+    try {
       let result: { count: number }
 
-      if ('isCompleted' in sample) {
+      if (p.kind === 'todos') {
         // ToDoListBackup.json
         result = await importTodosFromJSON(text, userId)
         toast(`Imported ${result.count} todo${result.count === 1 ? '' : 's'}.`, 'success')
-      } else if ('isReimbursable' in sample) {
+      } else if (p.kind === 'expenses') {
         // ExpenseBackup.json
         result = await importExpensesFromJSON(text)
         toast(`Imported ${result.count} expense${result.count === 1 ? '' : 's'}.`, 'success')
@@ -374,11 +402,17 @@ export default function SettingsPage() {
     if (!editingFieldId) return
     const label = editFieldLabel.trim()
     if (!label) return
-    await updateCustomFieldDef(editingFieldId, {
-      label,
-      options: editFieldOptions.split(',').map(o => o.trim()).filter(Boolean),
-    })
-    setEditingFieldId(null)
+    // Caught: a failed write was an unhandled rejection, so Save did nothing
+    // visible and the editor stayed open with no explanation.
+    try {
+      await updateCustomFieldDef(editingFieldId, {
+        label,
+        options: editFieldOptions.split(',').map(o => o.trim()).filter(Boolean),
+      })
+      setEditingFieldId(null)
+    } catch {
+      toast(`Could not save "${label}".`, 'error')
+    }
   }
 
   // Asks first. This was a single unconfirmed click that wrote to Firestore,
@@ -441,7 +475,9 @@ export default function SettingsPage() {
     if (editingLabel) commitLabel(editingLabel)
     setSaving(true)
     try {
-      await savePickerLists({ ...local, labels: localLabels })
+      // A merge onto the server's current lists, not a replace — see
+      // mergePickerEdits. `lists` is what this page loaded.
+      await savePickerListEdits(lists, { ...local, labels: localLabels })
       await fetch()
       toast('Dropdown lists saved.', 'success')
     } catch {
@@ -676,7 +712,7 @@ export default function SettingsPage() {
                           <p className="text-xs text-gray-400 mt-0.5 truncate">{f.options.join(', ')}</p>
                         )}
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      {!perms.isReadOnly && <div className="flex items-center gap-1 shrink-0">
                         <button
                           onClick={() => startEditField(f)}
                           aria-label={`Edit "${f.label}"`}
@@ -693,7 +729,7 @@ export default function SettingsPage() {
                         >
                           <Icon d={ICONS.trash} className="w-3.5 h-3.5" />
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   )}
                 </li>
@@ -702,7 +738,7 @@ export default function SettingsPage() {
           )}
 
           {/* Add new field */}
-          <div className="border-t border-gray-700/40 pt-3 space-y-2">
+          {!perms.isReadOnly && <div className="border-t border-gray-700/40 pt-3 space-y-2">
             <div className="flex gap-2 flex-wrap">
               <input
                 value={newFieldLabel}
@@ -737,12 +773,12 @@ export default function SettingsPage() {
               <Icon d={ICONS.plus} className="w-4 h-4 shrink-0" />
               {creatingField ? 'Adding…' : 'Add Field'}
             </button>
-          </div>
+          </div>}
         </div>
       </SectionCard>
 
-      {/* ── Manage Dropdown Lists ── */}
-      <SectionCard
+      {/* ── Manage Dropdown Lists ── (viewers can't write them) */}
+      {!perms.isReadOnly && <SectionCard
         title="Manage Dropdown Lists"
         collapsible
         open={dropdownListsOpen}
@@ -759,7 +795,7 @@ export default function SettingsPage() {
       >
         <p className="text-sm text-gray-400 mb-5">
           Manage the dropdown lists used throughout the app (Salesman, Job Type, Product, Lead Source, Contractor).
-          Changes sync to all devices once saved.
+          Once saved, they apply to everyone in your company on the web app.
         </p>
 
         {/* Sub-sections, not nested cards. These were five `.card`s inside a
@@ -858,28 +894,30 @@ export default function SettingsPage() {
             {saving ? 'Saving…' : 'Save lists'}
           </button>
         </div>
-      </SectionCard>
+      </SectionCard>}
 
       {/* ── Data Management ──
           Moved below the configuration sections: it's used rarely, half of it
           overwrites records, and it sat above both Custom Fields and the
           dropdown lists. */}
-      <SectionCard title="Data Management">
+      {/* Same gates as the records list: export is a bulk action, import is
+          owner/admin. */}
+      {(perms.canBulkAction || perms.canImport) && <SectionCard title="Data Management">
         <div className="space-y-3">
           <p className="text-xs text-gray-400">
-            Export all data as JSON backups (CustomerBackup.json, ExpenseBackup.json, ToDoListBackup.json).
-            Import auto-detects the file type — customers, expenses, or todos.
+            {perms.canBulkAction && 'Export all data as JSON backups (CustomerBackup.json, ExpenseBackup.json, ToDoListBackup.json). '}
+            {perms.canImport && 'Import auto-detects the file type — customers, expenses, or todos — and asks before writing anything.'}
           </p>
           <div className="flex gap-2 flex-wrap">
-            <button
+            {perms.canBulkAction && <button
               onClick={handleExport}
               disabled={transferring}
               className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-40"
             >
               <Icon d={ICONS.downloadTray} className="w-4 h-4 shrink-0" />
               {transferring ? 'Working…' : 'Export All Data'}
-            </button>
-            <button
+            </button>}
+            {perms.canImport && <><button
               onClick={() => fileInputRef.current?.click()}
               disabled={transferring}
               className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-40"
@@ -893,10 +931,10 @@ export default function SettingsPage() {
               accept=".json,application/json"
               className="hidden"
               onChange={handleImportFile}
-            />
+            /></>}
           </div>
         </div>
-      </SectionCard>
+      </SectionCard>}
 
       {/* ── About ── */}
       <SectionCard title="About">
@@ -931,6 +969,14 @@ export default function SettingsPage() {
         confirmLabel="Remove field"
         onConfirm={() => deleteFieldTarget && handleDeleteCustomField(deleteFieldTarget)}
         onCancel={() => setDeleteFieldTarget(null)}
+      />
+
+      <ConfirmModal
+        isOpen={pendingImport !== null}
+        message={pendingImport ? importConfirmMessage(pendingImport) : ''}
+        confirmLabel="Import"
+        onConfirm={() => pendingImport && runImport(pendingImport)}
+        onCancel={() => setPendingImport(null)}
       />
 
       <ConfirmModal

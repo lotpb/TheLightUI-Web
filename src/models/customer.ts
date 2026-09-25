@@ -464,3 +464,32 @@ export function diffCustomerEdit(base: CustomerItem, mine: CustomerItem, theirs:
   }
   return { changes, conflicts }
 }
+
+/** JSON backup keys whose Firestore field name differs. The rest match. */
+const JSON_TO_FIRESTORE_KEY: Record<string, string> = {
+  isActive: 'active',
+  quantity: 'quan',
+  startDate: 'start',
+  completionDate: 'completion',
+  lastUpdateDate: 'lastUpdate',
+}
+
+/**
+ * The Firestore fields a JSON backup record actually supplies — what a restore
+ * over an existing document may write.
+ *
+ * A restore used to `set()` the whole document from customerToFirestore, which
+ * fills every field the file lacks with a default and drops every field that
+ * function doesn't write at all. Restoring a backup therefore cleared tags,
+ * custom fields, assignment, follow-up dates, the portal link and both opt-out
+ * flags on every record it touched, none of which a backup contains. Now the
+ * restore writes only what the file has, and the document keeps the rest.
+ */
+export function restoredFirestoreKeys(record: object): Set<string> {
+  const keys = new Set<string>()
+  for (const k of Object.keys(record)) {
+    if (k === 'id') continue
+    keys.add(JSON_TO_FIRESTORE_KEY[k] ?? k)
+  }
+  return keys
+}
