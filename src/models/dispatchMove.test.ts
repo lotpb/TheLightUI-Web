@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { moveIsNoOp } from './dispatchMove'
+import { moveIsNoOp, clockHandoffFor } from './dispatchMove'
 
 const weekStart = new Date(2026, 8, 21)            // Mon 21 Sep 2026, local
 const visit = { assignedToUid: 'tech1', startAt: new Date(2026, 8, 23, 8) } // Wed, day 2
@@ -19,6 +19,24 @@ describe('moveIsNoOp', () => {
   })
   it('a visit outside the week shown is never a no-op', () => {
     expect(moveIsNoOp({ ...visit, startAt: new Date(2026, 8, 30, 8) }, 'tech1', 2, weekStart)).toBe(false)
+  })
+})
+
+describe('clockHandoffFor', () => {
+  const live = { status: 'in_progress', assignedToUid: 'ann', customerId: 'job1' }
+
+  it('an in-progress visit changing tech closes the old clock and opens the new one', () => {
+    expect(clockHandoffFor(live, 'bo')).toEqual({ clockOutUid: 'ann', clockInUid: 'bo' })
+  })
+  it('to Unassigned only closes; from Unassigned only opens', () => {
+    expect(clockHandoffFor(live, '')).toEqual({ clockOutUid: 'ann', clockInUid: null })
+    expect(clockHandoffFor({ ...live, assignedToUid: '' }, 'bo')).toEqual({ clockOutUid: null, clockInUid: 'bo' })
+  })
+  it('same tech (a day change), a visit not in progress, or no job does nothing', () => {
+    expect(clockHandoffFor(live, 'ann')).toBeNull()
+    for (const status of ['scheduled', 'done', 'cancelled'])
+      expect(clockHandoffFor({ ...live, status }, 'bo')).toBeNull()
+    expect(clockHandoffFor({ ...live, customerId: '' }, 'bo')).toBeNull()
   })
 })
 
@@ -46,4 +64,5 @@ describe('dispatch board wiring', () => {
   it('the highlight only clears when the pointer leaves the cell itself', () => {
     expect(src).toMatch(/if \(!e\.currentTarget\.contains\(e\.relatedTarget as Node \| null\)\) setDragOverCell\(null\)/)
   })
+
 })
