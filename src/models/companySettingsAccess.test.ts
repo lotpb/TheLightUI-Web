@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../stores/authStore', () => ({ useAuthStore: vi.fn() }))
 import { readFileSync } from 'node:fs'
+import { resolvePermissions } from '../hooks/usePermissions'
 
 const strip = (s: string) =>
   s.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
@@ -7,15 +10,10 @@ const src = (p: string) => strip(readFileSync(p, 'utf8'))
 
 describe('company settings are owner/admin in the UI, matching firestore.rules', () => {
   it('only owner and admin get canManageCompany', () => {
-    const perms = src('src/hooks/usePermissions.ts')
-    const grantFor = (label: string) =>
-      perms.slice(perms.indexOf(label)).match(/canManageCompany: (true|false)/)?.[1]
-    expect(grantFor("case 'admin':")).toBe('true')      // owner falls through to admin
-    expect(perms).toMatch(/case 'owner':\s*case 'admin':/)
-    expect(grantFor("case 'salesman':")).toBe('false')
-    expect(grantFor("case 'viewer':")).toBe('false')
-    // Unknown roles — 'member', the default for invited teammates — fall through.
-    expect(grantFor('default:')).toBe('false')
+    for (const r of ['owner', 'admin']) expect(resolvePermissions(r).canManageCompany, r).toBe(true)
+    for (const r of ['salesman', 'member', 'viewer', 'user', 'mystery'])
+      expect(resolvePermissions(r).canManageCompany, r).toBe(false)
+    expect(resolvePermissions(null, false).canManageCompany).toBe(false)   // still loading
   })
 
   it.each([
