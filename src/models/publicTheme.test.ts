@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import {
   PUBLIC_BADGES, PUBLIC_COLORS, PUBLIC_CONTRACTS, PUBLIC_INPUT,
   fmtPublicDate, publicBadge,
@@ -351,15 +351,18 @@ describe('quote terms persist on the record', () => {
     expect(strip('src/pages/invoices/InvoiceFormPage.tsx')).toContain('c.quoteNotes')
   })
 
-  it('does not widen the iOS JSON contract', () => {
-    // Both CustomerJSONRecord shapes are documented as matching
-    // CustomerJSONTransfer.swift exactly, so quoteNotes defaults rather than
-    // being read from a backup until the iOS side adds it too.
+  it('the JSON contract carries quoteNotes on both platforms', () => {
+    // Both CustomerJSONRecord shapes mirror CustomerJSONTransfer.swift; the
+    // field was added to all three together, optional so older files import.
     for (const f of ['src/services/customerService.ts', 'src/utils/exportUtils.ts']) {
       const src = readFileSync(f, 'utf8')
       const i = src.indexOf('interface CustomerJSONRecord')
       const block = src.slice(i, src.indexOf('}', i))
-      expect(block, f).not.toContain('quoteNotes')
+      expect(block, f).toContain('quoteNotes?: string')
     }
+    // The iOS repo sits beside this one on the dev machine; skip elsewhere.
+    const swiftPath = '../TheLightUI/Shared/Features/Customers/CustomerJSONTransfer.swift'
+    if (!existsSync(swiftPath)) return
+    expect(readFileSync(swiftPath, 'utf8')).toMatch(/decodeIfPresent\(String\.self,\s+forKey: \.quoteNotes\)/)
   })
 })

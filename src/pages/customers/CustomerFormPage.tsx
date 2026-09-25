@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '../../firebase/config'
-import { getCustomer, createCustomer, updateCustomer, getAllCustomersOnce } from '../../services/customerService'
+import { getCustomer, createCustomer, saveCustomerEdits, getAllCustomersOnce, CustomerEditConflictError } from '../../services/customerService'
 import { subscribeToCustomFieldDefs } from '../../services/customFieldService'
 import { fetchSalesmenForCompany, memberDisplayName, type TeamMember } from '../../services/teamService'
-import { emptyCustomer, formUnownedFields, fullName, type CustomerItem } from '../../models/customer'
+import { emptyCustomer, fullName, CUSTOMER_FIELD_LABELS, type CustomerItem } from '../../models/customer'
 import type { CustomFieldDef } from '../../models/customField'
 import { useDebounce } from '../../hooks/useDebounce'
 import { usePickerStore, RATE_OPTIONS, CALLBACK_OPTIONS, CATEGORY_OPTIONS } from '../../stores/pickerStore'
@@ -40,6 +40,10 @@ export default function CustomerFormPage() {
     if (cat) base.category = cat
     return base
   })
+  // The record as loaded — the base of the three-way merge on save, so only
+  // fields changed here are written (see saveCustomerEdits).
+  const loadedRef = useRef<CustomerItem | null>(null)
+  const [conflict, setConflict] = useState<CustomerEditConflictError | null>(null)
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [touched, setTouched] = useState(false)
@@ -66,7 +70,7 @@ export default function CustomerFormPage() {
     if (isNew || !id) return
     getCustomer(id)
       .then(c => {
-        if (c) setForm(c)
+        if (c) { loadedRef.current = c; setForm(c) }
         setLoading(false)
       })
       .catch(err => {
@@ -166,6 +170,10 @@ export default function CustomerFormPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    await save(false)
+  }
+
+  async function save(overwrite: boolean) {
     const errs = validateCustomerForm(form)
     if (Object.keys(errs).length > 0) { setFieldErrors(errs); return }
     setFieldErrors({})
@@ -176,11 +184,15 @@ export default function CustomerFormPage() {
         const newId = await createCustomer(form, user?.uid)
         navigate(`/records/${newId}`, { replace: true })
       } else {
-        // Only the fields this form has inputs for. See formUnownedFields.
-        await updateCustomer(id!, form, user?.uid, formUnownedFields(form))
+        await saveCustomerEdits(id!, loadedRef.current ?? form, form, { userId: user?.uid, overwrite })
         navigate(`/records/${id}`, { replace: true })
       }
     } catch (err) {
+      if (err instanceof CustomerEditConflictError) {
+        setConflict(err)
+        setSaving(false)
+        return
+      }
       setError(err instanceof Error ? err.message : 'Save failed')
       setSaving(false)
     }
@@ -783,6 +795,17 @@ export default function CustomerFormPage() {
 
         <div className="pb-8" />
       </form>
+
+      <ConfirmModal
+        isOpen={conflict !== null}
+        message={conflict
+          ? `${conflict.editedBy || 'Someone else'} changed ${conflict.fields.map(f => CUSTOMER_FIELD_LABELS[f] ?? f).join(', ')} while you were editing. `
+            + 'Save your values over theirs? Nothing is saved until you choose — cancel to keep editing.'
+          : ''}
+        confirmLabel="Save mine"
+        onConfirm={() => { setConflict(null); void save(true) }}
+        onCancel={() => setConflict(null)}
+      />
 
       <ConfirmModal
         isOpen={blocker.state === 'blocked'}

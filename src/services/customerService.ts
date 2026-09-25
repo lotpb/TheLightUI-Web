@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/config'
-import { customerFromDoc, customerToFirestore, type CustomerItem } from '../models/customer'
+import { customerFromDoc, customerToFirestore, diffCustomerEdit, type CustomerItem } from '../models/customer'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { usePlanStore } from '../stores/planStore'
 import { PLAN_LIMITS, recordCapError } from '../models/plan'
@@ -111,31 +111,59 @@ export async function createCustomer(
   return ref.id
 }
 
-/**
- * Writes a customer document.
- *
- * `omit` lists Firestore keys the caller doesn't own and must not write. This
- * matters because the call writes every field from the caller's copy: the edit
- * form has no inputs for `quoteNotes`, `comments` or `tags` (or `followUpDate`,
- * outside vendors), yet wrote all of them back from whatever it loaded. So
- * saving the form reverted terms typed on /quote since it opened, deleted notes
- * added from /followups, reverted tag changes, and un-snoozed follow-ups — all
- * silently, from a page that never showed those fields.
- */
-export async function updateCustomer(
-  id: string,
-  customer: CustomerItem,
-  userId?: string,
-  omit: readonly string[] = [],
-): Promise<void> {
-  const companyId = getCompanyId()
-  const data: Record<string, unknown> = {
-    ...customerToFirestore(customer, userId),
-    companyId,
-    lastEditedByName: getCurrentUserLabel().name,
+// There is deliberately no whole-document update. updateCustomer wrote every
+// field from the caller's copy and was behind each silent-revert bug found on
+// this collection; use saveCustomerEdits for the edit form and the targeted
+// setters below for everything else.
+
+/** Thrown by saveCustomerEdits when another edit touched the same fields. */
+export class CustomerEditConflictError extends Error {
+  constructor(readonly fields: string[], readonly editedBy: string) {
+    super('This record was changed by someone else while you were editing it.')
+    this.name = 'CustomerEditConflictError'
   }
-  for (const key of omit) delete data[key]
-  await updateDoc(doc(db, COLLECTION, id), data)
+}
+
+/**
+ * Saves the record edit form as a three-way merge (see diffCustomerEdit)
+ * inside a transaction, so the document can't change between the read and
+ * the write.
+ *
+ * Replaces a full-document updateCustomer, which wrote every field from the
+ * form's copy: saving silently reverted whatever had changed since the form
+ * opened — terms typed on /quote, notes added from /followups, tag edits,
+ * snoozes, and any other user's edits to the same record. Now only the fields
+ * this user changed are written; if another edit changed one of those same
+ * fields, it throws CustomerEditConflictError unless `overwrite` is set.
+ *
+ * Returns false when nothing changed and nothing was written.
+ */
+export async function saveCustomerEdits(
+  id: string,
+  base: CustomerItem,
+  edited: CustomerItem,
+  opts: { userId?: string; overwrite?: boolean } = {},
+): Promise<boolean> {
+  const companyId = getCompanyId()
+  const ref = doc(db, COLLECTION, id)
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists() || snap.data()['companyId'] !== companyId) {
+      throw new Error('This record no longer exists.')
+    }
+    const { changes, conflicts } = diffCustomerEdit(base, edited, customerFromDoc(snap))
+    if (conflicts.length > 0 && !opts.overwrite) {
+      throw new CustomerEditConflictError(conflicts, String(snap.data()['lastEditedByName'] ?? ''))
+    }
+    if (Object.keys(changes).length === 0) return false
+    tx.update(ref, {
+      ...changes,
+      lastUpdate: Timestamp.fromDate(new Date()),
+      ...(opts.userId ? { uid: opts.userId } : {}),
+      lastEditedByName: getCurrentUserLabel().name,
+    })
+    return true
+  })
 }
 
 export async function deleteCustomer(id: string): Promise<void> {
@@ -147,6 +175,11 @@ export async function deleteCustomer(id: string): Promise<void> {
 
 export async function deactivateCustomer(id: string, extraFields: Record<string, unknown> = {}): Promise<void> {
   await updateDoc(doc(db, COLLECTION, id), { active: '0', ...extraFields })
+}
+
+/** Counterpart to deactivateCustomer — writes only the flag and `extraFields`. */
+export async function reactivateCustomer(id: string, extraFields: Record<string, unknown> = {}): Promise<void> {
+  await updateDoc(doc(db, COLLECTION, id), { active: '1', ...extraFields })
 }
 
 export async function setPaymentStatus(id: string, paymentStatus: string): Promise<void> {
@@ -532,6 +565,8 @@ export interface CustomerJSONRecord {
   rate: string
   phone: string
   comments: string
+  /** Quote Notes & Terms. Optional: files from before it was added lack it. */
+  quoteNotes?: string
   spouse: string
   email: string
   contractor: string
@@ -588,6 +623,7 @@ export function exportCustomersToJSON(items: CustomerItem[]): string {
     rate: c.rate,
     phone: c.phone,
     comments: c.comments,
+    quoteNotes: c.quoteNotes,
     spouse: c.spouse,
     email: c.email,
     contractor: c.contractor,
@@ -677,11 +713,7 @@ export async function importCustomersFromJSON(
         rate: r.rate ?? '',
         phone: r.phone ?? '',
         comments: r.comments ?? '',
-        // Deliberately not read from the JSON: both CustomerJSONRecord shapes
-        // match iOS's CustomerJSONTransfer.swift exactly, and that's a
-        // documented cross-platform contract. quoteNotes doesn't round-trip
-        // through a backup until the iOS side adds it too.
-        quoteNotes: '',
+        quoteNotes: r.quoteNotes ?? '',
         spouse: r.spouse ?? '',
         email: r.email ?? '',
         contractor: r.contractor ?? '',

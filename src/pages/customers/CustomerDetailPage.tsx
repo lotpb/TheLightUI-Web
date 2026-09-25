@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getCustomer, deleteCustomer, deactivateCustomer, updateCustomer, setFollowUpDate, setContactAttempts, setCalledFlag } from '../../services/customerService'
+import { getCustomer, deleteCustomer, deactivateCustomer, reactivateCustomer, setFollowUpDate, setContactAttempts, setCalledFlag } from '../../services/customerService'
 import { fullName, displayName, formatCurrency, CATEGORY_LABELS, type CustomerItem, type CustomerCategory } from '../../models/customer'
 import { printCustomer, downloadICS, downloadVCF } from '../../utils/exportUtils'
 import { useToast } from '../../components/Toast'
@@ -394,7 +394,9 @@ export default function CustomerDetailPage() {
       setCustomer({ ...customer, isActive: false, employeeStatus })
     } else {
       const employeeStatus = isEmployee ? 'Active' : customer.employeeStatus
-      await updateCustomer(id, { ...customer, isActive: true, employeeStatus })
+      // Only the flag (and employeeStatus) — this was a full-document write
+      // from the page's copy, which reverted anything edited since it loaded.
+      await reactivateCustomer(id, isEmployee ? { employeeStatus } : {})
       setCustomer({ ...customer, isActive: true, employeeStatus })
     }
   }

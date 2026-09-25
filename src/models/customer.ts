@@ -390,19 +390,77 @@ export function vendorFields(c: Pick<CustomerItem, 'salesman' | 'callback'>): {
 }
 
 /**
- * Firestore keys the record edit form must not write on update.
- *
- * Each is edited elsewhere by a targeted setter — /quote's Notes & Terms,
- * appendCustomerComment, the record page's tag editor, /followups' snooze and
- * complete — and the form has no input for it, so anything it wrote would be
- * the stale value it loaded. followUpDate is the conditional one: the form
- * shows it for vendors, so it's owned there and unowned everywhere else.
- *
- * Create is unaffected — a new record has nothing to overwrite and should get
- * the defaults.
+ * Stamped on every write rather than edited, so they never count as a change
+ * or a conflict.
  */
-export function formUnownedFields(c: Pick<CustomerItem, 'category'>): string[] {
-  const keys = ['quoteNotes', 'comments', 'tags']
-  if (c.category.toLowerCase() !== 'vendor') keys.push('followUpDate')
-  return keys
+const VOLATILE_KEYS = new Set(['lastUpdate', 'uid'])
+
+/** Labels for the conflict prompt. Unlisted keys fall back to the key. */
+export const CUSTOMER_FIELD_LABELS: Record<string, string> = {
+  active: 'Active', first: 'First name', lastname: 'Last name', contractor: 'Contractor',
+  salesman: 'Salesman', job: 'Job', product: 'Product', street: 'Street', city: 'City',
+  state: 'State', zip: 'Zip', phone: 'Phone', amount: 'Amount', email: 'Email', rate: 'Rate',
+  quan: 'Quantity', comments: 'Comments', quoteNotes: 'Quote notes', spouse: 'Spouse',
+  photo: 'Photo', start: 'Start date', completion: 'Completion date', creationDate: 'Created',
+  callback: 'Callback', adNo: 'Ad', birthDate: 'Birth date', driverLicense: "Driver's license",
+  profession: 'Profession', manager: 'Manager', followUpDate: 'Follow-up date', tags: 'Tags',
+  paymentTerms: 'Payment terms', taxId: 'Tax ID', accountNumber: 'Account number',
+  payType: 'Pay type', commissionRate: 'Commission rate', userRole: 'Role',
+  lastLogin: 'Last login', employeeStatus: 'Employee status', leadStatus: 'Lead status',
+  lastContactDate: 'Last contact date', contactAttempts: 'Contact attempts',
+  companyName: 'Company', leadSource: 'Lead source', paymentStatus: 'Payment status',
+  customFields: 'Custom fields', assignedToUid: 'Assigned to', category: 'Category',
+}
+
+/** Structural equality over the value types customerToFirestore produces. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a instanceof Timestamp || b instanceof Timestamp) {
+    return a instanceof Timestamp && b instanceof Timestamp && a.toMillis() === b.toMillis()
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b)
+      && a.length === b.length && a.every((v, i) => sameValue(v, b[i]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const ka = Object.keys(a as object), kb = Object.keys(b as object)
+    return ka.length === kb.length
+      && ka.every(k => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+  }
+  // '' / null / undefined all mean "no value" in this schema — a missing
+  // category and an empty one must not read as a change.
+  const empty = (v: unknown) => v === '' || v === null || v === undefined
+  return a === b || (empty(a) && empty(b))
+}
+
+export interface CustomerEditDiff {
+  /** Fields the user changed, with their new values — the only thing written. */
+  changes: Record<string, unknown>
+  /**
+   * Fields the user changed that someone else also changed, to a different
+   * value, since the form loaded. Writing these would discard the other edit.
+   */
+  conflicts: string[]
+}
+
+/**
+ * Three-way merge for the record edit form.
+ *
+ * `base` is the record as the form loaded it, `mine` is the form now, `theirs`
+ * is the document as it is at save time. Only fields where mine differs from
+ * base are written, so edits made elsewhere to other fields — quote notes,
+ * comments, tags, a snoozed follow-up, another user's phone-number fix — are
+ * kept rather than overwritten with the form's stale copy. Where both sides
+ * changed the same field to different values, it's a conflict for the user to
+ * decide; where both made the same change, it isn't.
+ */
+export function diffCustomerEdit(base: CustomerItem, mine: CustomerItem, theirs: CustomerItem): CustomerEditDiff {
+  const b = customerToFirestore(base), m = customerToFirestore(mine), t = customerToFirestore(theirs)
+  const changes: Record<string, unknown> = {}
+  const conflicts: string[] = []
+  for (const key of new Set([...Object.keys(b), ...Object.keys(m)])) {
+    if (VOLATILE_KEYS.has(key) || sameValue(b[key], m[key])) continue
+    changes[key] = m[key] ?? null
+    if (!sameValue(b[key], t[key]) && !sameValue(m[key], t[key])) conflicts.push(key)
+  }
+  return { changes, conflicts }
 }

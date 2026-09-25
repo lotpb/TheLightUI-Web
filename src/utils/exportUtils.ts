@@ -77,6 +77,8 @@ interface CustomerJSONRecord {
   birthDate: string
   driverLicense: string
   comments: string
+  /** Quote Notes & Terms. Optional: files from before it was added lack it. */
+  quoteNotes?: string
   rate: string
   amount: number
   quantity: number
@@ -139,6 +141,7 @@ export async function exportCustomersJSON(customers: CustomerItem[]) {
     birthDate: c.birthDate,
     driverLicense: c.driverLicense,
     comments: c.comments,
+    ...(c.quoteNotes  ? { quoteNotes: c.quoteNotes }   : {}),
     rate: c.rate,
     amount: c.amount,
     quantity: c.quantity,
@@ -188,8 +191,7 @@ export async function importCustomersJSON(
     birthDate:     r.birthDate     ?? '',
     driverLicense: r.driverLicense ?? '',
     comments:      r.comments      ?? '',
-    // Not in the JSON: this shape matches CustomerJSONTransfer.swift exactly.
-    quoteNotes:    '',
+    quoteNotes:    r.quoteNotes    ?? '',
     rate:          r.rate          ?? '',
     amount:        r.amount        ?? 0,
     quantity:      r.quantity      ?? 0,
