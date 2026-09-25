@@ -1210,15 +1210,17 @@ service cloud.firestore {
       allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == companyId;
     }
 
-    // ── Picker Lists (legacy shared document) ─────────────────────────────────
+    // ── Picker Lists (legacy shared document) — closed ────────────────────────
     //
-    //   Retained for backward compatibility while the migration to
-    //   companies/{companyId}/settings/pickerLists completes.
-    //   Read: any signed-in user. Write: any user with a companyId claim.
+    //   One top-level document shared by every company. Only the iOS app used
+    //   it, and while it was open any signed-in user could read one company's
+    //   salesman, contractor and product names and any company's user could
+    //   rewrite them. Its contents were the owning company's, already present
+    //   (newer) in companies/{companyId}/settings/pickerLists, which is where
+    //   both apps read and write now. Nothing may touch this path.
     //
     match /settings/pickerLists {
-      allow read:  if isSignedIn();
-      allow write: if hasCompanyId() && !isViewer();
+      allow read, write: if false;
     }
 
   }
