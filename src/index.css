@@ -238,6 +238,30 @@ html.light-mode .text-red-400    { color: #b91c1c !important; }
    tuned pill colours are unaffected. */
 html.light-mode .text-yellow-400 { color: #854d0e !important; }
 html.light-mode .text-orange-300 { color: #9a3412 !important; }
+
+/* The 200/300 shades of the status hues had no light-mode variant, so wherever
+   they stood alone they rendered as Tailwind's pastels on a white or near-white
+   surface: 1.0–1.4:1, i.e. invisible. The worst case was /invoices/pipeline and
+   /proposals/pipeline, whose column headings (Sent, Paid, Accepted, Declined,
+   Overdue, Expired) are bare text-{blue,green,red,amber}-300 on a bg-gray-900
+   column — near-white in light mode. Each maps to the lightest shade that clears
+   4.5:1 on all four light surfaces (page #f1f5f9, column #e8eef5, card #fff,
+   chip #d2dce8); lightModeColoredText.test.ts measures them. The composite
+   tint+text rules elsewhere in this file use two classes and still win. */
+html.light-mode .text-blue-200,    html.light-mode .text-blue-300    { color: #1d4ed8 !important; } /* blue-700: 4.83 */
+html.light-mode .text-green-200,   html.light-mode .text-green-300   { color: #166534 !important; } /* green-800: 5.14 */
+html.light-mode .text-red-200,     html.light-mode .text-red-300     { color: #991b1b !important; } /* red-800: 5.99 */
+html.light-mode .text-amber-300                                      { color: #92400e !important; } /* amber-800: 5.11 */
+html.light-mode .text-emerald-200, html.light-mode .text-emerald-300 { color: #065f46 !important; } /* emerald-800: 5.54 */
+html.light-mode .text-violet-200,  html.light-mode .text-violet-300,
+html.light-mode .text-violet-500                                     { color: #6d28d9 !important; } /* violet-700: 5.12 */
+html.light-mode .text-orange-200                                     { color: #9a3412 !important; } /* orange-800: 5.27 */
+html.light-mode .text-indigo-200,  html.light-mode .text-indigo-500  { color: #4338ca !important; } /* indigo-700: 5.70 */
+/* The bulk Delete button on /invoices and /proposals is bg-red-900/60 — a
+   mid-pink in light mode that no dark text clears (red-800: 1.8:1). Solid red
+   with white text instead: 6.47:1. */
+html.light-mode .bg-red-900\/60.text-red-200 { background-color: #b91c1c !important; color: #fff !important; }
+html.light-mode .bg-red-900\/60.text-red-200:hover:not(:disabled) { background-color: #991b1b !important; }
 /* text-teal-400 was the last standalone accent with no light-mode rule, at
    1.86:1 on a white card. It's on ten-plus surfaces — the nav header colour, the
    job pipeline's "In Progress", a pipeline stage colour, and the secondary
