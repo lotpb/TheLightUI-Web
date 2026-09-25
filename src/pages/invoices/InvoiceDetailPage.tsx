@@ -32,7 +32,7 @@ export default function InvoiceDetailPage() {
   const [sharing, setSharing] = useState(false)
   const [qbConnected, setQbConnected] = useState(false)
   const [syncingQb, setSyncingQb] = useState(false)
-  const { canEdit } = usePermissions()
+  const { canEdit, canManageCompany } = usePermissions()
 
   useEffect(() => subscribeToQuickBooksStatus(s => setQbConnected(s.connected), () => {}), [])
 
@@ -444,12 +444,16 @@ export default function InvoiceDetailPage() {
       <div className="no-print card overflow-hidden">
         <div className="px-4 py-2 border-b border-gray-700/50 bg-gray-800/50 flex items-center justify-between">
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Your Company Info</p>
-          <button
-            onClick={() => editCo ? saveCoInfo() : setEditCo(true)}
-            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            {editCo ? 'Save' : 'Edit'}
-          </button>
+          {/* Company details are owner/admin — firestore.rules refuses the
+              write for anyone else, and the toast was all they'd get. */}
+          {canManageCompany && (
+            <button
+              onClick={() => editCo ? saveCoInfo() : setEditCo(true)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              {editCo ? 'Save' : 'Edit'}
+            </button>
+          )}
         </div>
         {editCo ? (
           <div className="p-3 grid grid-cols-2 gap-2">

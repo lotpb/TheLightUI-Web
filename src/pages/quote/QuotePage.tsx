@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getCustomer, setQuoteNotes } from '../../services/customerService'
 import { fullName, formatCurrency, type CustomerItem } from '../../models/customer'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { usePermissions } from '../../hooks/usePermissions'
 import {
   subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile,
 } from '../../services/companyProfileService'
@@ -44,6 +45,7 @@ function WorkRow({ label, value }: { label: string; value: string }) {
 export default function QuotePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { canManageCompany } = usePermissions()
   const [customer, setCustomer] = useState<CustomerItem | null>(null)
   const [loading, setLoading]   = useState(true)
   const [co, setCo]             = useState<CompanyInfo>(EMPTY_PROFILE)
@@ -80,11 +82,19 @@ export default function QuotePage() {
   }, [])
 
   function updateCo(field: keyof CompanyInfo, value: string) {
+    if (!canManageCompany) return
     const next = { ...co, [field]: value }
     setCo(next)
     // Debounce the Firestore write so typing doesn't fire a save per keystroke.
+    // Only the four letterhead fields: `next` is the whole loaded profile, and
+    // writing it back also rewrote smsNumber, reviewLink and the rest from a
+    // copy that may be stale — moving SMS routing if another admin had
+    // changed the number since this page loaded.
+    const { name, address, phone, email } = next
     if (coSaveTimer.current) clearTimeout(coSaveTimer.current)
-    coSaveTimer.current = setTimeout(() => { saveCompanyProfile(next).catch(() => {}) }, 600)
+    coSaveTimer.current = setTimeout(() => {
+      saveCompanyProfile({ name, address, phone, email }).catch(() => {})
+    }, 600)
   }
 
   /**
@@ -171,7 +181,8 @@ export default function QuotePage() {
                   id={`quote-co-${field}`}
                   value={co[field]}
                   onChange={e => updateCo(field, e.target.value)}
-                  className="input-field text-sm py-1.5"
+                  disabled={!canManageCompany}
+                  className="input-field text-sm py-1.5 disabled:opacity-60"
                   placeholder={placeholder}
                 />
               </div>
@@ -179,7 +190,11 @@ export default function QuotePage() {
           </div>
           {/* gray-400 (5.78:1). This was gray-600: 1.94:1 on the card — the
               only thing telling you the fields persist. */}
-          <p className="text-xs text-gray-400 mt-2">Saved automatically — reused on every quote.</p>
+          <p className="text-xs text-gray-400 mt-2">
+            {canManageCompany
+              ? 'Saved automatically — reused on every quote.'
+              : 'Company details are shared across the company — only an owner or admin can change them.'}
+          </p>
         </div>
       </div>
 

@@ -6,6 +6,7 @@ import { usePickerStore } from '../../stores/pickerStore'
 import { useToast } from '../../components/Toast'
 import { Icon, ICONS } from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
+import { usePermissions } from '../../hooks/usePermissions'
 import {
   subscribeToTargets, saveTargets, DEFAULT_GOALS,
   type GoalsMap, type PersonGoals,
@@ -206,6 +207,7 @@ export default function TargetsPage() {
   const labels  = usePickerStore(s => s.labels)
   const smLabel = labels.salesman ?? 'Salesman'
   const toast   = useToast()
+  const { canManageCompany } = usePermissions()
 
   const [all, setAll]         = useState<CustomerItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -463,7 +465,9 @@ export default function TargetsPage() {
 
                   {/* Unassigned is a bucket of records with no owner, so there's
                       nobody to set a goal for. */}
-                  {r.rankable && (
+                  {/* Goals are owner/admin in firestore.rules; the board itself
+                      is for everyone. */}
+                  {r.rankable && canManageCompany && (
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => setEditing(isEditing ? null : r.name)}

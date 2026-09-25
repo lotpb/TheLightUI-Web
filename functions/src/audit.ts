@@ -215,8 +215,35 @@ export const onCompanyProfileWrite = functions.firestore
     const before = change.before.exists ? String(change.before.data()?.['smsNumber'] ?? '') : ''
     const after  = change.after.exists  ? String(change.after.data()?.['smsNumber']  ?? '') : ''
     if (before === after) return null
+    const index = (n: string) => db.collection('smsNumberIndex').doc(n)
 
-    if (before) await db.collection('smsNumberIndex').doc(before).delete().catch(() => {})
-    if (after)  await db.collection('smsNumberIndex').doc(after).set({ companyId })
+    // Only ever release or claim this company's own entry. The index was
+    // last-writer-wins: another company setting this company's number took
+    // its inbound texts, and clearing it again deleted the entry outright, so
+    // the real owner stopped receiving anything. firestore.rules now refuses
+    // that claim; this covers state written before the rule, and races the
+    // rule can't see.
+    if (before) {
+      await db.runTransaction(async tx => {
+        const snap = await tx.get(index(before))
+        if (snap.exists && snap.data()?.['companyId'] === companyId) tx.delete(index(before))
+      }).catch(() => {})
+    }
+    if (after) {
+      const claimed = await db.runTransaction(async tx => {
+        const snap = await tx.get(index(after))
+        const owner = snap.exists ? String(snap.data()?.['companyId'] ?? '') : ''
+        if (owner && owner !== companyId) return false
+        tx.set(index(after), { companyId })
+        return true
+      })
+      if (!claimed) {
+        // Outbound texts read smsNumber straight off the profile, so leaving
+        // it would still send as the other company. Clear it, and keep what
+        // was attempted for the audit trail.
+        console.warn(`onCompanyProfileWrite: ${companyId} tried to claim ${after}, already indexed to another company`)
+        await change.after.ref.update({ smsNumber: '', smsNumberRejected: after })
+      }
+    }
     return null
   })

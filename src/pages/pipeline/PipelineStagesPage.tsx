@@ -11,12 +11,14 @@ import {
 import { categoryMatches } from '../../models/customer'
 import { useToast } from '../../components/Toast'
 import ConfirmModal from '../../components/ConfirmModal'
+import { usePermissions } from '../../hooks/usePermissions'
 
 const KIND_LABELS: Record<StageKind, string> = { open: 'Normal', won: 'Marks Won', lost: 'Marks Lost' }
 
 export default function PipelineStagesPage() {
   usePageTitle('Pipeline Stages')
   const toast = useToast()
+  const { canManageCompany } = usePermissions()
   const { items: customers } = useSharedCustomers()
 
   const [stages, setStages] = useState<PipelineStageConfig[]>(DEFAULT_STAGES)
@@ -126,6 +128,16 @@ export default function PipelineStagesPage() {
         </Link>
       </div>
 
+      {!canManageCompany && (
+        <p className="text-sm text-gray-400">
+          These stages are shared by your whole company — only an owner or admin can change them.
+        </p>
+      )}
+
+      {/* disabled reaches every input and button inside: the stages are
+          owner/admin in firestore.rules, so for anyone else each control was a
+          save that failed. min-w-0 cancels fieldset's min-content width. */}
+      <fieldset disabled={!canManageCompany} className="space-y-5 min-w-0">
       {/* Was a hardcoded STALE_DAYS = 7 in PipelinePage, inside a feature
           whose stages are otherwise fully configurable. */}
       <div className="card p-4">
@@ -240,6 +252,7 @@ export default function PipelineStagesPage() {
           + Add Stage
         </button>
       </div>
+      </fieldset>
 
       <div className="text-xs text-gray-500 space-y-1">
         <p>• <span className="text-gray-400">Marks Won</span> converts the record to a Customer when dropped here. Only one stage can hold this role.</p>

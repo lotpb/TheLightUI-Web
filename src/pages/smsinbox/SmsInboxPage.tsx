@@ -24,7 +24,7 @@ import { Icon, ICONS } from '../../components/Icon'
 export default function SmsInboxPage() {
   usePageTitle('Text Inbox')
   const toast = useToast()
-  const { canEdit } = usePermissions()
+  const { canEdit, canManageCompany } = usePermissions()
   const { items: customers } = useSharedCustomers()
 
   const [messages, setMessages] = useState<SmsMessage[]>([])
@@ -124,8 +124,15 @@ export default function SmsInboxPage() {
     try {
       await saveCompanyProfile({ ...profile, smsNumber: value })
       toast(value ? `Texts to ${formatPhone(value)} will arrive here` : 'SMS number cleared', 'success')
-    } catch {
-      toast('Could not save SMS number', 'error')
+    } catch (err) {
+      // The UI only offers Save to owners/admins, so a refusal here is the
+      // rule that stops one company claiming another's number.
+      toast(
+        (err as { code?: string })?.code === 'permission-denied'
+          ? `${formatPhone(value)} is already connected to another company.`
+          : 'Could not save SMS number',
+        'error',
+      )
     } finally {
       setSaving(false)
     }
@@ -194,11 +201,12 @@ export default function SmsInboxPage() {
               placeholder="+15551234567"
               aria-invalid={!numberValid}
               aria-describedby="sms-number-hint"
-              className={`input-field text-sm flex-1 ${!numberValid ? 'border-red-500' : ''}`}
+              disabled={!canManageCompany}
+              className={`input-field text-sm flex-1 disabled:opacity-60 ${!numberValid ? 'border-red-500' : ''}`}
             />
             <button
               onClick={handleSaveNumber}
-              disabled={saving || !numberValid}
+              disabled={saving || !numberValid || !canManageCompany}
               className="btn-primary text-sm px-4 py-2 disabled:opacity-40"
             >
               {saving ? 'Saving…' : 'Save'}

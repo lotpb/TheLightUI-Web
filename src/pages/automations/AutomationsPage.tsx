@@ -15,6 +15,7 @@ import {
 } from '../../models/automationRule'
 import { subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
 import { useToast } from '../../components/Toast'
+import { usePermissions } from '../../hooks/usePermissions'
 
 function emptyTrigger(): AutomationTrigger {
   return { entityType: 'customer', field: 'category', type: 'changes_to', value: 'Customer' }
@@ -74,6 +75,7 @@ function entityHref(entry: AutomationLogEntry): string {
 export default function AutomationsPage() {
   usePageTitle('Automation Rules')
   const toast = useToast()
+  const { canManageCompany } = usePermissions()
 
   const [rules, setRules] = useState<AutomationRule[]>([])
   const [log, setLog]     = useState<AutomationLogEntry[]>([])
@@ -276,11 +278,12 @@ export default function AutomationsPage() {
             value={reviewLink}
             onChange={e => setReviewLink(e.target.value)}
             placeholder="https://g.page/r/.../review or your Yelp review link"
-            className="input-field text-sm flex-1"
+            disabled={!canManageCompany}
+            className="input-field text-sm flex-1 disabled:opacity-60"
           />
           <button
             onClick={handleSaveReviewLink}
-            disabled={savingReviewLink}
+            disabled={savingReviewLink || !canManageCompany}
             className="btn-secondary inline-flex items-center gap-1.5 text-sm px-3 py-1.5 shrink-0 disabled:opacity-50"
           >
             {savingReviewLink && <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}

@@ -1200,14 +1200,46 @@ service cloud.firestore {
                     && resource.data.get('companyId', '') == claimedCompanyId();
     }
 
-    // ── Company Settings (Picker Lists) ───────────────────────────────────────
+    // ── Company Settings ──────────────────────────────────────────────────────
     //
-    //   Per-company settings at companies/{companyId}/settings/{doc}.
-    //   Full read/write restricted to the owning company.
+    //   Per-company settings at companies/{companyId}/settings/{doc}, readable
+    //   by the owning company. Writes were one rule for every document — any
+    //   non-viewer could write any of them — so a salesman could rewrite the
+    //   letterhead shown on invoices and public pages, or forge the Stripe,
+    //   QuickBooks, financing and Facebook status docs the settings pages
+    //   display. Now each document names who may write it; anything unlisted
+    //   is denied.
     //
+    //   Team working state, any non-viewer: pickerLists (iOS adds salesmen
+    //   and jobs from the form), onboarding, duplicateDismissals.
+    //   Company configuration, owner/admin: profile, pipelineStages, targets.
+    //   Server-only (Cloud Functions, Admin SDK): stripeConnectStatus,
+    //   quickbooksStatus, financingStatus, facebookStatus.
+    //
+    //   profile.smsNumber also routes inbound texts through smsNumberIndex,
+    //   which was first-writer-loses: any company could set another's Twilio
+    //   number and take its inbound texts (and send as it). A number already
+    //   indexed to another company can't be claimed.
+    //
+    function smsNumberClaimable(companyId) {
+      let next = request.resource.data.get('smsNumber', '');
+      let prev = resource == null ? '' : resource.data.get('smsNumber', '');
+      let idx  = /databases/$(database)/documents/smsNumberIndex/$(next);
+      return next == '' || next == prev || !exists(idx)
+          || get(idx).data.get('companyId', '') == companyId;
+    }
+
     match /companies/{companyId}/settings/{settingId} {
       allow read:  if hasCompanyId() && claimedCompanyId() == companyId;
-      allow write: if hasCompanyId() && !isViewer() && claimedCompanyId() == companyId;
+
+      allow write: if hasCompanyId() && claimedCompanyId() == companyId && !isViewer()
+                   && settingId in ['pickerLists', 'onboarding', 'duplicateDismissals'];
+
+      allow create, update: if hasCompanyId() && claimedCompanyId() == companyId && canManageTeam()
+                   && settingId in ['profile', 'pipelineStages', 'targets']
+                   && (settingId != 'profile' || smsNumberClaimable(companyId));
+      allow delete: if hasCompanyId() && claimedCompanyId() == companyId && canManageTeam()
+                   && settingId in ['profile', 'pipelineStages', 'targets'];
     }
 
     // ── Picker Lists (legacy shared document) — closed ────────────────────────

@@ -12,6 +12,7 @@ import type { SigningDocSnapshot } from '../../models/signingRequest'
 import { useAuthStore } from '../../stores/authStore'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useToast } from '../../components/Toast'
+import { usePermissions } from '../../hooks/usePermissions'
 import { subscribeToCompanyProfile, saveCompanyProfile, EMPTY_PROFILE, type CompanyProfile } from '../../services/companyProfileService'
 import { PUBLIC_COLORS as C } from '../../models/publicTheme'
 
@@ -30,6 +31,7 @@ export default function DocTemplatePreviewPage() {
   const [signLink,   setSignLink]   = useState<string | null>(null)
   const [signSending, setSignSending] = useState(false)
   const toast = useToast()
+  const { canManageCompany } = usePermissions()
 
   useEffect(() => subscribeToCompanyProfile(setCo, () => {}), [])
 
@@ -130,10 +132,15 @@ export default function DocTemplatePreviewPage() {
    * becomes the signed agreement.
    */
   function updateCo(field: keyof CompanyProfile, value: string) {
+    if (!canManageCompany) return
     const next = { ...co, [field]: value }
     setCo(next)
+    // Letterhead fields only — see QuotePage.updateCo.
+    const { name, address, phone, email } = next
     if (coSaveTimer.current) clearTimeout(coSaveTimer.current)
-    coSaveTimer.current = setTimeout(() => { saveCompanyProfile(next).catch(() => {}) }, 600)
+    coSaveTimer.current = setTimeout(() => {
+      saveCompanyProfile({ name, address, phone, email }).catch(() => {})
+    }, 600)
   }
 
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -224,13 +231,19 @@ export default function DocTemplatePreviewPage() {
                   id={`doc-co-${field}`}
                   value={co[field]}
                   onChange={e => updateCo(field, e.target.value)}
-                  className="input-field text-sm py-1.5"
+                  disabled={!canManageCompany}
+                  className="input-field text-sm py-1.5 disabled:opacity-60"
                   placeholder={placeholder}
                 />
               </div>
             ))}
           </div>
-          <p className="text-xs text-gray-600 mt-2">Saved automatically — shared with quotes.</p>
+          {/* gray-400: gray-600 was 1.94:1 on the card. */}
+          <p className="text-xs text-gray-400 mt-2">
+            {canManageCompany
+              ? 'Saved automatically — shared with quotes.'
+              : 'Company details are shared across the company — only an owner or admin can change them.'}
+          </p>
         </div>
 
         {/* Customer picker */}
