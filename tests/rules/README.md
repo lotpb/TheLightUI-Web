@@ -22,6 +22,7 @@ regular `npm test` does **not** include these — it stays emulator-free and fas
 | `companyScoped.test.ts` | The ~35 collections carrying a `companyId` field |
 | `docIdScoped.test.ts` | Collections where the document ID *is* the companyId |
 | `publicTokens.test.ts` | Customer-facing token links and invites |
+| `publicIntake.test.ts` | Anonymous service requests and lead-form submissions, built as the real clients build them |
 | `internal.test.ts` | Credential/index collections no client may touch |
 | `users.test.ts` | Profiles, roles, and the mirrored chat collections |
 
@@ -65,7 +66,11 @@ weaker copy:
   move a record into another company.
 - **Combined `allow update, delete` can't check `request.resource`** (a delete
   has none), so split the two when the update needs that constraint.
-- **Public write paths must bound their affected keys.** `publicProposals`,
-  `signingRequests`, and `invites` all accept writes from callers who aren't
-  team members; each uses `affectedKeys().hasOnly(...)` to keep a narrow
-  status/consumption transition from becoming an arbitrary edit.
+- **Public write paths must bound their affected keys.** `publicProposals` and
+  `signingRequests` accept updates from callers who aren't team members; each
+  uses `affectedKeys().hasOnly(...)` to keep a narrow status transition from
+  becoming an arbitrary edit.
+- **Public creates must match an exact shape and prove an entry point.**
+  `serviceRequests` needs a live portal token for the same company and
+  customer; `leadSubmissions` needs an enabled lead form. Both fix `status` to
+  `'new'` so a submitter can't pre-qualify themselves.

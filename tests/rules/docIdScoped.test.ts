@@ -75,23 +75,25 @@ describe.each(SPECS)('$name', (spec) => {
   })
 })
 
-describe('settings/pickerLists (legacy shared document)', () => {
+describe('settings/pickerLists (retired shared document)', () => {
   const path = 'settings/pickerLists'
 
-  // This document predates multi-tenancy and is intentionally shared across
-  // every company while the migration to companies/{id}/settings finishes.
-  // Pinned here so the blast radius is visible if the rule is ever copied.
-  it('is readable by any signed-in user regardless of company', async () => {
+  // This document predated multi-tenancy and was shared by every company, so
+  // one tenant's edit rewrote every tenant's lists. Picker lists now live at
+  // companies/{id}/settings/pickerLists and this path is closed outright —
+  // pinned here so it can't be quietly reopened.
+  it('denies reads to a signed-in owner', async () => {
     await seedDoc(env, path, { leadStatus: ['New'] })
-    await assertSucceeds(getDoc(doc(asUser(env, BOB).firestore(), path)))
+    await assertFails(getDoc(doc(asUser(env, ALICE).firestore(), path)))
   })
 
-  it('is writable by any user with a companyId claim', async () => {
-    await assertSucceeds(setDoc(doc(asUser(env, BOB).firestore(), path), { leadStatus: ['New'] }))
+  it('denies reads from another company', async () => {
+    await seedDoc(env, path, { leadStatus: ['New'] })
+    await assertFails(getDoc(doc(asUser(env, BOB).firestore(), path)))
   })
 
-  it('denies writes by a viewer', async () => {
-    await assertFails(setDoc(doc(asUser(env, VIEWER_A).firestore(), path), { leadStatus: ['New'] }))
+  it('denies writes even to an owner', async () => {
+    await assertFails(setDoc(doc(asUser(env, ALICE).firestore(), path), { leadStatus: ['New'] }))
   })
 
   it('denies anonymous reads', async () => {

@@ -207,6 +207,40 @@ describe('invites', () => {
     }))
   })
 
+  // Revoking is the one client write left, and it's a team-management action.
+  // Mirrors inviteService.revokeInvite.
+  const revoke = { revoked: true, revokedAt: new Date() }
+
+  it('lets an owner revoke an unused invite', async () => {
+    await seedDoc(env, path, invite)
+    await assertSucceeds(updateDoc(doc(asUser(env, ALICE).firestore(), path), revoke))
+  })
+
+  it('lets an admin revoke an unused invite', async () => {
+    await seedDoc(env, path, invite)
+    await assertSucceeds(updateDoc(doc(asUser(env, ADMIN_A).firestore(), path), revoke))
+  })
+
+  it('denies a salesman revoking an invite', async () => {
+    await seedDoc(env, path, invite)
+    await assertFails(updateDoc(doc(asUser(env, SALES_A).firestore(), path), revoke))
+  })
+
+  it('denies another company revoking the invite', async () => {
+    await seedDoc(env, path, invite)
+    await assertFails(updateDoc(doc(asUser(env, BOB).firestore(), path), revoke))
+  })
+
+  it('denies revoking an invite that was already used', async () => {
+    await seedDoc(env, path, { ...invite, used: true })
+    await assertFails(updateDoc(doc(asUser(env, ALICE).firestore(), path), revoke))
+  })
+
+  it('denies an owner changing the role while revoking', async () => {
+    await seedDoc(env, path, invite)
+    await assertFails(updateDoc(doc(asUser(env, ALICE).firestore(), path), { ...revoke, role: 'owner' }))
+  })
+
   it('denies smuggling a role change into the consumption write', async () => {
     await seedDoc(env, path, invite)
     await assertFails(updateDoc(doc(asUser(env, BOB).firestore(), path), {

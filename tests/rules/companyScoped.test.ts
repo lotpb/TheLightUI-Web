@@ -161,9 +161,14 @@ describe.each(SPECS)('$name', (spec) => {
       await assertFails(setDoc(doc(db, `${spec.name}/new-doc`), { ...base, companyId: COMPANY_A }))
     })
   } else if (spec.publicCreate) {
-    it('allows an anonymous create (public intake form)', async () => {
+    // Public intake used to accept any anonymous write carrying a companyId.
+    // It now requires the exact intake shape plus proof of a live entry point
+    // (a portal token, an open lead form), so a bare write must be refused.
+    // The accepted-payload cases live in publicIntake.test.ts, where each can
+    // be built the way its real client builds it.
+    it('denies a bare anonymous create (must match the full intake shape)', async () => {
       const db = asAnonymous(env).firestore()
-      await assertSucceeds(setDoc(doc(db, `${spec.name}/new-doc`), { ...base, companyId: COMPANY_A }))
+      await assertFails(setDoc(doc(db, `${spec.name}/new-doc`), { ...base, companyId: COMPANY_A }))
     })
   } else {
     it('lets a member create with their own companyId', async () => {
