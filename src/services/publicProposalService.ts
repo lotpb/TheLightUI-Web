@@ -3,7 +3,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { getCompanyId } from '../stores/authStore'
-import type { Proposal, ProposalLineItem } from '../models/proposal'
+import { clampDepositPercent, type Proposal, type ProposalLineItem } from '../models/proposal'
 
 const PUBLIC_COL = 'publicProposals'
 
@@ -35,6 +35,8 @@ export interface PublicProposalSnapshot {
   sharedAt: Date
   financingApplyUrl: string | null
   financingStatus: string | null
+  depositPercent: number
+  depositPaidAmount: number | null
 }
 
 function toDate(v: unknown): Date {
@@ -88,6 +90,10 @@ export async function generateShareToken(
     sharedAt:    serverTimestamp(),
     financingApplyUrl,
     financingStatus,
+    // setDoc replaces the doc, so a re-share must carry the paid deposit
+    // forward from the proposal or the customer is asked to pay it again.
+    depositPercent:    clampDepositPercent(proposal.depositPercent),
+    depositPaidAmount: proposal.depositPaidAmount ?? null,
   })
 
   if (!proposal.shareToken) {
@@ -127,6 +133,8 @@ export async function getPublicProposal(token: string): Promise<PublicProposalSn
     sharedAt: toDate(d.sharedAt),
     financingApplyUrl: d.financingApplyUrl ? String(d.financingApplyUrl) : null,
     financingStatus:   d.financingStatus   ? String(d.financingStatus)   : null,
+    depositPercent:    clampDepositPercent(d.depositPercent),
+    depositPaidAmount: d.depositPaidAmount != null ? Number(d.depositPaidAmount) : null,
   }
 }
 

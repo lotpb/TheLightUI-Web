@@ -37,6 +37,7 @@ export interface PublicInvoiceSnapshot {
   paymentLink: string | null
   financingApplyUrl: string | null
   financingStatus: string | null
+  depositCredit: number | null
 }
 
 function toDate(v: unknown): Date {
@@ -94,6 +95,7 @@ export async function generateShareToken(
     paymentLink:     invoice.paymentLink ?? null,
     financingApplyUrl,
     financingStatus,
+    depositCredit:   invoice.depositCredit ?? null,
   })
 
   if (!invoice.shareToken) {
@@ -135,5 +137,6 @@ export async function getPublicInvoice(token: string): Promise<PublicInvoiceSnap
     paymentLink: d.paymentLink ? String(d.paymentLink) : null,
     financingApplyUrl: d.financingApplyUrl ? String(d.financingApplyUrl) : null,
     financingStatus:   d.financingStatus   ? String(d.financingStatus)   : null,
+    depositCredit: d.depositCredit != null ? Number(d.depositCredit) : null,
   }
 }

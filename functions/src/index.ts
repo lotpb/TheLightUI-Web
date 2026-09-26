@@ -20,6 +20,7 @@ export {
   createStripeCheckout,
   stripeWebhook,
   stripeConnectStart,
+  createProposalDepositCheckout,
   stripeConnectCallback,
   stripeConnectDisconnect,
   stripeConnectWebhook,

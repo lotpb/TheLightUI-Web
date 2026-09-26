@@ -5,7 +5,7 @@ import { getProposal, updateProposal, deleteProposal, convertProposalToInvoice }
 import { generateShareToken } from '../../services/publicProposalService'
 import {
   effectiveStatus, fmtCurrency, proposalSubtotal, proposalTaxAmount, proposalTotal,
-  lineItemTotal, statusClasses, statusLabel,
+  lineItemTotal, proposalDepositAmount, statusClasses, statusLabel,
   type Proposal,
 } from '../../models/proposal'
 import { useToast } from '../../components/Toast'
@@ -398,6 +398,16 @@ export default function ProposalDetailPage() {
               <span>Total</span>
               <span>{fmtCurrency(total)}</span>
             </div>
+            {proposalDepositAmount(proposal) > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', color: '#374151', fontSize: '14px' }}>
+                <span>Deposit ({proposal.depositPercent}%)</span>
+                <span>
+                  {proposal.depositPaidAmount != null
+                    ? `${fmtCurrency(proposal.depositPaidAmount)} paid${proposal.depositPaidAt ? ` ${proposal.depositPaidAt.toLocaleDateString()}` : ''}`
+                    : `${fmtCurrency(proposalDepositAmount(proposal))} due`}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

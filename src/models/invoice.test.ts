@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   lineItemTotal, invoiceSubtotal, invoiceTaxAmount, invoiceTotal,
-  effectiveStatus, generateInvoiceNumber, invoiceKpis, sortInvoices,
+  effectiveStatus, generateInvoiceNumber, invoiceKpis, sortInvoices, invoiceAmountDue,
   DEFAULT_INVOICE_SORT, INVOICE_SORTS,
   type Invoice, type InvoiceLineItem, type InvoiceSortKey,
 } from './invoice'
@@ -314,5 +314,40 @@ describe('sortInvoices', () => {
 describe('generateInvoiceNumber', () => {
   it('matches the INV-YYYYMM-#### format', () => {
     expect(generateInvoiceNumber()).toMatch(/^INV-\d{6}-\d{4}$/)
+  })
+})
+
+describe('deposit credit', () => {
+  it('invoiceAmountDue subtracts the deposit and never goes negative', () => {
+    expect(invoiceAmountDue(makeInvoice())).toBe(100)
+    expect(invoiceAmountDue(makeInvoice({ depositCredit: 30 }))).toBe(70)
+    expect(invoiceAmountDue(makeInvoice({ depositCredit: 500 }))).toBe(0)
+  })
+
+  it('counts a deposit on an open invoice as paid, leaving only the balance outstanding', () => {
+    const now = new Date('2026-01-15')
+    const k = invoiceKpis([makeInvoice({ depositCredit: 30 })], now)
+    expect(k.billed).toBe(100)
+    expect(k.paid).toBe(30)
+    expect(k.outstanding).toBe(70)
+  })
+
+  it('reports only the balance as overdue', () => {
+    const now = new Date('2026-03-01')
+    const k = invoiceKpis([makeInvoice({ depositCredit: 30 })], now)
+    expect(k.overdue).toBe(70)
+    expect(k.outstanding).toBe(70)
+  })
+
+  it('does not double-count the deposit once the invoice is paid', () => {
+    const k = invoiceKpis([makeInvoice({ status: 'paid', depositCredit: 30 })])
+    expect(k.paid).toBe(100)
+    expect(k.outstanding).toBe(0)
+  })
+
+  it('leaves drafts out of paid even with a deposit', () => {
+    const k = invoiceKpis([makeInvoice({ status: 'draft', depositCredit: 30 })])
+    expect(k.paid).toBe(0)
+    expect(k.draft).toBe(100)
   })
 })

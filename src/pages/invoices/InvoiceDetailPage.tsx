@@ -4,7 +4,7 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 import { getInvoice, updateInvoice, deleteInvoice } from '../../services/invoiceService'
 import { generateShareToken } from '../../services/publicInvoiceService'
 import {
-  effectiveStatus, fmtCurrency, invoiceSubtotal, invoiceTaxAmount, invoiceTotal,
+  effectiveStatus, fmtCurrency, invoiceAmountDue, invoiceSubtotal, invoiceTaxAmount, invoiceTotal,
   lineItemTotal, statusClasses, statusLabel,
   type Invoice,
 } from '../../models/invoice'
@@ -303,6 +303,7 @@ export default function InvoiceDetailPage() {
       <div class="subtotal-line"><span>Subtotal</span><span>${fmtCurrency(subtotal, invoice.currency)}</span></div>
       ${invoice.taxRate > 0 ? `<div class="subtotal-line"><span>Tax (${invoice.taxRate}%)</span><span>${fmtCurrency(taxAmt, invoice.currency)}</span></div>` : ''}
       <div class="total-line"><span>Total</span><span>${fmtCurrency(total, invoice.currency)}</span></div>
+      ${invoice.depositCredit ? `<div class="subtotal-line"><span>Deposit received</span><span>−${fmtCurrency(invoice.depositCredit, invoice.currency)}</span></div><div class="subtotal-line"><strong>Balance due</strong><strong>${fmtCurrency(invoiceAmountDue(invoice), invoice.currency)}</strong></div>` : ''}
     </div>
   </div>
 
@@ -722,6 +723,18 @@ export default function InvoiceDetailPage() {
               <span>Total</span>
               <span>{fmtCurrency(total, invoice.currency)}</span>
             </div>
+            {!!invoice.depositCredit && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', color: '#6b7280', fontSize: '14px' }}>
+                  <span>Deposit received</span>
+                  <span>−{fmtCurrency(invoice.depositCredit, invoice.currency)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '6px', fontWeight: 700, fontSize: '15px', color: '#111827' }}>
+                  <span>Balance due</span>
+                  <span>{fmtCurrency(invoiceAmountDue(invoice), invoice.currency)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

@@ -117,6 +117,7 @@ export default function PublicInvoicePage() {
   const sub = subtotal(invoice)
   const tax = taxAmount(invoice)
   const tot = total(invoice)
+  const credit = invoice.depositCredit ?? 0
   const isPaid = invoice.status === 'paid' || justPaid
   const badge = invoiceBadge(isPaid ? 'paid' : invoice.status, invoice.dueDate)
 
@@ -252,6 +253,16 @@ export default function PublicInvoicePage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `2px solid ${C.ink}`, paddingTop: 10, marginTop: 4, fontWeight: 700, fontSize: 20, color: C.ink }}>
               <span>Total</span><span>{fmtCurrency(tot, invoice.currency)}</span>
             </div>
+            {credit > 0 && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, color: C.inkSubtle, fontSize: 14 }}>
+                  <span>Deposit received</span><span>−{fmtCurrency(credit, invoice.currency)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 6, fontWeight: 700, fontSize: 16, color: C.ink }}>
+                  <span>Balance due</span><span>{fmtCurrency(Math.max(0, tot - credit), invoice.currency)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

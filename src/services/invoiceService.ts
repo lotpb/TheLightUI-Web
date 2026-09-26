@@ -88,6 +88,7 @@ function docToInvoice(id: string, data: Record<string, unknown>): Invoice {
     currency: String(data.currency ?? 'USD'),
     quickbooksInvoiceId: data.quickbooksInvoiceId ? String(data.quickbooksInvoiceId) : null,
     financingApplicationId: data.financingApplicationId ? String(data.financingApplicationId) : null,
+    depositCredit: data.depositCredit != null ? Number(data.depositCredit) : null,
   }
 }
 
@@ -151,6 +152,7 @@ export async function createInvoice(
     recurringPaused: inv.recurringPaused === true,
     nextRecurDate:  inv.nextRecurDate  ? Timestamp.fromDate(inv.nextRecurDate)  : null,
     generatedFrom:  inv.generatedFrom  ?? null,
+    depositCredit:  inv.depositCredit  ?? null,
     createdAt:  serverTimestamp(),
     updatedAt:  serverTimestamp(),
     createdByName: getCurrentUserLabel().name,

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { getPublicProposal, respondToProposal, type PublicProposalSnapshot } from '../../services/publicProposalService'
-import { fmtCurrency, lineItemTotal } from '../../models/proposal'
+import { fmtCurrency, lineItemTotal, proposalDepositAmount } from '../../models/proposal'
 import { isSafeHttpUrl } from '../../utils/safeUrl'
 import {
   PUBLIC_COLORS as C, PUBLIC_FONT, fmtPublicDate, publicBadge,
@@ -36,6 +37,12 @@ function proposalBadge(status: string, expiresDate: Date) {
 
 export default function PublicProposalPage() {
   const { token } = useParams<{ token: string }>()
+  const [searchParams] = useSearchParams()
+  // Stripe's success_url. The webhook, not this flag, records the payment —
+  // this only stops the page offering to charge again before it lands.
+  const justPaidDeposit = searchParams.get('deposit') === '1'
+  const [payingDeposit, setPayingDeposit] = useState(false)
+  const [depositError, setDepositError] = useState<string | null>(null)
   const [proposal, setProposal] = useState<PublicProposalSnapshot | null>(null)
   const [loading, setLoading]   = useState(true)
   const [responding, setResponding] = useState(false)
@@ -70,8 +77,26 @@ export default function PublicProposalPage() {
       setProposal({ ...proposal, status: response })
     } catch {
       setRespondError('Could not submit your response. Please try again or contact us directly.')
-    } finally {
       setResponding(false)
+      return
+    }
+    setResponding(false)
+    // Straight on to the deposit. If this fails the accept still stands and
+    // the page keeps offering the Pay button below.
+    if (response === 'accepted' && proposalDepositAmount(proposal) > 0) await handlePayDeposit()
+  }
+
+  async function handlePayDeposit() {
+    if (!token) return
+    setPayingDeposit(true)
+    setDepositError(null)
+    try {
+      const fn = httpsCallable<{ token: string }, { url: string }>(getFunctions(), 'createProposalDepositCheckout')
+      const { data } = await fn({ token })
+      window.location.href = data.url
+    } catch (err) {
+      setDepositError((err as { message?: string }).message || 'Could not start the deposit payment. Please try again.')
+      setPayingDeposit(false)
     }
   }
 
@@ -114,6 +139,9 @@ export default function PublicProposalPage() {
   const isExpired = proposal.status === 'sent' && proposal.expiresDate < now
   const canRespond = proposal.status === 'sent' && !isExpired
   const badge = proposalBadge(proposal.status, proposal.expiresDate)
+  const deposit = proposalDepositAmount(proposal)
+  const depositPaid = proposal.depositPaidAmount != null || justPaidDeposit
+  const depositDue = proposal.status === 'accepted' && deposit > 0 && !depositPaid
 
   return (
     <div style={{ minHeight: '100vh', background: C.page, fontFamily: PUBLIC_FONT, padding: '24px 16px 48px' }}>
@@ -123,8 +151,28 @@ export default function PublicProposalPage() {
           <PublicGlyph d={ICONS.checkCircle} size={20} color="#166534" />
           <div>
             <p style={{ margin: 0, fontWeight: 700, color: '#166534', fontSize: 14 }}>You accepted this proposal — thank you!</p>
-            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#166534' }}>We'll be in touch shortly to get started.</p>
+            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#166534' }}>
+              {depositDue
+                ? `A ${fmtCurrency(deposit)} deposit is due to get started.`
+                : deposit > 0
+                  ? `Deposit of ${fmtCurrency(proposal.depositPaidAmount ?? deposit)} received. We'll be in touch shortly to get started.`
+                  : "We'll be in touch shortly to get started."}
+            </p>
           </div>
+        </div>
+      )}
+      {depositDue && (
+        <div className="no-print" style={{ maxWidth: 680, margin: '0 auto 16px', textAlign: 'center' }}>
+          <button
+            onClick={handlePayDeposit}
+            disabled={payingDeposit}
+            aria-busy={payingDeposit}
+            style={{ padding: '11px 28px', borderRadius: 10, border: 'none', background: payingDeposit ? '#6b7280' : C.positive, color: 'white', fontSize: 15, fontWeight: 700, cursor: payingDeposit ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
+            <PublicGlyph d={ICONS.currencyDollar} size={15} color="white" />
+            {payingDeposit ? 'Opening secure checkout…' : `Pay ${fmtCurrency(deposit)} deposit`}
+          </button>
+          {depositError && <p role="alert" style={{ margin: '8px 0 0', fontSize: 13, color: C.danger }}>{depositError}</p>}
         </div>
       )}
       {proposal.status === 'declined' && (
@@ -233,6 +281,11 @@ export default function PublicProposalPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `2px solid ${C.ink}`, paddingTop: 10, marginTop: 4, fontWeight: 700, fontSize: 20, color: C.ink }}>
               <span>Total</span><span>{fmtCurrency(tot)}</span>
             </div>
+            {deposit > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, color: C.inkMuted, fontSize: 14 }}>
+                <span>Deposit due on acceptance ({proposal.depositPercent}%)</span><span>{fmtCurrency(deposit)}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -255,7 +308,9 @@ export default function PublicProposalPage() {
                 </p>
                 <p style={{ fontSize: 13, color: C.inkSubtle, margin: '0 0 16px' }}>
                   {confirming === 'accepted'
-                    ? 'This tells us to go ahead. You can\u2019t undo it here — contact us if you change your mind.'
+                    ? deposit > 0
+                      ? `This tells us to go ahead, and takes you to pay the ${fmtCurrency(deposit)} deposit. You can\u2019t undo it here — contact us if you change your mind.`
+                      : 'This tells us to go ahead. You can\u2019t undo it here — contact us if you change your mind.'
                     : 'You can\u2019t undo this here. Contact us if you\u2019d like to discuss instead.'}
                 </p>
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>

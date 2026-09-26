@@ -28,6 +28,18 @@ export interface Proposal {
   convertedInvoiceId?: string | null
   lastReminderSentAt?: Date | null
   financingApplicationId?: string | null
+  /**
+   * Share of the total collected up front when the customer accepts online,
+   * 0–100. 0 or absent means no deposit — the accept flow is unchanged.
+   */
+  depositPercent?: number
+  /**
+   * What Stripe actually charged for the deposit, in dollars. Written only by
+   * the Stripe webhook, from the session's amount_total — never recomputed
+   * from depositPercent, because line items can be edited after payment.
+   */
+  depositPaidAmount?: number | null
+  depositPaidAt?: Date | null
 }
 
 export function lineItemTotal(item: ProposalLineItem): number {
@@ -44,6 +56,25 @@ export function proposalTaxAmount(p: Pick<Proposal, 'lineItems' | 'taxRate'>): n
 
 export function proposalTotal(p: Pick<Proposal, 'lineItems' | 'taxRate'>): number {
   return proposalSubtotal(p) + proposalTaxAmount(p)
+}
+
+/**
+ * The deposit owed on acceptance, rounded to the cent, or 0 for none.
+ *
+ * The same rounding runs server-side in createProposalDepositCheckout — keep
+ * the two in step, or the page quotes one figure and Stripe charges another.
+ */
+export function proposalDepositAmount(p: Pick<Proposal, 'lineItems' | 'taxRate' | 'depositPercent'>): number {
+  const pct = clampDepositPercent(p.depositPercent)
+  if (pct === 0) return 0
+  return Math.round(proposalTotal(p) * pct) / 100
+}
+
+/** Non-numbers, negatives and >100 all mean something went wrong upstream. */
+export function clampDepositPercent(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.min(100, n)
 }
 
 // A 'sent' proposal past its expiry date is treated as expired everywhere in

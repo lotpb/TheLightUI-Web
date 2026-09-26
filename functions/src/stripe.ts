@@ -45,7 +45,7 @@ export const createStripeCheckout = functions
 
     const origin = 'https://thelightui.web.app'
 
-    const lineItems = (inv.lineItems as { description: string; qty: number; rate: number }[]).map(item => ({
+    const itemized = (inv.lineItems as { description: string; qty: number; rate: number }[]).map(item => ({
       price_data: {
         currency: 'usd',
         product_data: { name: item.description || 'Service' },
@@ -55,9 +55,9 @@ export const createStripeCheckout = functions
     }))
 
     // Add tax as a separate line item if applicable
+    const subtotal = (inv.lineItems as { qty: number; rate: number }[]).reduce((s, l) => s + l.qty * l.rate, 0)
     if (inv.taxRate > 0) {
-      const subtotal = (inv.lineItems as { qty: number; rate: number }[]).reduce((s, l) => s + l.qty * l.rate, 0)
-      lineItems.push({
+      itemized.push({
         price_data: {
           currency: 'usd',
           product_data: { name: `Tax (${inv.taxRate}%)` },
@@ -66,6 +66,26 @@ export const createStripeCheckout = functions
         quantity: 1,
       })
     }
+
+    // A deposit collected on the proposal is already paid. Checkout line
+    // items can't be negative, so a credited invoice is charged as a single
+    // "balance" line rather than itemized with a deduction.
+    const depositCredit = Math.max(0, Number(inv.depositCredit ?? 0) || 0)
+    const totalCents = Math.round(subtotal * (1 + (inv.taxRate > 0 ? inv.taxRate / 100 : 0)) * 100)
+    const balanceCents = totalCents - Math.round(depositCredit * 100)
+    if (depositCredit > 0 && balanceCents <= 0) {
+      throw new functions.https.HttpsError('failed-precondition', 'The deposit already covers this invoice.')
+    }
+    const lineItems = depositCredit > 0
+      ? [{
+          price_data: {
+            currency: 'usd',
+            product_data: { name: `Invoice ${inv.invoiceNumber} balance (after ${fmtUsd(depositCredit)} deposit)` },
+            unit_amount: balanceCents,
+          },
+          quantity: 1,
+        }]
+      : itemized
 
     const sessionParams = {
       payment_method_types: ['card'],
@@ -77,8 +97,7 @@ export const createStripeCheckout = functions
       cancel_url:  `${origin}/i/${token}`,
     }
 
-    const connectSnap = inv.companyId ? await stripeConnectAccountRef(String(inv.companyId)).get() : null
-    const connectedAccountId = connectSnap?.exists ? String(connectSnap.data()?.['accountId'] ?? '') : ''
+    const connectedAccountId = await connectedAccountFor(inv.companyId)
 
     const session = connectedAccountId
       ? await stripe.checkout.sessions.create(sessionParams, { stripeAccount: connectedAccountId })
@@ -87,11 +106,127 @@ export const createStripeCheckout = functions
     return { url: session.url as string }
   })
 
+function fmtUsd(n: number): string {
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+}
+
+async function connectedAccountFor(companyId: unknown): Promise<string> {
+  if (!companyId) return ''
+  const snap = await stripeConnectAccountRef(String(companyId)).get()
+  return snap.exists ? String(snap.data()?.['accountId'] ?? '') : ''
+}
+
+// ── Stripe: proposal deposit checkout ──────────────────────────────────────────
+// Callable from the public proposal page once the customer has accepted.
+// Charges depositPercent of the proposal total, priced here from the
+// publicProposals snapshot — never from an amount the browser sends. Same
+// trust tier and Connect routing as createStripeCheckout.
+//
+// Keep the rounding in step with proposalDepositAmount in src/models/proposal.ts.
+export const createProposalDepositCheckout = functions
+  .runWith({ secrets: ['STRIPE_SECRET_KEY'] })
+  .https.onCall(async (data, _context) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Stripe = require('stripe')
+    const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
+
+    const { token } = data as { token: string }
+    if (!token) throw new functions.https.HttpsError('invalid-argument', 'token required')
+
+    const snap = await db.collection('publicProposals').doc(token).get()
+    if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Proposal not found')
+    const p = snap.data()!
+
+    if (p.status !== 'accepted') {
+      throw new functions.https.HttpsError('failed-precondition', 'Accept the proposal before paying the deposit.')
+    }
+    if (p.depositPaidAmount != null) {
+      throw new functions.https.HttpsError('failed-precondition', 'The deposit has already been paid.')
+    }
+    const pct = Math.min(100, Number(p.depositPercent ?? 0) || 0)
+    if (pct <= 0) throw new functions.https.HttpsError('failed-precondition', 'This proposal has no deposit.')
+
+    const subtotal = (p.lineItems as { qty: number; rate: number }[] ?? []).reduce((s, l) => s + Number(l.qty) * Number(l.rate), 0)
+    const taxRate = Number(p.taxRate ?? 0) || 0
+    const total = subtotal * (1 + taxRate / 100)
+    const depositCents = Math.round(total * pct)  // total * pct / 100, in cents
+    if (depositCents < 50) {
+      // Stripe's minimum charge for USD.
+      throw new functions.https.HttpsError('failed-precondition', 'The deposit is too small to charge by card.')
+    }
+
+    const origin = 'https://thelightui.web.app'
+    const sessionParams = {
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `${pct}% deposit — Proposal ${p.proposalNumber ?? ''}`.trim() },
+          unit_amount: depositCents,
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      customer_email: p.customerEmail || undefined,
+      // kind + proposal* keys, and deliberately no token/invoiceId, so the
+      // invoice branch of handleCheckoutSessionCompleted can't misfire.
+      metadata: { kind: 'proposalDeposit', proposalToken: token, proposalId: p.proposalId, companyId: p.companyId },
+      success_url: `${origin}/p/${token}?deposit=1`,
+      cancel_url:  `${origin}/p/${token}`,
+    }
+
+    const connectedAccountId = await connectedAccountFor(p.companyId)
+    const session = connectedAccountId
+      ? await stripe.checkout.sessions.create(sessionParams, { stripeAccount: connectedAccountId })
+      : await stripe.checkout.sessions.create(sessionParams)
+
+    return { url: session.url as string }
+  })
+
+type CheckoutCompletedEvent = {
+  type: string
+  data: { object: {
+    amount_total?: number | null
+    metadata?: {
+      token?: string; invoiceId?: string
+      kind?: string; proposalToken?: string; proposalId?: string
+    }
+  } }
+}
+
+// Marks the deposit paid on both proposal docs and, if the proposal was
+// already converted, credits the invoice so it bills only the balance. The
+// amount is what Stripe charged, not a recomputation.
+async function recordProposalDeposit(event: CheckoutCompletedEvent): Promise<void> {
+  const { proposalToken, proposalId } = event.data.object.metadata ?? {}
+  const amount = Number(event.data.object.amount_total ?? 0) / 100
+  const paid = { depositPaidAmount: amount, depositPaidAt: FieldValue.serverTimestamp() }
+
+  const batch = db.batch()
+  if (proposalToken) batch.update(db.collection('publicProposals').doc(proposalToken), paid)
+  if (proposalId) {
+    const propRef = db.collection('Proposals').doc(proposalId)
+    const prop = await propRef.get()
+    if (prop.exists) {
+      batch.update(propRef, { ...paid, lastEditedByName: 'Customer (deposit paid online)' })
+      const invoiceId = String(prop.data()?.['convertedInvoiceId'] ?? '')
+      if (invoiceId) {
+        const invRef = db.collection('Invoices').doc(invoiceId)
+        const inv = await invRef.get()
+        if (inv.exists && inv.data()?.['status'] !== 'paid') batch.update(invRef, { depositCredit: amount })
+      }
+    }
+  }
+  await batch.commit()
+}
+
 // Shared by stripeWebhook (platform-account events) and stripeConnectWebhook
 // (connected-account events) so the payment-completion write only exists once.
-async function handleCheckoutSessionCompleted(
-  event: { data: { object: { metadata?: { token?: string; invoiceId?: string } } } },
-): Promise<void> {
+async function handleCheckoutSessionCompleted(event: CheckoutCompletedEvent): Promise<void> {
+  if (event.data.object.metadata?.kind === 'proposalDeposit') {
+    await recordProposalDeposit(event)
+    return
+  }
   const { token, invoiceId } = event.data.object.metadata ?? {}
   const batch = db.batch()
   if (token) {
@@ -124,7 +259,7 @@ export const stripeWebhook = functions
     const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
 
     const sig = req.headers['stripe-signature']
-    let event: { type: string; data: { object: { metadata?: { token?: string; invoiceId?: string } } } }
+    let event: CheckoutCompletedEvent
 
     try {
       event = stripe.webhooks.constructEvent(
@@ -286,7 +421,7 @@ export const stripeConnectWebhook = functions
     const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
 
     const sig = req.headers['stripe-signature']
-    let event: { type: string; data: { object: { metadata?: { token?: string; invoiceId?: string } } } }
+    let event: CheckoutCompletedEvent
 
     try {
       event = stripe.webhooks.constructEvent(

@@ -56,6 +56,8 @@ export const generateRecurringInvoices = functions
 
         await invoiceDoc.ref.update({
           nextRecurDate:   Timestamp.fromDate(nextDate),
+          // The template's deposit was paid once; the next period's bill wasn't.
+          depositCredit:   null,
           lastGeneratedAt: FieldValue.serverTimestamp(),
         })
 
@@ -124,7 +126,8 @@ export const bulkSendInvoiceReminders = functions
         const email = String(inv['customerEmail'] ?? '').trim()
         if (!email || !email.includes('@')) { skipped++; continue }
 
-        const total = fmtMoney(lineItemsTotal(inv))
+        // The reminder asks for what's owed — less any proposal deposit already paid.
+        const total = fmtMoney(Math.max(0, lineItemsTotal(inv) - (Number(inv['depositCredit'] ?? 0) || 0)))
         const dueDate = fmtDateShort(inv['dueDate'])
         const invoiceNumber = String(inv['invoiceNumber'] ?? doc.id)
         const shareToken = inv['shareToken'] ? String(inv['shareToken']) : ''

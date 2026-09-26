@@ -7,7 +7,7 @@ import { subscribeToCatalog } from '../../services/catalogService'
 import { categoryMatches, fullName, displayName, type CustomerItem } from '../../models/customer'
 import type { CatalogItem } from '../../models/catalogItem'
 import {
-  fmtCurrency, generateProposalNumber, lineItemTotal,
+  fmtCurrency, generateProposalNumber, lineItemTotal, proposalDepositAmount,
   type Proposal, type ProposalLineItem,
 } from '../../models/proposal'
 import { useAuthStore } from '../../stores/authStore'
@@ -67,6 +67,7 @@ export default function ProposalFormPage() {
   const [expiresDate,     setExpiresDate]     = useState(dateToInput(expiresDefault()))
   const [lineItems,       setLineItems]       = useState<ProposalLineItem[]>([emptyLine()])
   const [taxRate,         setTaxRate]         = useState(0)
+  const [depositPercent,  setDepositPercent]  = useState(0)
   const [notes,           setNotes]           = useState('')
   const [saving,          setSaving]          = useState(false)
   const [loading,         setLoading]         = useState(isEdit)
@@ -108,6 +109,7 @@ export default function ProposalFormPage() {
       setExpiresDate(dateToInput(p.expiresDate))
       setLineItems(p.lineItems.length ? p.lineItems : [emptyLine()])
       setTaxRate(p.taxRate)
+      setDepositPercent(p.depositPercent ?? 0)
       setNotes(p.notes)
       setCustQuery(p.customerName)
       setLoading(false)
@@ -207,6 +209,7 @@ export default function ProposalFormPage() {
       lineItems,
       notes,
       taxRate,
+      depositPercent,
     }
     try {
       if (isEdit && id) {
@@ -459,6 +462,26 @@ export default function ProposalFormPage() {
           <div className="flex justify-between text-base font-bold text-white border-t border-gray-700/50 pt-1.5 mt-1">
             <span>Total</span>
             <span>{fmtCurrency(total)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 pt-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-400">Deposit on acceptance</span>
+              <input
+                type="number"
+                value={depositPercent || ''}
+                onChange={e => setDepositPercent(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                placeholder="0"
+                min={0}
+                max={100}
+                step={1}
+                aria-label="Deposit percent"
+                className="input-field w-16 text-sm py-0.5 text-center"
+              />
+              <span className="text-sm text-gray-500">%</span>
+            </div>
+            <span className="text-sm text-gray-400">
+              {depositPercent > 0 ? fmtCurrency(proposalDepositAmount({ lineItems, taxRate, depositPercent })) : 'None'}
+            </span>
           </div>
         </div>
       </div>

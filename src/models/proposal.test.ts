@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   lineItemTotal, proposalSubtotal, proposalTaxAmount, proposalTotal,
-  effectiveStatus, generateProposalNumber,
+  effectiveStatus, generateProposalNumber, proposalDepositAmount, clampDepositPercent,
   proposalKpis, daysUntilExpiry, expiryState, expiryLabel, sortProposals,
   EXPIRING_SOON_DAYS, DEFAULT_PROPOSAL_SORT, PROPOSAL_SORTS,
   type Proposal, type ProposalLineItem, type ProposalSortKey,
@@ -363,5 +363,37 @@ describe('sortProposals', () => {
   it('handles an empty list and a single row', () => {
     expect(sortProposals([], 'urgency', NOW)).toEqual([])
     expect(sortProposals([live1], 'customer', NOW).map(p => p.id)).toEqual(['live1'])
+  })
+})
+
+describe('proposalDepositAmount', () => {
+  it('is 0 when no deposit is set', () => {
+    expect(proposalDepositAmount(makeProposal())).toBe(0)
+    expect(proposalDepositAmount(makeProposal({ depositPercent: 0 }))).toBe(0)
+  })
+
+  it('takes the percent of the taxed total, rounded to the cent', () => {
+    // $1,000 + 8.25% tax = $1,082.50; 30% = $324.75
+    const p = makeProposal({ lineItems: [{ description: 'Job', qty: 1, rate: 1000 }], taxRate: 8.25, depositPercent: 30 })
+    expect(proposalDepositAmount(p)).toBe(324.75)
+    // $333.33 * 1/3 = $111.11 — rounded, not a float tail
+    const q = makeProposal({ lineItems: [{ description: 'Job', qty: 1, rate: 333.33 }], taxRate: 0, depositPercent: 100 / 3 })
+    expect(proposalDepositAmount(q)).toBe(111.11)
+  })
+
+  it('caps at the full total', () => {
+    const p = makeProposal({ lineItems: [{ description: 'Job', qty: 1, rate: 200 }], taxRate: 0, depositPercent: 150 })
+    expect(proposalDepositAmount(p)).toBe(200)
+  })
+})
+
+describe('clampDepositPercent', () => {
+  it('treats junk and negatives as no deposit', () => {
+    expect(clampDepositPercent(undefined)).toBe(0)
+    expect(clampDepositPercent('abc')).toBe(0)
+    expect(clampDepositPercent(-5)).toBe(0)
+    expect(clampDepositPercent(NaN)).toBe(0)
+    expect(clampDepositPercent(25)).toBe(25)
+    expect(clampDepositPercent(101)).toBe(100)
   })
 })

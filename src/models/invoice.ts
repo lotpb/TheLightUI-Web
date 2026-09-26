@@ -49,6 +49,13 @@ export interface Invoice {
   currency: string
   quickbooksInvoiceId?: string | null
   financingApplicationId?: string | null
+  /**
+   * Money already collected against this invoice before it existed — the
+   * deposit paid when the customer accepted the proposal it was converted
+   * from. invoiceTotal stays the full price of the work; invoiceAmountDue is
+   * what's left to ask for.
+   */
+  depositCredit?: number | null
 }
 
 // Common ISO 4217 codes for the invoice currency picker. Aggregate totals
@@ -71,6 +78,11 @@ export function invoiceTaxAmount(inv: Pick<Invoice, 'lineItems' | 'taxRate'>): n
 
 export function invoiceTotal(inv: Pick<Invoice, 'lineItems' | 'taxRate'>): number {
   return invoiceSubtotal(inv) + invoiceTaxAmount(inv)
+}
+
+/** Total less any deposit already received, never below zero. */
+export function invoiceAmountDue(inv: Pick<Invoice, 'lineItems' | 'taxRate' | 'depositCredit'>): number {
+  return Math.max(0, invoiceTotal(inv) - (inv.depositCredit ?? 0))
 }
 
 export function effectiveStatus(inv: Invoice, now: Date = new Date()): InvoiceStatus {
@@ -155,6 +167,9 @@ export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): Invoic
 
   for (const inv of invoices) {
     const total = invoiceTotal(inv)
+    // A deposit on an open invoice is money already in the bank: it counts as
+    // paid, and only the balance is outstanding or overdue.
+    const credit = total - invoiceAmountDue(inv)
     switch (effectiveStatus(inv, now)) {
       case 'draft':
         draft += total
@@ -169,7 +184,8 @@ export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): Invoic
       case 'overdue': {
         billed += total
         billedCount++
-        overdue += total
+        paid += credit
+        overdue += total - credit
         overdueCount++
         const days = Math.floor((today.getTime() - inv.dueDate.getTime()) / 86_400_000)
         if (days > oldestOverdueDays) oldestOverdueDays = days
@@ -178,6 +194,7 @@ export function invoiceKpis(invoices: Invoice[], now: Date = new Date()): Invoic
       default:
         billed += total
         billedCount++
+        paid += credit
     }
   }
 

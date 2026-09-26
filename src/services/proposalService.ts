@@ -7,7 +7,7 @@ import { db } from '../firebase/config'
 import { getCompanyId, getCurrentUserLabel } from '../stores/authStore'
 import { createInvoice } from './invoiceService'
 import { generateInvoiceNumber } from '../models/invoice'
-import type { Proposal, ProposalLineItem } from '../models/proposal'
+import { clampDepositPercent, type Proposal, type ProposalLineItem } from '../models/proposal'
 
 const COL = 'Proposals'
 
@@ -50,6 +50,9 @@ function docToProposal(id: string, data: Record<string, unknown>): Proposal {
     convertedInvoiceId: data.convertedInvoiceId ? String(data.convertedInvoiceId) : null,
     lastReminderSentAt: data.lastReminderSentAt ? toDate(data.lastReminderSentAt) : null,
     financingApplicationId: data.financingApplicationId ? String(data.financingApplicationId) : null,
+    depositPercent:    clampDepositPercent(data.depositPercent),
+    depositPaidAmount: data.depositPaidAmount != null ? Number(data.depositPaidAmount) : null,
+    depositPaidAt:     data.depositPaidAt ? toDate(data.depositPaidAt) : null,
   }
 }
 
@@ -108,6 +111,7 @@ export async function createProposal(
     lineItems:   p.lineItems,
     notes:       p.notes,
     taxRate:     p.taxRate,
+    depositPercent: clampDepositPercent(p.depositPercent),
     createdAt:  serverTimestamp(),
     updatedAt:  serverTimestamp(),
     createdByName: getCurrentUserLabel().name,
@@ -155,6 +159,7 @@ export async function updateProposal(
   if (fields.lineItems       !== undefined) updates.lineItems       = fields.lineItems
   if (fields.notes           !== undefined) updates.notes           = fields.notes
   if (fields.taxRate         !== undefined) updates.taxRate         = fields.taxRate
+  if (fields.depositPercent  !== undefined) updates.depositPercent  = clampDepositPercent(fields.depositPercent)
   if (fields.convertedInvoiceId !== undefined) updates.convertedInvoiceId = fields.convertedInvoiceId
   await updateDoc(doc(db, COL, id), updates)
 }
@@ -169,6 +174,10 @@ export async function deleteProposal(id: string): Promise<void> {
 // Creates a real Invoice from an accepted proposal's line items and links the
 // two records together so neither the proposal nor the resulting invoice
 // silently duplicates work.
+//
+// A deposit already paid carries over as depositCredit so the customer is
+// billed only the balance. One paid *after* conversion is applied to the
+// invoice by the Stripe webhook instead (see recordProposalDeposit).
 export async function convertProposalToInvoice(p: Proposal): Promise<string> {
   const dueDate = new Date()
   dueDate.setDate(dueDate.getDate() + 30)
@@ -189,6 +198,7 @@ export async function convertProposalToInvoice(p: Proposal): Promise<string> {
     taxRate:   p.taxRate,
     currency:  'USD',
     generatedFrom: p.id,
+    depositCredit: p.depositPaidAmount ?? null,
   })
 
   await updateProposal(p.id, { convertedInvoiceId: invoiceId })
